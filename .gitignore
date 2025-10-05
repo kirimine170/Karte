@@ -1,0 +1,9 @@
+public/
+.mdsys/index.json
+.mdsys/graph.json
+*.exe
+*.out
+*.o
+
+docs/
+content/
