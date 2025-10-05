@@ -24,15 +24,26 @@ type FrontMatter struct {
 	Extra   map[string]any `yaml:",inline"`
 }
 
-var md = goldmark.New(
-	goldmark.WithExtensions(extension.GFM),
-	goldmark.WithRendererOptions(htmlr.WithUnsafe()), // allow raw HTML
-)
+// Build a goldmark instance per render to support options like hardwraps
+func newMarkdown(hardwrap bool) goldmark.Markdown {
+	opts := []goldmark.Option{
+		goldmark.WithExtensions(extension.GFM),
+		goldmark.WithRendererOptions(htmlr.WithUnsafe()), // allow raw HTML
+	}
+	if hardwrap {
+		opts = append(opts, goldmark.WithRendererOptions(htmlr.WithHardWraps()))
+	}
+	return goldmark.New(opts...)
+}
 
 var fmRe = regexp.MustCompile(`(?s)^---\n(.*?)\n---\n`)
 var impRe = regexp.MustCompile(`(?m)^@import\((.*?)\)\s*$`)
 
 func RenderMarkdown(root, path string) (string, *FrontMatter, error) {
+	return RenderMarkdownWithOptions(root, path, false)
+}
+
+func RenderMarkdownWithOptions(root, path string, hardwrap bool) (string, *FrontMatter, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return "", nil, err
@@ -67,6 +78,7 @@ func RenderMarkdown(root, path string) (string, *FrontMatter, error) {
 		}
 	})
 	var buf bytes.Buffer
+	md := newMarkdown(hardwrap)
 	if err := md.Convert(expanded, &buf); err != nil {
 		return "", nil, err
 	}
