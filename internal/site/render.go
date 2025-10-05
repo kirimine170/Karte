@@ -75,8 +75,20 @@ func RenderMarkdown(root, path string) (string, *FrontMatter, error) {
 }
 
 func wrapWithLayout(root string, fm *FrontMatter, inner string) string {
+	// Check if this is a preview request by looking for preview layout
+	previewLayoutPath := filepath.Join(root, "themes", "default", "preview.html")
 	layoutPath := filepath.Join(root, "themes", "default", "layout.html")
-	b, err := os.ReadFile(layoutPath)
+
+	var b []byte
+	var err error
+
+	// Try preview layout first, fallback to regular layout
+	if _, statErr := os.Stat(previewLayoutPath); statErr == nil {
+		b, err = os.ReadFile(previewLayoutPath)
+	} else {
+		b, err = os.ReadFile(layoutPath)
+	}
+
 	if err != nil {
 		return fmt.Sprintf(`<!doctype html><meta charset="utf-8"><title>%s</title>
             <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>

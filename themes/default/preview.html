@@ -4,30 +4,65 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
 <style>
-  /* Light theme (default) */
-  :root{
-    --page-bg:#ffffff;
-    --text:#1f2937;
-    --surface:#f9fafb;
-    --border:#e5e7eb;
-    --link:#7c3aed; /* violet */
+  /* Theme system variables */
+  :root {
+    --main-background: #ffffff;
+    --text-color: #1f2937;
+    --browsername-color: #111827;
+    --backgroundcolor: #f9fafb;
+    --backgroundcolor-unhover: #f3f4f6;
+    --opened-tab-backgroundcolor: #e5e7eb;
+    --border-color: #e5e7eb;
+    --border-color-unhover: #eaecef;
+    --borderline-color: #d1d5db;
+    --shadow-color: rgba(17,24,39,0.18);
+    --shadow-color-unhover: rgba(17,24,39,0.08);
+    --input-color-unhover: #ffffff;
+    --loading-color: #7c3aed;
+    --closebutton-color: #7c3aed;
   }
-  /* Dark theme */
   :root[data-theme="dark"]{
-    --page-bg:#0b0f14;
-    --text:#e5e7eb;
-    --surface:#0f1720;
-    --border:#243041;
-    --link:#a78bfa; /* violet light */
+    --main-background: #0b0f14;
+    --text-color: #e5e7eb;
+    --browsername-color: #f9fafb;
+    --backgroundcolor: #0f1720;
+    --backgroundcolor-unhover: #111827;
+    --opened-tab-backgroundcolor: #1f2937;
+    --border-color: #243041;
+    --border-color-unhover: #1e293b;
+    --borderline-color: #324155;
+    --shadow-color: rgba(0,0,0,0.5);
+    --shadow-color-unhover: rgba(0,0,0,0.3);
+    --input-color-unhover: #111827;
+    --loading-color: #a78bfa;
+    --closebutton-color: #a78bfa;
   }
-  /* High Contrast theme */
   :root[data-theme="hc"]{
-    --page-bg:#ffffff;
-    --text:#000000;
-    --surface:#ffffff;
-    --border:#111111;
-    --link:#7c3aed; /* violet */
+    --main-background: #ffffff;
+    --text-color: #000000;
+    --browsername-color: #000000;
+    --backgroundcolor: #ffffff;
+    --backgroundcolor-unhover: #f2f2f2;
+    --opened-tab-backgroundcolor: #e6e6e6;
+    --border-color: #111111;
+    --border-color-unhover: #4d4d4d;
+    --borderline-color: #000000;
+    --shadow-color: rgba(0,0,0,0.25);
+    --shadow-color-unhover: rgba(0,0,0,0.15);
+    --input-color-unhover: #ffffff;
+    --loading-color: #7c3aed;
+    --closebutton-color: #7c3aed;
   }
+  
+  /* Map theme system variables to layout variables */
+  :root{
+    --page-bg: var(--main-background);
+    --text: var(--text-color);
+    --surface: var(--backgroundcolor);
+    --border: var(--border-color);
+    --link: var(--loading-color);
+  }
+  
   html,body{height:100%}
   body{background:var(--page-bg);color:var(--text)}
   header.sitebar{padding:10px 16px;border-bottom:1px solid var(--border);display:flex;gap:12px;align-items:center}
@@ -56,6 +91,7 @@
     <select id="theme" class="theme layout-theme" aria-label="Theme selector">
       <option value="light">Light</option>
       <option value="dark">Dark</option>
+      <option value="hc">High Contrast</option>
     </select>
   </header>
   <main class="container">
@@ -77,6 +113,9 @@
         if(name === 'dark'){
           root.setAttribute('data-theme','dark');
           sel.value = 'dark';
+        }else if(name === 'hc'){
+          root.setAttribute('data-theme','hc');
+          sel.value = 'hc';
         }else{
           root.removeAttribute('data-theme');
           sel.value = 'light';
@@ -86,6 +125,23 @@
       }
       // initial
       (function(){
+        // If in iframe, try to get theme from parent window
+        if (window.self !== window.top) {
+          try {
+            const parentTheme = window.parent.localStorage.getItem(KEY);
+            if (parentTheme) {
+              apply(parentTheme);
+              return;
+            }
+          } catch {}
+          // Fallback: try to get theme from URL parameters
+          const urlParams = new URLSearchParams(window.location.search);
+          const themeParam = urlParams.get('theme');
+          if (themeParam) {
+            apply(themeParam);
+            return;
+          }
+        }
         try{
           const saved = localStorage.getItem(KEY);
           if(saved){ apply(saved); return; }
