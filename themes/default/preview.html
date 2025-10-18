@@ -15,13 +15,14 @@
     --border-color: #e5e7eb;
     --border-color-unhover: #eaecef;
     --borderline-color: #d1d5db;
-    --shadow-color: rgba(17,24,39,0.18);
-    --shadow-color-unhover: rgba(17,24,39,0.08);
+    --shadow-color: rgba(17, 24, 39, 0.18);
+    --shadow-color-unhover: rgba(17, 24, 39, 0.08);
     --input-color-unhover: #ffffff;
     --loading-color: #7c3aed;
     --closebutton-color: #7c3aed;
   }
-  :root[data-theme="dark"]{
+
+  :root[data-theme="dark"] {
     --main-background: #0b0f14;
     --text-color: #e5e7eb;
     --browsername-color: #f9fafb;
@@ -31,13 +32,14 @@
     --border-color: #243041;
     --border-color-unhover: #1e293b;
     --borderline-color: #324155;
-    --shadow-color: rgba(0,0,0,0.5);
-    --shadow-color-unhover: rgba(0,0,0,0.3);
+    --shadow-color: rgba(0, 0, 0, 0.5);
+    --shadow-color-unhover: rgba(0, 0, 0, 0.3);
     --input-color-unhover: #111827;
     --loading-color: #a78bfa;
     --closebutton-color: #a78bfa;
   }
-  :root[data-theme="hc"]{
+
+  :root[data-theme="hc"] {
     --main-background: #ffffff;
     --text-color: #000000;
     --browsername-color: #000000;
@@ -47,42 +49,94 @@
     --border-color: #111111;
     --border-color-unhover: #4d4d4d;
     --borderline-color: #000000;
-    --shadow-color: rgba(0,0,0,0.25);
-    --shadow-color-unhover: rgba(0,0,0,0.15);
+    --shadow-color: rgba(0, 0, 0, 0.25);
+    --shadow-color-unhover: rgba(0, 0, 0, 0.15);
     --input-color-unhover: #ffffff;
     --loading-color: #7c3aed;
     --closebutton-color: #7c3aed;
   }
-  
+
   /* Map theme system variables to layout variables */
-  :root{
+  :root {
     --page-bg: var(--main-background);
     --text: var(--text-color);
     --surface: var(--backgroundcolor);
     --border: var(--border-color);
     --link: var(--loading-color);
   }
-  
-  html,body{height:100%}
-  body{background:var(--page-bg);color:var(--text)}
-  header.sitebar{padding:10px 16px;border-bottom:1px solid var(--border);display:flex;gap:12px;align-items:center}
-  header.sitebar .spacer{flex:1}
-  main.container{max-width:960px;margin:24px auto;padding:0 16px}
-  a{color:var(--link)}
-  article{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px}
-  select.theme{min-width:140px}
-  @media (prefers-color-scheme: dark){
-    :root:not([data-theme]){ color-scheme: dark; }
+
+  html,
+  body {
+    min-height: 100%
   }
-  @media (prefers-color-scheme: light){
-    :root:not([data-theme]){ color-scheme: light; }
+
+  html {
+    background: var(--page-bg)
   }
+
+  body {
+    background: var(--page-bg);
+    color: var(--text)
+  }
+
+  header.sitebar {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 12px;
+    align-items: center
+  }
+
+  header.sitebar .spacer {
+    flex: 1
+  }
+
+  main.container {
+    max-width: 960px;
+    margin: 24px auto;
+    padding: 0 16px
+  }
+
+  a {
+    color: var(--link)
+  }
+
+  article {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px
+  }
+
+  select.theme {
+    min-width: 140px
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+      color-scheme: dark;
+    }
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) {
+      color-scheme: light;
+    }
+  }
+
   /* Respect Pico base but override surfaces via CSS vars */
-  :root{ --pico-background-color: var(--page-bg); --pico-color: var(--text); }
-  article :where(h1,h2,h3){ color: var(--text); }
+  :root {
+    --pico-background-color: var(--page-bg);
+    --pico-color: var(--text);
+  }
+
+  article :where(h1, h2, h3) {
+    color: var(--text);
+  }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
-<script>mermaid.initialize({startOnLoad:true});</script>
+<script>mermaid.initialize({ startOnLoad: true });</script>
+
 <body>
   <header class="sitebar">
     <strong>Karte</strong>
@@ -100,7 +154,7 @@
     </article>
   </main>
   <script>
-    (function(){
+    (function () {
       const KEY = 'karte-theme';
       const root = document.documentElement;
       const sel = document.getElementById('theme');
@@ -109,22 +163,22 @@
         const els = document.querySelectorAll('.layout-theme');
         els.forEach(el => el.style.display = 'none');
       }
-      function apply(name){
-        if(name === 'dark'){
-          root.setAttribute('data-theme','dark');
+      function apply(name) {
+        if (name === 'dark') {
+          root.setAttribute('data-theme', 'dark');
           sel.value = 'dark';
-        }else if(name === 'hc'){
-          root.setAttribute('data-theme','hc');
+        } else if (name === 'hc') {
+          root.setAttribute('data-theme', 'hc');
           sel.value = 'hc';
-        }else{
+        } else {
           root.removeAttribute('data-theme');
           sel.value = 'light';
           name = 'light';
         }
-        try{ localStorage.setItem(KEY, name); }catch{}
+        try { localStorage.setItem(KEY, name); } catch { }
       }
       // initial
-      (function(){
+      (function () {
         // If in iframe, try to get theme from parent window
         if (window.self !== window.top) {
           try {
@@ -133,7 +187,7 @@
               apply(parentTheme);
               return;
             }
-          } catch {}
+          } catch { }
           // Fallback: try to get theme from URL parameters
           const urlParams = new URLSearchParams(window.location.search);
           const themeParam = urlParams.get('theme');
@@ -142,15 +196,15 @@
             return;
           }
         }
-        try{
+        try {
           const saved = localStorage.getItem(KEY);
-          if(saved){ apply(saved); return; }
-        }catch{}
+          if (saved) { apply(saved); return; }
+        } catch { }
         const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
         apply(prefersDark ? 'dark' : 'light');
       })();
       // on change
-      sel.addEventListener('change', function(e){ apply(e.target.value); });
+      sel.addEventListener('change', function (e) { apply(e.target.value); });
     })();
   </script>
 </body>

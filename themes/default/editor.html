@@ -1,52 +1,291 @@
 <!doctype html>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Karte — Editor</title>
 <style>
   :root {
-    --main-background: #ffffff; --text-color: #1f2937; --browsername-color: #111827; --backgroundcolor: #f9fafb; --backgroundcolor-unhover: #f3f4f6; --opened-tab-backgroundcolor: #e5e7eb; --border-color: #e5e7eb; --border-color-unhover: #eaecef; --borderline-color: #d1d5db; --shadow-color: rgba(17,24,39,0.18); --shadow-color-unhover: rgba(17,24,39,0.08); --input-color-unhover: #ffffff; --loading-color: #7c3aed; --closebutton-color: #7c3aed;
+    --main-background: #ffffff;
+    --text-color: #1f2937;
+    --browsername-color: #111827;
+    --backgroundcolor: #f9fafb;
+    --backgroundcolor-unhover: #f3f4f6;
+    --opened-tab-backgroundcolor: #e5e7eb;
+    --border-color: #e5e7eb;
+    --border-color-unhover: #eaecef;
+    --borderline-color: #d1d5db;
+    --shadow-color: rgba(17, 24, 39, 0.18);
+    --shadow-color-unhover: rgba(17, 24, 39, 0.08);
+    --input-color-unhover: #ffffff;
+    --loading-color: #7c3aed;
+    --closebutton-color: #7c3aed;
   }
-  :root[data-theme="dark"]{
-    --main-background:#0b0f14; --text-color:#e5e7eb; --browsername-color:#f9fafb; --backgroundcolor:#0f1720; --backgroundcolor-unhover:#111827; --opened-tab-backgroundcolor:#1f2937; --border-color:#243041; --border-color-unhover:#1e293b; --borderline-color:#324155; --shadow-color:rgba(0,0,0,0.5); --shadow-color-unhover:rgba(0,0,0,0.3); --input-color-unhover:#111827; --loading-color:#a78bfa; --closebutton-color:#a78bfa;
+
+  :root[data-theme="dark"] {
+    --main-background: #0b0f14;
+    --text-color: #e5e7eb;
+    --browsername-color: #f9fafb;
+    --backgroundcolor: #0f1720;
+    --backgroundcolor-unhover: #111827;
+    --opened-tab-backgroundcolor: #1f2937;
+    --border-color: #243041;
+    --border-color-unhover: #1e293b;
+    --borderline-color: #324155;
+    --shadow-color: rgba(0, 0, 0, 0.5);
+    --shadow-color-unhover: rgba(0, 0, 0, 0.3);
+    --input-color-unhover: #111827;
+    --loading-color: #a78bfa;
+    --closebutton-color: #a78bfa;
   }
-  :root[data-theme="hc"]{
-    --main-background:#ffffff; --text-color:#000000; --browsername-color:#000000; --backgroundcolor:#ffffff; --backgroundcolor-unhover:#f2f2f2; --opened-tab-backgroundcolor:#e6e6e6; --border-color:#111111; --border-color-unhover:#4d4d4d; --borderline-color:#000000; --shadow-color:rgba(0,0,0,0.25); --shadow-color-unhover:rgba(0,0,0,0.15); --input-color-unhover:#ffffff; --loading-color:#7c3aed; --closebutton-color:#7c3aed;
+
+  :root[data-theme="hc"] {
+    --main-background: #ffffff;
+    --text-color: #000000;
+    --browsername-color: #000000;
+    --backgroundcolor: #ffffff;
+    --backgroundcolor-unhover: #f2f2f2;
+    --opened-tab-backgroundcolor: #e6e6e6;
+    --border-color: #111111;
+    --border-color-unhover: #4d4d4d;
+    --borderline-color: #000000;
+    --shadow-color: rgba(0, 0, 0, 0.25);
+    --shadow-color-unhover: rgba(0, 0, 0, 0.15);
+    --input-color-unhover: #ffffff;
+    --loading-color: #7c3aed;
+    --closebutton-color: #7c3aed;
   }
-  :root{ --bg:var(--main-background); --panel:var(--backgroundcolor); --ink:var(--text-color); --mute:var(--mute,#6b7280); --line:var(--border-color); --brand:var(--browsername-color); --accent:var(--loading-color); --radius:10px; --gap:12px; --gap2:16px; }
-  @media (prefers-color-scheme: dark){ :root:not([data-theme]){ color-scheme: dark; } }
-  @media (prefers-color-scheme: light){ :root:not([data-theme]){ color-scheme: light; } }
-  *{box-sizing:border-box}
-  html,body{height:100%}
-  body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Meiryo", sans-serif;}
-  a{color:inherit;text-decoration:none}
-  .bar{height:44px;display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid var(--line);background:linear-gradient(180deg, color-mix(in srgb, var(--main-background) 98%, transparent), transparent)}
-  .logo{font-weight:700;letter-spacing:0.4px}
-  .hint{color:var(--mute);font-size:12px}
-  .status{margin-left:auto;color:var(--mute)}
-  .layout{display:grid;grid-template-columns:260px 1fr; height:calc(100% - 44px);}
-  .side{border-right:1px solid var(--line);padding:12px;background:var(--panel)}
-  .search{display:flex;gap:6px;margin-bottom:10px}
-  .search input{flex:1;background:var(--panel);border:1px solid var(--line);color:var(--ink);padding:8px 10px;border-radius:8px;outline:0}
-  .tree{overflow:auto;height:calc(100% - 44px)}
-  .item{padding:6px 8px;border-radius:8px;color:var(--ink);border:1px solid transparent; display:block}
-  .item:hover{background:var(--backgroundcolor-unhover);border-color:var(--line)}
-  .item.active{background:var(--opened-tab-backgroundcolor);border-color:var(--borderline-color)}
-  .main{display:grid;grid-template-rows:1fr 1fr; gap:var(--gap); padding:var(--gap2)}
-  textarea{width:100%;height:100%;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:12px;border-radius:var(--radius);resize:none;outline:none; font:13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;}
-  textarea:focus{box-shadow:0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent) inset}
-  iframe{width:100%;height:100%;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg)}
-  .row{display:grid;grid-template-columns:1fr 1fr; gap:var(--gap)}
-  .btn{background:var(--accent);color:var(--browsername-color);border:0;border-radius:8px;padding:6px 10px;cursor:pointer}
-  .btn[disabled]{opacity:.6}
-  .toolbar{display:flex;gap:8px;margin-left:8px}
-  .pill{border:1px solid var(--line);padding:4px 8px;border-radius:999px;color:var(--mute);font-size:12px}
-  ::selection{background-color:color-mix(in srgb, var(--accent) 25%, transparent)}
-  ::-webkit-scrollbar{width:8px;height:8px}
-  ::-webkit-scrollbar-track{background:var(--panel)}
-  ::-webkit-scrollbar-thumb{background:var(--border-color);border-radius:4px}
-  ::-webkit-scrollbar-thumb:hover{background:var(--borderline-color)}
-  ::-webkit-scrollbar-corner{background:var(--panel)}
-  @media (max-width: 1100px){ .layout{grid-template-columns:1fr} .side{display:none} .row{grid-template-columns:1fr} }
+
+  :root {
+    --bg: var(--main-background);
+    --panel: var(--backgroundcolor);
+    --ink: var(--text-color);
+    --mute: var(--mute, #6b7280);
+    --line: var(--border-color);
+    --brand: var(--browsername-color);
+    --accent: var(--loading-color);
+    --radius: 10px;
+    --gap: 12px;
+    --gap2: 16px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) {
+      color-scheme: dark;
+    }
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) {
+      color-scheme: light;
+    }
+  }
+
+  * {
+    box-sizing: border-box
+  }
+
+  html,
+  body {
+    min-height: 100%;
+    height: 100%;
+  }
+
+  html {
+    background: var(--bg);
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 13px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Meiryo", sans-serif;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none
+  }
+
+  .bar {
+    height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--main-background) 98%, transparent), transparent)
+  }
+
+  .logo {
+    font-weight: 700;
+    letter-spacing: 0.4px
+  }
+
+  .hint {
+    color: var(--mute);
+    font-size: 12px
+  }
+
+  .status {
+    margin-left: auto;
+    color: var(--mute)
+  }
+
+  .layout {
+    height: 100%;
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    height: calc(100% - 44px);
+  }
+
+  .side {
+    border-right: 1px solid var(--line);
+    padding: 12px;
+    background: var(--panel)
+  }
+
+  .search {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 10px
+  }
+
+  .search input {
+    flex: 1;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    color: var(--ink);
+    padding: 8px 10px;
+    border-radius: 8px;
+    outline: 0
+  }
+
+  .tree {
+    overflow: auto;
+    height: calc(100% - 44px)
+  }
+
+  .item {
+    padding: 6px 8px;
+    border-radius: 8px;
+    color: var(--ink);
+    border: 1px solid transparent;
+    display: block
+  }
+
+  .item:hover {
+    background: var(--backgroundcolor-unhover);
+    border-color: var(--line)
+  }
+
+  .item.active {
+    background: var(--opened-tab-backgroundcolor);
+    border-color: var(--borderline-color)
+  }
+
+  .main {
+    display: grid;
+    grid-template-rows: 1fr;
+    gap: var(--gap);
+    padding: var(--gap2)
+  }
+
+  textarea {
+    width: 100%;
+    height: 100%;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink);
+    padding: 12px;
+    border-radius: var(--radius);
+    resize: none;
+    outline: none;
+    font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+
+  textarea:focus {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent) inset
+  }
+
+  iframe {
+    width: 100%;
+    height: 100%;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg)
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--gap)
+  }
+
+  .btn {
+    background: var(--accent);
+    color: var(--browsername-color);
+    border: 0;
+    border-radius: 8px;
+    padding: 6px 10px;
+    cursor: pointer
+  }
+
+  .btn[disabled] {
+    opacity: .6
+  }
+
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    margin-left: 8px
+  }
+
+  .pill {
+    border: 1px solid var(--line);
+    padding: 4px 8px;
+    border-radius: 999px;
+    color: var(--mute);
+    font-size: 12px
+  }
+
+  ::selection {
+    background-color: color-mix(in srgb, var(--accent) 25%, transparent)
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--panel)
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 4px
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--borderline-color)
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: var(--panel)
+  }
+
+  @media (max-width: 1100px) {
+    .layout {
+      grid-template-columns: 1fr
+    }
+
+    .side {
+      display: none
+    }
+
+    .row {
+      grid-template-columns: 1fr
+    }
+  }
 </style>
 <div class="bar">
   <div class="logo">Karte</div>
@@ -60,7 +299,7 @@
       <option value="hc">High Contrast</option>
     </select>
     <label class="hint" for="hardwrap" style="display:flex;align-items:center;gap:6px">
-      <input id="hardwrap" type="checkbox"/> Hard wrap (単一改行→<br>)
+      <input id="hardwrap" type="checkbox" /> Hard wrap (単一改行→<br>)
     </label>
     <button class="btn" id="saveBtn">保存</button>
     <a class="btn" id="openBtn" target="_blank" rel="noopener">表示</a>
@@ -70,7 +309,7 @@
 <div class="layout">
   <aside class="side">
     <div class="search">
-      <input id="q" placeholder="ファイル検索 (content/)"/>
+      <input id="q" placeholder="ファイル検索 (content/)" />
     </div>
     <div class="tree" id="tree"></div>
   </aside>
@@ -82,5 +321,3 @@
   </main>
 </div>
 <script src="/__editor.js"></script>
-
-
