@@ -1,0 +1,22 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "Karte",
+  "outputfilename": "karte",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "kirimine170",
+    "email": "kirimine170@gmail.com"
+  },
+  "info": {
+    "productName": "Karte",
+    "productVersion": "1.0.0",
+    "copyright": "Copyright © 2024, kirimine170",
+    "comments": "Markdown editor with live preview"
+  },
+  "nsisType": "multiple",
+  "obfuscated": false,
+  "wailsjsdir": "./frontend/wailsjs"
+}
