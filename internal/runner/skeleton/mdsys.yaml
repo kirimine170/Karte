@@ -1,7 +1,0 @@
-site:
-  title: Karte Sample
-  theme: default
-security:
-  root_dirs:
-    - content
-    - data
