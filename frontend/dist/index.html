@@ -1,5 +1,5 @@
 <!doctype html>
-<script type="module" crossorigin src="/assets/index.8fabebf4.js"></script>
+<script type="module" crossorigin src="/assets/index.ee39b86e.js"></script>
 
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -356,7 +356,8 @@
       <input id="hardwrap" type="checkbox" /> Hard wrap (単一改行→<br>)
     </label>
     <button class="btn" id="saveBtn">保存</button>
-    <a class="btn" id="openBtn" target="_blank" rel="noopener">表示</a>
+    <button class="btn" id="newBtn">新規</button>
+    <button class="btn" id="openBtn">表示</button>
   </div>
   <div class="status" id="status"></div>
 </div>
@@ -383,5 +384,83 @@
     </div>
   </main>
 </div>
-<!-- D3.js from CDN -->
-<script src="https://d3js.org/d3.v7.min.js"></script>
+
+<!-- File name input modal -->
+<div id="filenameModal" class="modal" style="display: none;">
+  <div class="modal-content">
+    <h3>新規ファイル作成</h3>
+    <p>ファイル名を入力してください（.md拡張子は自動で追加されます）:</p>
+    <input type="text" id="filenameInput" placeholder="例: my-document" />
+    <div class="modal-buttons">
+      <button id="createFileBtn" class="btn">作成</button>
+      <button id="cancelFileBtn" class="btn btn-secondary">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .modal-content {
+    background: var(--main-background);
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    min-width: 300px;
+    max-width: 500px;
+  }
+
+  .modal-content h3 {
+    margin: 0 0 10px 0;
+    color: var(--text-color);
+  }
+
+  .modal-content p {
+    margin: 0 0 15px 0;
+    color: var(--text-color);
+    font-size: 14px;
+  }
+
+  .modal-content input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    font-size: 14px;
+    margin-bottom: 15px;
+    background: var(--input-color-unhover);
+    color: var(--text-color);
+  }
+
+  .modal-content input:focus {
+    outline: none;
+    border-color: var(--loading-color);
+  }
+
+  .modal-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+  }
+
+  .btn-secondary {
+    background: var(--backgroundcolor-unhover);
+    color: var(--text-color);
+  }
+
+  .btn-secondary:hover {
+    background: var(--border-color);
+  }
+</style>
+

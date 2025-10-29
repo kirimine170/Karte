@@ -22,6 +22,14 @@ export function GetFileList() {
   return window['go']['main']['App']['GetFileList']();
 }
 
+export function CreateNewFile(arg1) {
+  return window['go']['main']['App']['CreateNewFile'](arg1);
+}
+
+export function GetGraphData() {
+  return window['go']['main']['App']['GetGraphData']();
+}
+
 export function InitProject() {
   return window['go']['main']['App']['InitProject']();
 }

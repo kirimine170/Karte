@@ -1,6 +1,68 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData } from '../wailsjs/wailsjs/go/main/App';
-import { EventsOn } from '../wailsjs/wailsjs/runtime/runtime';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile } from '../wailsjs/wailsjs/go/main/App';
+import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
+
+// Check if running in browser (no Wails backend)
+const isBrowser = typeof window !== 'undefined' && !window.go;
+
+// Mock functions for browser testing
+const mockFunctions = {
+    async GetFileList() {
+        return [
+            { path: 'content/README.md', title: 'README' },
+            { path: 'content/Test.md', title: 'Test Document' }
+        ];
+    },
+
+    async LoadFile(path) {
+        return `# ${path.split('/').pop()}\n\nThis is a mock file content for testing in browser.\n\n## Features\n- Mock content\n- Browser testing\n- No backend required`;
+    },
+
+    async SaveFile(path, content) {
+        console.log('Mock SaveFile called:', path, content.length);
+        return true;
+    },
+
+    async PreviewMarkdown(content) {
+        // Simple markdown to HTML conversion for testing
+        return content
+            .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+            .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+            .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+            .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
+            .replace(/\*(.*)\*/gim, '<em>$1</em>')
+            .replace(/\n/gim, '<br>');
+    },
+
+    async GetGraphData() {
+        return {
+            nodes: [
+                { id: 'doc:/README.md', label: 'README', kind: 'note', exists: true, degIn: 0, degOut: 1, tags: [] },
+                { id: 'doc:/Test.md', label: 'Test Document', kind: 'note', exists: true, degIn: 1, degOut: 0, tags: [] }
+            ],
+            edges: [
+                { id: 'e1', source: 'doc:/README.md', target: 'doc:/Test.md', kind: 'wikilink', weight: 1 }
+            ],
+            meta: { directed: true }
+        };
+    },
+
+    async CreateNewFile(filename) {
+        console.log('Mock CreateNewFile called:', filename);
+        // Simulate file creation
+        return true;
+    }
+};
+
+// Use mock functions if in browser, otherwise use real Wails functions
+const api = isBrowser ? mockFunctions : {
+    GetFileList,
+    LoadFile,
+    SaveFile,
+    PreviewMarkdown,
+    GetGraphData,
+    CreateNewFile
+};
 
 // Global variables
 let currentPath = '';
@@ -15,10 +77,17 @@ const tree = document.getElementById('tree');
 const inp = document.getElementById('q');
 const saveBtn = document.getElementById('saveBtn');
 const openBtn = document.getElementById('openBtn');
+const newBtn = document.getElementById('newBtn');
 const themeSel = document.getElementById('theme');
 const hardwrapChk = document.getElementById('hardwrap');
 const tabs = document.querySelectorAll('.tab');
 const tabContents = document.querySelectorAll('.tab-content');
+
+// Modal elements
+const filenameModal = document.getElementById('filenameModal');
+const filenameInput = document.getElementById('filenameInput');
+const createFileBtn = document.getElementById('createFileBtn');
+const cancelFileBtn = document.getElementById('cancelFileBtn');
 
 // Initialize the application
 async function init() {
@@ -45,11 +114,15 @@ async function init() {
 
         // Setup Wails events
         console.log('Setting up Wails events...');
-        EventsOn('file-changed', (path) => {
-            console.log('File changed:', path);
-            updatePreview();
-            updateGraph();
-        });
+        if (!isBrowser) {
+            EventsOn('file-changed', (path) => {
+                console.log('File changed:', path);
+                updatePreview();
+                updateGraph();
+            });
+        } else {
+            console.log('Running in browser mode - Wails events disabled');
+        }
 
         // Initialize graph module
         console.log('Initializing graph module...');
@@ -74,11 +147,67 @@ async function init() {
     }
 }
 
+// Create new file
+async function createNewFile() {
+    console.log('Create new file function called');
+
+    // Show modal instead of prompt
+    showFilenameModal();
+}
+
+// Show filename input modal
+function showFilenameModal() {
+    filenameInput.value = '';
+    filenameModal.style.display = 'flex';
+    filenameInput.focus();
+}
+
+// Hide filename input modal
+function hideFilenameModal() {
+    filenameModal.style.display = 'none';
+}
+
+// Handle file creation from modal
+async function handleFileCreation() {
+    const filename = filenameInput.value.trim();
+
+    if (!filename) {
+        alert('ファイル名を入力してください');
+        return;
+    }
+
+    hideFilenameModal();
+
+    try {
+        statusEl.textContent = 'Creating new file...';
+        console.log('Calling CreateNewFile with filename:', filename);
+
+        const result = await api.CreateNewFile(filename);
+        console.log('CreateNewFile result:', result);
+
+        // Reload file list
+        await loadFileList();
+
+        // Load the newly created file
+        const newFilePath = `content/${filename}.md`;
+        await loadFile(newFilePath);
+
+        statusEl.textContent = 'New file created';
+        console.log('New file created successfully:', newFilePath);
+
+    } catch (error) {
+        console.error('Failed to create new file:', error);
+        const errorMessage = error?.message || error || 'Unknown error';
+        statusEl.textContent = 'Failed to create file: ' + errorMessage;
+        alert('Failed to create file: ' + errorMessage);
+    }
+}
+
 // Load file list from backend
 async function loadFileList() {
     try {
         console.log('Calling GetFileList...');
-        const result = await GetFileList();
+        const result = await api.GetFileList();
         console.log('GetFileList result:', result);
 
         if (result === null || result === undefined) {
@@ -148,7 +277,7 @@ async function loadFile(path) {
     try {
         statusEl.textContent = 'Loading...';
         console.log('Calling LoadFile with path:', path);
-        const content = await LoadFile(path);
+        const content = await api.LoadFile(path);
         console.log('LoadFile returned content, length:', content.length);
         ta.value = content;
         currentPath = path;
@@ -188,7 +317,7 @@ async function save() {
     try {
         statusEl.textContent = 'Saving...';
         console.log('Calling SaveFile with path:', currentPath, 'content length:', ta.value.length);
-        await SaveFile(currentPath, ta.value);
+        await api.SaveFile(currentPath, ta.value);
         statusEl.textContent = 'Saved';
         console.log('File saved successfully');
     } catch (error) {
@@ -201,7 +330,7 @@ async function save() {
 async function updatePreview() {
     try {
         const content = ta.value;
-        const html = await PreviewMarkdown(content);
+        const html = await api.PreviewMarkdown(content);
         pv.srcdoc = html;
     } catch (error) {
         console.error('Failed to update preview:', error);
@@ -214,11 +343,25 @@ function setupEventListeners() {
     // Save button
     saveBtn.onclick = save;
 
+    // New file button
+    if (newBtn) {
+        newBtn.onclick = createNewFile;
+    }
+
+    // Open external preview button
+    if (openBtn) {
+        openBtn.onclick = openExternalPreview;
+    }
+
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
             e.preventDefault();
             save();
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
+            e.preventDefault();
+            createNewFile();
         }
     });
 
@@ -238,6 +381,35 @@ function setupEventListeners() {
     inp.addEventListener('input', () => {
         renderFileList();
     });
+
+    // Modal event listeners
+    if (createFileBtn) {
+        createFileBtn.onclick = handleFileCreation;
+    }
+
+    if (cancelFileBtn) {
+        cancelFileBtn.onclick = hideFilenameModal;
+    }
+
+    // Close modal when clicking outside
+    if (filenameModal) {
+        filenameModal.onclick = (e) => {
+            if (e.target === filenameModal) {
+                hideFilenameModal();
+            }
+        };
+    }
+
+    // Handle Enter key in filename input
+    if (filenameInput) {
+        filenameInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                handleFileCreation();
+            } else if (e.key === 'Escape') {
+                hideFilenameModal();
+            }
+        });
+    }
 
     // Editor input with debouncing
     let inputTimeout = null;
@@ -260,6 +432,22 @@ function setupEventListeners() {
             switchToTab(tabName);
         });
     });
+}
+// Open external preview in system browser
+async function openExternalPreview() {
+    try {
+        const content = ta.value || '';
+        const html = await api.PreviewMarkdown(content);
+        const url = 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
+        if (!isBrowser) {
+            BrowserOpenURL(url);
+        } else {
+            window.open(url, '_blank', 'noopener');
+        }
+    } catch (error) {
+        console.error('Failed to open external preview:', error);
+        statusEl.textContent = 'Failed to open external preview';
+    }
 }
 
 // Switch between tabs
@@ -308,7 +496,7 @@ async function updateGraph() {
 
     try {
         console.log('Updating graph data...');
-        const graphData = await GetGraphData();
+        const graphData = await api.GetGraphData();
         console.log('Graph data received:', graphData);
 
         if (graphData) {

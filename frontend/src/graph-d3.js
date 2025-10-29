@@ -1,13 +1,10 @@
 // D3.jsベースのグラフ描画モジュール
 
-// D3.jsはグローバル変数として読み込まれる
-const d3 = typeof window !== 'undefined' ? window.d3 : null;
+import * as d3 from 'd3';
 
 class GraphD3Module {
     constructor(containerId) {
-        if (!d3) {
-            throw new Error('D3.js is not loaded. Make sure the D3.js script is included before this module.');
-        }
+        // d3 is imported via ES module bundler (Vite)
 
         this.container = document.getElementById(containerId);
         this.data = { nodes: [], edges: [] };

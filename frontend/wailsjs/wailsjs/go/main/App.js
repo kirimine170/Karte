@@ -10,6 +10,10 @@ export function ConnectToPeer(arg1, arg2) {
   return window['go']['main']['App']['ConnectToPeer'](arg1, arg2);
 }
 
+export function CreateNewFile(arg1) {
+  return window['go']['main']['App']['CreateNewFile'](arg1);
+}
+
 export function DisconnectFromPeer(arg1) {
   return window['go']['main']['App']['DisconnectFromPeer'](arg1);
 }

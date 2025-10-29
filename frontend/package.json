@@ -11,9 +11,6 @@
     "vite": "^3.0.7"
   },
   "dependencies": {
-    "cytoscape": "^3.33.1",
-    "cytoscape-cola": "^2.5.1",
-    "cytoscape-elk": "^2.3.0",
-    "cytoscape-fcose": "^2.2.0"
+    "d3": "^7.9.0"
   }
 }

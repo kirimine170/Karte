@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"karte/internal/site"
 	"karte/internal/sync"
@@ -21,7 +23,37 @@ import (
 type App struct {
 	ctx         context.Context
 	root        string
+	dataDir     string
+	logFilePath string
 	syncManager *sync.SyncManager
+}
+
+// logInfo writes info logs to both Wails runtime and app log file
+func (a *App) logInfo(msg string) {
+	runtime.LogInfo(a.ctx, msg)
+	a.appendLog("INFO", msg)
+}
+
+// logError writes error logs to both Wails runtime and app log file
+func (a *App) logError(msg string) {
+	runtime.LogError(a.ctx, msg)
+	a.appendLog("ERROR", msg)
+}
+
+func (a *App) appendLog(level, msg string) {
+	if a.logFilePath == "" {
+		return
+	}
+	// Prepend timestamp
+	line := fmt.Sprintf("%s [%s] %s\n", time.Now().Format(time.RFC3339), level, msg)
+	f, err := os.OpenFile(a.logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		// fallback to std logger if file can't be opened
+		log.Printf("log open error: %v", err)
+		return
+	}
+	defer f.Close()
+	_, _ = f.WriteString(line)
 }
 
 // FileItem represents a markdown file in the content directory
@@ -71,14 +103,35 @@ func NewApp() *App {
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	// Get the current working directory as the project root
-	wd, err := os.Getwd()
+	// Determine base directory from executable location
+	exePath, err := os.Executable()
 	if err != nil {
-		runtime.LogError(ctx, fmt.Sprintf("Failed to get working directory: %v", err))
+		runtime.LogError(ctx, fmt.Sprintf("Failed to get executable path: %v", err))
 		return
 	}
-	a.root = wd
-	runtime.LogInfo(ctx, fmt.Sprintf("Karte started with root: %s", a.root))
+	exeDir := filepath.Dir(exePath)
+
+	// If running inside a macOS .app bundle, place data next to the app bundle
+	// exeDir: .../Karte.app/Contents/MacOS
+	// appBundleDir := .../Karte.app, appPlacedDir := parent directory of app bundle
+	appPlacedDir := exeDir
+	// Detect .app bundle structure
+	if strings.HasSuffix(filepath.ToSlash(exeDir), "/Contents/MacOS") {
+		contentsDir := filepath.Dir(exeDir)       // .../Contents
+		appBundleDir := filepath.Dir(contentsDir) // .../Karte.app
+		appPlacedDir = filepath.Dir(appBundleDir) // directory containing Karte.app
+	}
+
+	a.root = appPlacedDir
+
+	// Initialize karte_data directory next to the application
+	a.dataDir = filepath.Join(a.root, "karte_data")
+	if err := a.initializeDataDirectory(); err != nil {
+		runtime.LogError(ctx, fmt.Sprintf("Failed to initialize data directory: %v", err))
+		return
+	}
+
+	a.logInfo(fmt.Sprintf("Karte started. root=%s dataDir=%s exeDir=%s", a.root, a.dataDir, exeDir))
 
 	// Initialize sync manager (disabled for now - will be implemented with git integration)
 	// a.syncManager = sync.NewSyncManager(ctx, a.root)
@@ -87,29 +140,77 @@ func (a *App) startup(ctx context.Context) {
 	// }
 }
 
+// initializeDataDirectory creates and initializes the karte_data directory structure
+func (a *App) initializeDataDirectory() error {
+	// Create karte_data directory if it doesn't exist
+	if err := os.MkdirAll(a.dataDir, 0755); err != nil {
+		return fmt.Errorf("failed to create data directory: %v", err)
+	}
+
+	// Create subdirectories
+	subdirs := []string{"content", "data", "themes", "public", ".mdsys"}
+	for _, subdir := range subdirs {
+		dirPath := filepath.Join(a.dataDir, subdir)
+		if err := os.MkdirAll(dirPath, 0755); err != nil {
+			return fmt.Errorf("failed to create subdirectory %s: %v", subdir, err)
+		}
+	}
+
+	// Create default theme directory
+	themeDir := filepath.Join(a.dataDir, "themes", "default")
+	if err := os.MkdirAll(themeDir, 0755); err != nil {
+		return fmt.Errorf("failed to create theme directory: %v", err)
+	}
+
+	// Create log directory
+	logDir := filepath.Join(a.dataDir, "log")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return fmt.Errorf("failed to create log directory: %v", err)
+	}
+	a.logFilePath = filepath.Join(logDir, "app.log")
+
+	// Create default files if they don't exist
+	defaultFiles := map[string]string{
+		filepath.Join(a.dataDir, "content", "README.md"): "# Welcome to Karte\n\nThis is your first document. Start writing!",
+		filepath.Join(a.dataDir, ".mdsys", "index.json"): "{}",
+		filepath.Join(a.dataDir, ".mdsys", "graph.json"): "{}",
+	}
+
+	for filePath, content := range defaultFiles {
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+				return fmt.Errorf("failed to create default file %s: %v", filePath, err)
+			}
+		}
+	}
+
+	return nil
+}
+
 // GetFileList returns a list of markdown files in the content directory
 func (a *App) GetFileList() []FileItem {
 	var files []FileItem
-	contentDir := filepath.Join(a.root, "content")
+	contentDir := filepath.Join(a.dataDir, "content")
 
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Looking for content directory: %s", contentDir))
+	a.logInfo(fmt.Sprintf("GetFileList: contentDir=%s", contentDir))
 
 	// Check if content directory exists
 	if _, err := os.Stat(contentDir); os.IsNotExist(err) {
-		runtime.LogError(a.ctx, fmt.Sprintf("Content directory does not exist: %s", contentDir))
+		a.logError(fmt.Sprintf("Content directory does not exist: %s", contentDir))
 		return []FileItem{}
 	}
 
 	err := filepath.Walk(contentDir, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
-			runtime.LogError(a.ctx, fmt.Sprintf("Error walking path %s: %v", p, err))
+			a.logError(fmt.Sprintf("Error walking path %s: %v", p, err))
 			return nil
 		}
 		if info.IsDir() {
 			return nil
 		}
 		if strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
-			rel, _ := filepath.Rel(a.root, p)
+			// Generate path relative to dataDir so that it starts with "content/..."
+			rel, _ := filepath.Rel(a.dataDir, p)
 			title := info.Name()
 
 			// Try to extract title from frontmatter
@@ -133,19 +234,57 @@ func (a *App) GetFileList() []FileItem {
 				Title: title,
 			}
 			files = append(files, fileItem)
-			runtime.LogInfo(a.ctx, fmt.Sprintf("Found file: %s -> %s", fileItem.Path, fileItem.Title))
+			a.logInfo(fmt.Sprintf("Found file: %s -> %s", fileItem.Path, fileItem.Title))
 		}
 		return nil
 	})
 
 	if err != nil {
-		runtime.LogError(a.ctx, fmt.Sprintf("Error walking content directory: %v", err))
+		a.logError(fmt.Sprintf("Error walking content directory: %v", err))
 		return []FileItem{}
 	}
 
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d markdown files", len(files)))
+	a.logInfo(fmt.Sprintf("Found %d markdown files", len(files)))
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files
+}
+
+// CreateNewFile creates a new markdown file in the content directory
+func (a *App) CreateNewFile(filename string) (bool, error) {
+	if filename == "" {
+		return false, fmt.Errorf("filename cannot be empty")
+	}
+
+	// Ensure filename has .md extension
+	if !strings.HasSuffix(filename, ".md") {
+		filename += ".md"
+	}
+
+	// Validate filename (no path separators)
+	if strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
+		return false, fmt.Errorf("filename cannot contain path separators")
+	}
+
+	filePath := filepath.Join(a.dataDir, "content", filename)
+
+	// Check if file already exists
+	if _, err := os.Stat(filePath); err == nil {
+		return false, fmt.Errorf("file already exists: %s", filename)
+	}
+
+	// Create default content
+	defaultContent := fmt.Sprintf("# %s\n\nStart writing your content here...\n", strings.TrimSuffix(filename, ".md"))
+
+	// Ensure directory exists and write the file
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		return false, fmt.Errorf("failed to prepare directory: %v", err)
+	}
+	if err := os.WriteFile(filePath, []byte(defaultContent), 0644); err != nil {
+		return false, fmt.Errorf("failed to create file: %v", err)
+	}
+
+	a.logInfo(fmt.Sprintf("Created new file: %s", filePath))
+	return true, nil
 }
 
 // LoadFile loads the content of a markdown file
@@ -240,12 +379,12 @@ func (a *App) resolveContentPath(rel string) (string, bool) {
 	if !strings.HasPrefix(rel, "content/") {
 		return "", false
 	}
-	abs := filepath.Join(a.root, filepath.FromSlash(rel))
+	abs := filepath.Join(a.dataDir, filepath.FromSlash(rel))
 	canonical, err := filepath.Abs(abs)
 	if err != nil {
 		return "", false
 	}
-	contentRoot, _ := filepath.Abs(filepath.Join(a.root, "content"))
+	contentRoot, _ := filepath.Abs(filepath.Join(a.dataDir, "content"))
 	relToContent, err := filepath.Rel(contentRoot, canonical)
 	if err != nil {
 		return "", false
@@ -357,9 +496,9 @@ func (a *App) DisconnectFromPeer(peerID string) error {
 
 // GetGraphData generates graph data from markdown files
 func (a *App) GetGraphData() (*GraphData, error) {
-	runtime.LogInfo(a.ctx, "Generating graph data...")
+	a.logInfo("Generating graph data...")
 
-	contentDir := filepath.Join(a.root, "content")
+	contentDir := filepath.Join(a.dataDir, "content")
 	if _, err := os.Stat(contentDir); os.IsNotExist(err) {
 		return &GraphData{
 			Nodes: []GraphNode{},
@@ -375,7 +514,8 @@ func (a *App) GetGraphData() (*GraphData, error) {
 			return err
 		}
 		if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
-			rel, _ := filepath.Rel(a.root, p)
+			// Store path relative to dataDir so it begins with "content/..."
+			rel, _ := filepath.Rel(a.dataDir, p)
 			files = append(files, filepath.ToSlash(rel))
 		}
 		return nil
@@ -396,7 +536,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 		title = strings.TrimSuffix(title, ".md")
 
 		// フロントマターからタイトルを抽出
-		if content, err := os.ReadFile(filepath.Join(a.root, filePath)); err == nil {
+		if content, err := os.ReadFile(filepath.Join(a.dataDir, filePath)); err == nil {
 			title = a.extractTitleFromContent(string(content), title)
 		}
 
@@ -412,12 +552,12 @@ func (a *App) GetGraphData() (*GraphData, error) {
 		}
 
 		// ファイル内容を解析してリンクを抽出
-		if content, err := os.ReadFile(filepath.Join(a.root, filePath)); err == nil {
+		if content, err := os.ReadFile(filepath.Join(a.dataDir, filePath)); err == nil {
 			links := a.extractLinks(string(content))
-			runtime.LogInfo(a.ctx, fmt.Sprintf("File %s: found %d links", filePath, len(links)))
+			a.logInfo(fmt.Sprintf("File %s: found %d links", filePath, len(links)))
 			for i, link := range links {
 				targetID := a.resolveLinkTarget(link, filePath)
-				runtime.LogInfo(a.ctx, fmt.Sprintf("  Link %d: %s -> %s (kind: %s)", i+1, link.Target, targetID, link.Kind))
+				a.logInfo(fmt.Sprintf("  Link %d: %s -> %s (kind: %s)", i+1, link.Target, targetID, link.Kind))
 				if targetID != "" {
 					// エッジの重みをカウント
 					edgeKey := nodeID + "->" + targetID
@@ -432,11 +572,11 @@ func (a *App) GetGraphData() (*GraphData, error) {
 						Kind:   link.Kind,
 						Weight: edgeCounts[edgeKey],
 					}
-					runtime.LogInfo(a.ctx, fmt.Sprintf("    Created edge: %s -> %s (weight: %d)", nodeID, targetID, edgeCounts[edgeKey]))
+					a.logInfo(fmt.Sprintf("    Created edge: %s -> %s (weight: %d)", nodeID, targetID, edgeCounts[edgeKey]))
 				}
 			}
 		} else {
-			runtime.LogError(a.ctx, fmt.Sprintf("Failed to read file %s: %v", filePath, err))
+			a.logError(fmt.Sprintf("Failed to read file %s: %v", filePath, err))
 		}
 	}
 
@@ -458,7 +598,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 					DegOut: 0,
 					Tags:   []string{},
 				}
-				runtime.LogInfo(a.ctx, fmt.Sprintf("Created missing target node: %s", edge.Target))
+				a.logInfo(fmt.Sprintf("Created missing target node: %s", edge.Target))
 			} else if strings.HasPrefix(edge.Target, "img:/") {
 				path := strings.TrimPrefix(edge.Target, "img:/")
 				title := filepath.Base(path)
@@ -472,7 +612,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 					DegOut: 0,
 					Tags:   []string{},
 				}
-				runtime.LogInfo(a.ctx, fmt.Sprintf("Created missing image node: %s", edge.Target))
+				a.logInfo(fmt.Sprintf("Created missing image node: %s", edge.Target))
 			}
 		}
 
@@ -491,7 +631,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 				DegOut: 0,
 				Tags:   []string{},
 			}
-			runtime.LogInfo(a.ctx, fmt.Sprintf("Created missing source node: %s", edge.Source))
+			a.logInfo(fmt.Sprintf("Created missing source node: %s", edge.Source))
 		}
 	}
 
@@ -517,19 +657,19 @@ func (a *App) GetGraphData() (*GraphData, error) {
 	}
 
 	// デバッグ用：ノードIDとエッジの詳細をログ出力
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Generated graph with %d nodes and %d edges", len(nodeList), len(edgeList)))
+	a.logInfo(fmt.Sprintf("Generated graph with %d nodes and %d edges", len(nodeList), len(edgeList)))
 
 	// ノードIDの一覧をログ出力
 	nodeIds := make([]string, 0, len(nodes))
 	for id := range nodes {
 		nodeIds = append(nodeIds, id)
 	}
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Node IDs: %v", nodeIds))
+	a.logInfo(fmt.Sprintf("Node IDs: %v", nodeIds))
 
 	// エッジの詳細をログ出力
 	for i, edge := range edgeList {
 		if i < 5 { // 最初の5個のエッジのみログ出力
-			runtime.LogInfo(a.ctx, fmt.Sprintf("Edge %d: %s -> %s (kind: %s, weight: %d)",
+			a.logInfo(fmt.Sprintf("Edge %d: %s -> %s (kind: %s, weight: %d)",
 				i+1, edge.Source, edge.Target, edge.Kind, edge.Weight))
 		}
 	}

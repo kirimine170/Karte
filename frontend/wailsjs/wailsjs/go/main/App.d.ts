@@ -7,6 +7,8 @@ export function BuildSite():Promise<void>;
 
 export function ConnectToPeer(arg1:string,arg2:number):Promise<void>;
 
+export function CreateNewFile(arg1:string):Promise<boolean>;
+
 export function DisconnectFromPeer(arg1:string):Promise<void>;
 
 export function GetConnectedPeers():Promise<Array<sync.Peer>>;
