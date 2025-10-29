@@ -7,3 +7,31 @@ public/
 
 docs/
 content/
+
+# Build artifacts
+build/bin/
+*.app
+
+# Node modules
+frontend/node_modules/
+
+# Generated files
+frontend/wailsjs/
+frontend/package.json.md5
+
+# Test files
+frontend/test-*.html
+frontend/simple-test.html
+
+# Distribution files
+frontend/dist/
+
+# Data files
+data/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
