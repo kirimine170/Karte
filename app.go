@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -27,6 +28,38 @@ type App struct {
 type FileItem struct {
 	Path  string `json:"path"`
 	Title string `json:"title"`
+}
+
+// GraphNode represents a node in the graph
+type GraphNode struct {
+	ID     string   `json:"id"`
+	Label  string   `json:"label"`
+	Kind   string   `json:"kind"`
+	Exists bool     `json:"exists"`
+	DegIn  int      `json:"degIn"`
+	DegOut int      `json:"degOut"`
+	Tags   []string `json:"tags"`
+}
+
+// GraphEdge represents an edge in the graph
+type GraphEdge struct {
+	ID     string `json:"id"`
+	Source string `json:"source"`
+	Target string `json:"target"`
+	Kind   string `json:"kind"`
+	Weight int    `json:"weight"`
+}
+
+// GraphData represents the complete graph structure
+type GraphData struct {
+	Nodes []GraphNode `json:"nodes"`
+	Edges []GraphEdge `json:"edges"`
+	Meta  GraphMeta   `json:"meta"`
+}
+
+// GraphMeta contains metadata about the graph
+type GraphMeta struct {
+	Directed bool `json:"directed"`
 }
 
 // NewApp creates a new App application struct
@@ -320,4 +353,298 @@ func (a *App) ConnectToPeer(address string, port int) error {
 func (a *App) DisconnectFromPeer(peerID string) error {
 	// TODO: Implement with git integration
 	return fmt.Errorf("file sharing not implemented yet - will be available with git integration")
+}
+
+// GetGraphData generates graph data from markdown files
+func (a *App) GetGraphData() (*GraphData, error) {
+	runtime.LogInfo(a.ctx, "Generating graph data...")
+
+	contentDir := filepath.Join(a.root, "content")
+	if _, err := os.Stat(contentDir); os.IsNotExist(err) {
+		return &GraphData{
+			Nodes: []GraphNode{},
+			Edges: []GraphEdge{},
+			Meta:  GraphMeta{Directed: true},
+		}, nil
+	}
+
+	// ファイル一覧を取得
+	var files []string
+	err := filepath.Walk(contentDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
+			rel, _ := filepath.Rel(a.root, p)
+			files = append(files, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to walk content directory: %v", err)
+	}
+
+	// ノードとエッジを生成
+	nodes := make(map[string]*GraphNode)
+	edges := make(map[string]*GraphEdge)
+	edgeCounts := make(map[string]int) // source-target の参照回数
+
+	// 各ファイルを処理
+	for _, filePath := range files {
+		nodeID := "doc:/" + strings.TrimPrefix(filePath, "content/")
+		title := filepath.Base(filePath)
+		title = strings.TrimSuffix(title, ".md")
+
+		// フロントマターからタイトルを抽出
+		if content, err := os.ReadFile(filepath.Join(a.root, filePath)); err == nil {
+			title = a.extractTitleFromContent(string(content), title)
+		}
+
+		// ノードを作成
+		nodes[nodeID] = &GraphNode{
+			ID:     nodeID,
+			Label:  title,
+			Kind:   "note",
+			Exists: true,
+			DegIn:  0,
+			DegOut: 0,
+			Tags:   []string{},
+		}
+
+		// ファイル内容を解析してリンクを抽出
+		if content, err := os.ReadFile(filepath.Join(a.root, filePath)); err == nil {
+			links := a.extractLinks(string(content))
+			runtime.LogInfo(a.ctx, fmt.Sprintf("File %s: found %d links", filePath, len(links)))
+			for i, link := range links {
+				targetID := a.resolveLinkTarget(link, filePath)
+				runtime.LogInfo(a.ctx, fmt.Sprintf("  Link %d: %s -> %s (kind: %s)", i+1, link.Target, targetID, link.Kind))
+				if targetID != "" {
+					// エッジの重みをカウント
+					edgeKey := nodeID + "->" + targetID
+					edgeCounts[edgeKey]++
+
+					// エッジを作成
+					edgeID := fmt.Sprintf("e_%s_%s", strings.ReplaceAll(nodeID, "/", "_"), strings.ReplaceAll(targetID, "/", "_"))
+					edges[edgeID] = &GraphEdge{
+						ID:     edgeID,
+						Source: nodeID,
+						Target: targetID,
+						Kind:   link.Kind,
+						Weight: edgeCounts[edgeKey],
+					}
+					runtime.LogInfo(a.ctx, fmt.Sprintf("    Created edge: %s -> %s (weight: %d)", nodeID, targetID, edgeCounts[edgeKey]))
+				}
+			}
+		} else {
+			runtime.LogError(a.ctx, fmt.Sprintf("Failed to read file %s: %v", filePath, err))
+		}
+	}
+
+	// 存在しないファイルのノードを作成（エッジの作成後）
+	for _, edge := range edges {
+		// ターゲットノードが存在しない場合
+		if _, exists := nodes[edge.Target]; !exists {
+			if strings.HasPrefix(edge.Target, "doc:/") {
+				path := strings.TrimPrefix(edge.Target, "doc:/")
+				title := filepath.Base(path)
+				title = strings.TrimSuffix(title, ".md")
+
+				nodes[edge.Target] = &GraphNode{
+					ID:     edge.Target,
+					Label:  title,
+					Kind:   "note",
+					Exists: false,
+					DegIn:  0,
+					DegOut: 0,
+					Tags:   []string{},
+				}
+				runtime.LogInfo(a.ctx, fmt.Sprintf("Created missing target node: %s", edge.Target))
+			} else if strings.HasPrefix(edge.Target, "img:/") {
+				path := strings.TrimPrefix(edge.Target, "img:/")
+				title := filepath.Base(path)
+
+				nodes[edge.Target] = &GraphNode{
+					ID:     edge.Target,
+					Label:  title,
+					Kind:   "asset:image",
+					Exists: true, // 画像は存在すると仮定
+					DegIn:  0,
+					DegOut: 0,
+					Tags:   []string{},
+				}
+				runtime.LogInfo(a.ctx, fmt.Sprintf("Created missing image node: %s", edge.Target))
+			}
+		}
+
+		// ソースノードが存在しない場合（念のため）
+		if _, exists := nodes[edge.Source]; !exists && strings.HasPrefix(edge.Source, "doc:/") {
+			path := strings.TrimPrefix(edge.Source, "doc:/")
+			title := filepath.Base(path)
+			title = strings.TrimSuffix(title, ".md")
+
+			nodes[edge.Source] = &GraphNode{
+				ID:     edge.Source,
+				Label:  title,
+				Kind:   "note",
+				Exists: false,
+				DegIn:  0,
+				DegOut: 0,
+				Tags:   []string{},
+			}
+			runtime.LogInfo(a.ctx, fmt.Sprintf("Created missing source node: %s", edge.Source))
+		}
+	}
+
+	// 入出次数を計算
+	for _, edge := range edges {
+		if sourceNode, exists := nodes[edge.Source]; exists {
+			sourceNode.DegOut++
+		}
+		if targetNode, exists := nodes[edge.Target]; exists {
+			targetNode.DegIn++
+		}
+	}
+
+	// スライスに変換
+	var nodeList []GraphNode
+	for _, node := range nodes {
+		nodeList = append(nodeList, *node)
+	}
+
+	var edgeList []GraphEdge
+	for _, edge := range edges {
+		edgeList = append(edgeList, *edge)
+	}
+
+	// デバッグ用：ノードIDとエッジの詳細をログ出力
+	runtime.LogInfo(a.ctx, fmt.Sprintf("Generated graph with %d nodes and %d edges", len(nodeList), len(edgeList)))
+
+	// ノードIDの一覧をログ出力
+	nodeIds := make([]string, 0, len(nodes))
+	for id := range nodes {
+		nodeIds = append(nodeIds, id)
+	}
+	runtime.LogInfo(a.ctx, fmt.Sprintf("Node IDs: %v", nodeIds))
+
+	// エッジの詳細をログ出力
+	for i, edge := range edgeList {
+		if i < 5 { // 最初の5個のエッジのみログ出力
+			runtime.LogInfo(a.ctx, fmt.Sprintf("Edge %d: %s -> %s (kind: %s, weight: %d)",
+				i+1, edge.Source, edge.Target, edge.Kind, edge.Weight))
+		}
+	}
+
+	return &GraphData{
+		Nodes: nodeList,
+		Edges: edgeList,
+		Meta:  GraphMeta{Directed: true},
+	}, nil
+}
+
+// LinkInfo represents a link found in markdown content
+type LinkInfo struct {
+	Target string
+	Kind   string
+}
+
+// extractTitleFromContent extracts title from frontmatter
+func (a *App) extractTitleFromContent(content, defaultTitle string) string {
+	if strings.HasPrefix(content, "---") {
+		if i := strings.Index(content, "\n---"); i > 0 {
+			fm := content[:i]
+			for _, line := range strings.Split(fm, "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "title:") {
+					title := strings.TrimSpace(strings.TrimPrefix(line, "title:"))
+					title = strings.Trim(title, `"' `)
+					return title
+				}
+			}
+		}
+	}
+	return defaultTitle
+}
+
+// extractLinks extracts various types of links from markdown content
+func (a *App) extractLinks(content string) []LinkInfo {
+	var links []LinkInfo
+
+	// Wikiリンク [[title]] または [[title|display]]
+	wikiLinkRegex := regexp.MustCompile(`\[\[([^|\]]+)(?:\|([^\]]+))?\]\]`)
+	matches := wikiLinkRegex.FindAllStringSubmatch(content, -1)
+	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d wiki links", len(matches)))
+	for _, match := range matches {
+		title := match[1]
+		// .md拡張子を追加
+		if !strings.HasSuffix(strings.ToLower(title), ".md") {
+			title += ".md"
+		}
+		links = append(links, LinkInfo{Target: title, Kind: "wikilink"})
+		runtime.LogInfo(a.ctx, fmt.Sprintf("  Wiki link: %s", title))
+	}
+
+	// Markdownリンク [text](url)
+	markdownLinkRegex := regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+	matches = markdownLinkRegex.FindAllStringSubmatch(content, -1)
+	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d markdown links", len(matches)))
+	for _, match := range matches {
+		url := match[2]
+		if strings.HasSuffix(strings.ToLower(url), ".md") {
+			links = append(links, LinkInfo{Target: url, Kind: "markdown_link"})
+			runtime.LogInfo(a.ctx, fmt.Sprintf("  Markdown link: %s", url))
+		}
+	}
+
+	// 画像リンク ![alt](src)
+	imgLinkRegex := regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
+	matches = imgLinkRegex.FindAllStringSubmatch(content, -1)
+	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d image links", len(matches)))
+	for _, match := range matches {
+		src := match[2]
+		links = append(links, LinkInfo{Target: src, Kind: "img"})
+		runtime.LogInfo(a.ctx, fmt.Sprintf("  Image link: %s", src))
+	}
+
+	// 引用 > text 内のWikiリンク
+	quoteRegex := regexp.MustCompile(`(?m)^>\s*.*?\[\[([^|\]]+)(?:\|([^\]]+))?\]\].*$`)
+	matches = quoteRegex.FindAllStringSubmatch(content, -1)
+	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d quote blocks with wiki links", len(matches)))
+	for _, match := range matches {
+		title := match[1]
+		if !strings.HasSuffix(strings.ToLower(title), ".md") {
+			title += ".md"
+		}
+		links = append(links, LinkInfo{Target: title, Kind: "quote"})
+		runtime.LogInfo(a.ctx, fmt.Sprintf("  Quote link: %s", title))
+	}
+
+	runtime.LogInfo(a.ctx, fmt.Sprintf("Total links extracted: %d", len(links)))
+	return links
+}
+
+// resolveLinkTarget resolves a link target to a node ID
+func (a *App) resolveLinkTarget(link LinkInfo, currentFile string) string {
+	runtime.LogInfo(a.ctx, fmt.Sprintf("Resolving link: %s (kind: %s) from file: %s", link.Target, link.Kind, currentFile))
+
+	switch link.Kind {
+	case "wikilink", "markdown_link":
+		// 相対パスを解決
+		target := link.Target
+		if !strings.HasPrefix(target, "/") && !strings.HasPrefix(target, "http") {
+			// 相対パスの場合、現在のファイルからの相対パスとして解決
+			currentDir := filepath.Dir(currentFile)
+			target = filepath.Join(currentDir, target)
+			target = filepath.ToSlash(target)
+		}
+		result := "doc:/" + strings.TrimPrefix(target, "content/")
+		runtime.LogInfo(a.ctx, fmt.Sprintf("  Resolved to: %s", result))
+		return result
+	case "img":
+		result := "img:/" + link.Target
+		runtime.LogInfo(a.ctx, fmt.Sprintf("  Resolved to: %s", result))
+		return result
+	default:
+		runtime.LogInfo(a.ctx, fmt.Sprintf("  No resolution for kind: %s", link.Kind))
+		return ""
+	}
 }

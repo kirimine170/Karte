@@ -1,9 +1,11 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown } from '../wailsjs/wailsjs/go/main/App';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData } from '../wailsjs/wailsjs/go/main/App';
 import { EventsOn } from '../wailsjs/wailsjs/runtime/runtime';
+import GraphModule from './graph-d3.js';
 
 // Global variables
 let currentPath = '';
 let files = [];
+let graphModule = null;
 
 // DOM elements
 const statusEl = document.getElementById('status');
@@ -15,6 +17,8 @@ const saveBtn = document.getElementById('saveBtn');
 const openBtn = document.getElementById('openBtn');
 const themeSel = document.getElementById('theme');
 const hardwrapChk = document.getElementById('hardwrap');
+const tabs = document.querySelectorAll('.tab');
+const tabContents = document.querySelectorAll('.tab-content');
 
 // Initialize the application
 async function init() {
@@ -44,7 +48,24 @@ async function init() {
         EventsOn('file-changed', (path) => {
             console.log('File changed:', path);
             updatePreview();
+            updateGraph();
         });
+
+        // Initialize graph module
+        console.log('Initializing graph module...');
+        try {
+            graphModule = new GraphModule('graph-container');
+            graphModule.on('node:click', (data) => {
+                console.log('Node clicked:', data);
+                if (data.id && data.id.startsWith('doc:/')) {
+                    loadFile(data.id);
+                    switchToTab('editor');
+                }
+            });
+            await updateGraph();
+        } catch (error) {
+            console.error('Failed to initialize graph module:', error);
+        }
 
         console.log('Initialization completed successfully');
     } catch (error) {
@@ -231,6 +252,88 @@ function setupEventListeners() {
     const savedTheme = localStorage.getItem('karte-theme') || 'light';
     themeSel.value = savedTheme;
     document.documentElement.setAttribute('data-theme', savedTheme);
+
+    // Tab switching
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            const tabName = tab.dataset.tab;
+            switchToTab(tabName);
+        });
+    });
+}
+
+// Switch between tabs
+function switchToTab(tabName) {
+    // Update tab buttons
+    tabs.forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.tab === tabName);
+    });
+
+    // Update tab contents
+    tabContents.forEach(content => {
+        content.classList.toggle('active', content.id === `${tabName}-tab`);
+    });
+
+    // If switching to graph tab, update graph and resize SVG
+    if (tabName === 'graph') {
+        console.log('Switched to graph tab, updating graph...');
+
+        // Update graph data
+        if (graphModule) {
+            updateGraph().then(() => {
+                // Resize SVG after data is updated
+                if (graphModule.svg && graphModule.container) {
+                    const width = graphModule.container.clientWidth;
+                    const height = graphModule.container.clientHeight;
+
+                    console.log('Resizing SVG to:', { width, height });
+
+                    graphModule.svg
+                        .attr('width', width || 800)
+                        .attr('height', height || 600);
+
+                    // Restart simulation to apply changes
+                    if (graphModule.simulation) {
+                        graphModule.simulation.restart();
+                    }
+                }
+            });
+        }
+    }
+}
+
+// Update graph data
+async function updateGraph() {
+    if (!graphModule) return;
+
+    try {
+        console.log('Updating graph data...');
+        const graphData = await GetGraphData();
+        console.log('Graph data received:', graphData);
+
+        if (graphData) {
+            console.log('Graph data details:');
+            console.log('- Nodes count:', graphData.nodes?.length || 0);
+            console.log('- Edges count:', graphData.edges?.length || 0);
+            console.log('- Sample nodes:', graphData.nodes?.slice(0, 3));
+            console.log('- Sample edges:', graphData.edges?.slice(0, 3));
+
+            graphModule.setData(graphData);
+
+            // Set focus on current file if available
+            if (currentPath) {
+                const focusId = currentPath.startsWith('content/') ?
+                    `doc:/${currentPath.replace('content/', '')}` :
+                    `doc:/${currentPath}`;
+                console.log('Setting focus on:', focusId);
+                graphModule.setFocus({ roots: [focusId], depth: 3 });
+            }
+        } else {
+            console.warn('No graph data received');
+        }
+    } catch (error) {
+        console.error('Failed to update graph:', error);
+    }
 }
 
 // Initialize when DOM is loaded

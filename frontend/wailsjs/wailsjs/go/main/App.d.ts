@@ -13,6 +13,8 @@ export function GetConnectedPeers():Promise<Array<sync.Peer>>;
 
 export function GetFileList():Promise<Array<main.FileItem>>;
 
+export function GetGraphData():Promise<main.GraphData>;
+
 export function InitProject():Promise<void>;
 
 export function LoadFile(arg1:string):Promise<string>;

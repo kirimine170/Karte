@@ -1,5 +1,5 @@
 <!doctype html>
-<script type="module" crossorigin src="/assets/index.a6a8f48d.js"></script>
+<script type="module" crossorigin src="/assets/index.8fabebf4.js"></script>
 
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -185,10 +185,58 @@
   }
 
   .main {
-    display: grid;
-    grid-template-rows: 1fr;
-    gap: var(--gap);
-    padding: var(--gap2)
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: var(--gap2);
+  }
+
+  .tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: var(--gap);
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+  }
+
+  .tab {
+    padding: 8px 16px;
+    background: transparent;
+    border: none;
+    color: var(--mute);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+  }
+
+  .tab:hover {
+    color: var(--ink);
+    background: var(--backgroundcolor-unhover);
+  }
+
+  .tab.active {
+    color: var(--ink);
+    border-bottom-color: var(--accent);
+  }
+
+  .tab-content {
+    display: none;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .tab-content.active {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .graph-container {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel);
   }
 
   textarea {
@@ -219,7 +267,9 @@
   .row {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: var(--gap)
+    gap: var(--gap);
+    flex: 1;
+    min-height: 0;
   }
 
   .btn {
@@ -285,7 +335,9 @@
     }
 
     .row {
-      grid-template-columns: 1fr
+      grid-template-columns: 1fr;
+      flex: 1;
+      min-height: 0;
     }
   }
 </style>
@@ -316,9 +368,20 @@
     <div class="tree" id="tree"></div>
   </aside>
   <main class="main">
-    <div class="row">
-      <textarea id="editor" spellcheck="false"></textarea>
-      <iframe id="preview"></iframe>
+    <div class="tabs">
+      <button class="tab active" data-tab="editor">エディター</button>
+      <button class="tab" data-tab="graph">グラフ</button>
+    </div>
+    <div class="tab-content active" id="editor-tab">
+      <div class="row">
+        <textarea id="editor" spellcheck="false"></textarea>
+        <iframe id="preview"></iframe>
+      </div>
+    </div>
+    <div class="tab-content" id="graph-tab">
+      <div class="graph-container" id="graph-container"></div>
     </div>
   </main>
 </div>
+<!-- D3.js from CDN -->
+<script src="https://d3js.org/d3.v7.min.js"></script>
