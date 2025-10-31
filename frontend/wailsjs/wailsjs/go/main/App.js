@@ -6,6 +6,10 @@ export function BuildSite() {
   return window['go']['main']['App']['BuildSite']();
 }
 
+export function ClearCustomCSS() {
+  return window['go']['main']['App']['ClearCustomCSS']();
+}
+
 export function ConnectToPeer(arg1, arg2) {
   return window['go']['main']['App']['ConnectToPeer'](arg1, arg2);
 }
@@ -18,8 +22,20 @@ export function DisconnectFromPeer(arg1) {
   return window['go']['main']['App']['DisconnectFromPeer'](arg1);
 }
 
+export function ExportPDF(arg1) {
+  return window['go']['main']['App']['ExportPDF'](arg1);
+}
+
+export function ExportPreviewHTML(arg1) {
+  return window['go']['main']['App']['ExportPreviewHTML'](arg1);
+}
+
 export function GetConnectedPeers() {
   return window['go']['main']['App']['GetConnectedPeers']();
+}
+
+export function GetCustomCSS() {
+  return window['go']['main']['App']['GetCustomCSS']();
 }
 
 export function GetFileList() {
@@ -44,4 +60,8 @@ export function PreviewMarkdown(arg1) {
 
 export function SaveFile(arg1, arg2) {
   return window['go']['main']['App']['SaveFile'](arg1, arg2);
+}
+
+export function SetCustomCSS(arg1) {
+  return window['go']['main']['App']['SetCustomCSS'](arg1);
 }
