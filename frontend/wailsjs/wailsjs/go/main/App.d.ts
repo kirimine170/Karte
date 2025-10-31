@@ -11,6 +11,10 @@ export function CreateNewFile(arg1:string):Promise<boolean>;
 
 export function DisconnectFromPeer(arg1:string):Promise<void>;
 
+export function ExportPDF(arg1:string):Promise<string>;
+
+export function ExportPreviewHTML(arg1:string):Promise<string>;
+
 export function GetConnectedPeers():Promise<Array<sync.Peer>>;
 
 export function GetFileList():Promise<Array<main.FileItem>>;

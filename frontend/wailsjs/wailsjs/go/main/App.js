@@ -18,6 +18,14 @@ export function DisconnectFromPeer(arg1) {
   return window['go']['main']['App']['DisconnectFromPeer'](arg1);
 }
 
+export function ExportPDF(arg1) {
+  return window['go']['main']['App']['ExportPDF'](arg1);
+}
+
+export function ExportPreviewHTML(arg1) {
+  return window['go']['main']['App']['ExportPreviewHTML'](arg1);
+}
+
 export function GetConnectedPeers() {
   return window['go']['main']['App']['GetConnectedPeers']();
 }

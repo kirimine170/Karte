@@ -1,4 +1,4 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile } from '../wailsjs/wailsjs/go/main/App';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF } from '../wailsjs/wailsjs/go/main/App';
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
@@ -61,7 +61,8 @@ const api = isBrowser ? mockFunctions : {
     SaveFile,
     PreviewMarkdown,
     GetGraphData,
-    CreateNewFile
+    CreateNewFile,
+    ExportPDF
 };
 
 // Global variables
@@ -78,6 +79,7 @@ const inp = document.getElementById('q');
 const saveBtn = document.getElementById('saveBtn');
 const openBtn = document.getElementById('openBtn');
 const newBtn = document.getElementById('newBtn');
+const exportPdfBtn = document.getElementById('exportPdfBtn');
 const themeSel = document.getElementById('theme');
 const hardwrapChk = document.getElementById('hardwrap');
 const tabs = document.querySelectorAll('.tab');
@@ -352,6 +354,9 @@ function setupEventListeners() {
     if (openBtn) {
         openBtn.onclick = openExternalPreview;
     }
+    if (exportPdfBtn) {
+        exportPdfBtn.onclick = exportPdf;
+    }
 
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
@@ -447,6 +452,44 @@ async function openExternalPreview() {
     } catch (error) {
         console.error('Failed to open external preview:', error);
         statusEl.textContent = 'Failed to open external preview';
+    }
+}
+
+// Export preview to PDF (Wails: save HTML and open in browser, Browser: print dialog)
+async function exportPdf() {
+    try {
+        if (exportPdfBtn) {
+            exportPdfBtn.disabled = true;
+        }
+        statusEl.textContent = 'Exporting PDF...';
+        const content = ta.value || '';
+        const html = await api.PreviewMarkdown(content);
+        if (!isBrowser) {
+            const pdfPath = await api.ExportPDF(html);
+            statusEl.textContent = 'PDF exported: ' + pdfPath;
+            BrowserOpenURL('file://' + pdfPath);
+        } else {
+            // In browser, open print dialog
+            const win = window.open('about:blank', '_blank', 'noopener');
+            if (!win) throw new Error('Popup blocked');
+            win.document.open();
+            win.document.write(html);
+            win.document.close();
+            setTimeout(() => {
+                win.focus();
+                win.print();
+            }, 100);
+        }
+    } catch (error) {
+        console.error('Export PDF failed:', error);
+        const msg = (error && (error.message || String(error))) || 'Export PDF failed';
+        statusEl.textContent = msg;
+        alert(msg);
+    }
+    finally {
+        if (exportPdfBtn) {
+            exportPdfBtn.disabled = false;
+        }
     }
 }
 

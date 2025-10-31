@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	pdfexport "karte/internal/pdf"
 	"karte/internal/site"
 	"karte/internal/sync"
 
@@ -679,6 +680,46 @@ func (a *App) GetGraphData() (*GraphData, error) {
 		Edges: edgeList,
 		Meta:  GraphMeta{Directed: true},
 	}, nil
+}
+
+// ExportPreviewHTML saves given HTML into karte_data/export and returns a file URL
+func (a *App) ExportPreviewHTML(html string) (string, error) {
+	if html == "" {
+		return "", fmt.Errorf("empty html")
+	}
+	exportDir := filepath.Join(a.dataDir, "export")
+	if err := os.MkdirAll(exportDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create export dir: %v", err)
+	}
+	filename := fmt.Sprintf("preview-%s.html", time.Now().Format("20060102-150405"))
+	fp := filepath.Join(exportDir, filename)
+	if err := os.WriteFile(fp, []byte(html), 0644); err != nil {
+		return "", fmt.Errorf("failed to write export file: %v")
+	}
+	a.logInfo(fmt.Sprintf("Exported preview HTML: %s", fp))
+	// Build file URL
+	url := "file://" + filepath.ToSlash(fp)
+	return url, nil
+}
+
+// ExportPDF renders given HTML as PDF to karte_data/export and returns the path
+func (a *App) ExportPDF(html string) (string, error) {
+	if html == "" {
+		return "", fmt.Errorf("empty html")
+	}
+	exportDir := filepath.Join(a.dataDir, "export")
+	if err := os.MkdirAll(exportDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create export dir: %v", err)
+	}
+	base := fmt.Sprintf("export-%s.pdf", time.Now().Format("20060102-150405"))
+	pdfPath := filepath.Join(exportDir, base)
+	a.logInfo(fmt.Sprintf("ExportPDF start: out=%s html.len=%d", pdfPath, len(html)))
+	if err := pdfexport.ExportHTMLToPDF(html, pdfPath); err != nil {
+		a.logError(fmt.Sprintf("ExportPDF failed: %v", err))
+		return "", err
+	}
+	a.logInfo(fmt.Sprintf("PDF exported: %s", pdfPath))
+	return pdfPath, nil
 }
 
 // LinkInfo represents a link found in markdown content
