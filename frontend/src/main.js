@@ -1,4 +1,4 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF } from '../wailsjs/wailsjs/go/main/App';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, GetCustomCSS, SetCustomCSS, ClearCustomCSS } from '../wailsjs/wailsjs/go/main/App';
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
@@ -62,7 +62,10 @@ const api = isBrowser ? mockFunctions : {
     PreviewMarkdown,
     GetGraphData,
     CreateNewFile,
-    ExportPDF
+    ExportPDF,
+    GetCustomCSS,
+    SetCustomCSS,
+    ClearCustomCSS
 };
 
 // Global variables
@@ -90,6 +93,17 @@ const filenameModal = document.getElementById('filenameModal');
 const filenameInput = document.getElementById('filenameInput');
 const createFileBtn = document.getElementById('createFileBtn');
 const cancelFileBtn = document.getElementById('cancelFileBtn');
+
+// Custom CSS elements
+const customCssBtn = document.getElementById('customCssBtn');
+const customCssModal = document.getElementById('customCssModal');
+const customCssTextarea = document.getElementById('customCssTextarea');
+const saveCustomCssBtn = document.getElementById('saveCustomCssBtn');
+const clearCustomCssBtn = document.getElementById('clearCustomCssBtn');
+const cancelCustomCssBtn = document.getElementById('cancelCustomCssBtn');
+const customCssStatus = document.getElementById('customCssStatus');
+
+let customCssCache = '';
 
 // Initialize the application
 async function init() {
@@ -332,8 +346,9 @@ async function save() {
 async function updatePreview() {
     try {
         const content = ta.value;
-        const html = await api.PreviewMarkdown(content);
-        pv.srcdoc = html;
+        const mdHtml = await api.PreviewMarkdown(content);
+        const finalHtml = composePreviewHtml(mdHtml);
+        pv.srcdoc = finalHtml;
     } catch (error) {
         console.error('Failed to update preview:', error);
         pv.srcdoc = '<p>Preview failed to load</p>';
@@ -375,6 +390,8 @@ function setupEventListeners() {
         const theme = e.target.value;
         document.documentElement.setAttribute('data-theme', theme);
         localStorage.setItem('karte-theme', theme);
+        // Re-render preview with updated theme variables
+        updatePreview();
     });
 
     // Hard wrap checkbox
@@ -386,6 +403,26 @@ function setupEventListeners() {
     inp.addEventListener('input', () => {
         renderFileList();
     });
+
+    // Custom CSS initial load
+    api.GetCustomCSS()
+        .then((css) => { customCssCache = css || ''; updateCustomCssStatus(); updatePreview(); })
+        .catch((e) => console.warn('GetCustomCSS failed', e));
+
+    // Custom CSS modal events
+    if (customCssBtn) customCssBtn.onclick = showCustomCssModal;
+    if (saveCustomCssBtn) saveCustomCssBtn.onclick = async () => {
+        await saveCustomCss(customCssTextarea.value || '');
+        hideCustomCssModal();
+        updatePreview();
+    };
+    if (clearCustomCssBtn) clearCustomCssBtn.onclick = async () => {
+        await clearCustomCss();
+        hideCustomCssModal();
+        updatePreview();
+    };
+    if (cancelCustomCssBtn) cancelCustomCssBtn.onclick = hideCustomCssModal;
+    if (customCssModal) customCssModal.onclick = (e) => { if (e.target === customCssModal) hideCustomCssModal(); };
 
     // Modal event listeners
     if (createFileBtn) {
@@ -454,6 +491,78 @@ async function openExternalPreview() {
         statusEl.textContent = 'Failed to open external preview';
     }
 }
+
+// ---------- Custom CSS & Themed Preview helpers ----------
+function loadCustomCss() { return customCssCache || ''; }
+async function saveCustomCss(css) {
+    await api.SetCustomCSS(css);
+    customCssCache = css;
+    updateCustomCssStatus();
+}
+async function clearCustomCss() {
+    await api.ClearCustomCSS();
+    customCssCache = '';
+    updateCustomCssStatus();
+}
+
+function updateCustomCssStatus() {
+    if (!customCssStatus) return;
+    const active = !!loadCustomCss();
+    customCssStatus.textContent = active ? 'Custom CSS active' : '';
+}
+
+function showCustomCssModal() {
+    if (!customCssModal) return;
+    customCssTextarea.value = loadCustomCss();
+    customCssModal.style.display = 'flex';
+    customCssTextarea.focus();
+}
+
+function hideCustomCssModal() {
+    if (!customCssModal) return;
+    customCssModal.style.display = 'none';
+}
+
+function getThemeVariablesCSS() {
+    const varNames = [
+        '--main-background', '--text-color', '--browsername-color', '--backgroundcolor', '--backgroundcolor-unhover',
+        '--opened-tab-backgroundcolor', '--border-color', '--border-color-unhover', '--borderline-color', '--shadow-color',
+        '--shadow-color-unhover', '--input-color-unhover', '--loading-color', '--closebutton-color'
+    ];
+    const cs = getComputedStyle(document.documentElement);
+    const lines = varNames.map(v => {
+        const val = cs.getPropertyValue(v).trim();
+        return val ? `${v}: ${val};` : '';
+    }).filter(Boolean);
+    return `:root{${lines.join('')}}`;
+}
+
+function getBasePreviewCSS() {
+    return `
+      body{margin:16px; background: var(--main-background); color: var(--text-color);}
+      a{color: var(--loading-color);}
+      pre,code{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace}
+      pre{background: var(--backgroundcolor-unhover); padding:12px; border-radius:8px; overflow:auto}
+      h1,h2,h3{margin-top:1.2em;}
+      table{border-collapse:collapse}
+      th,td{border:1px solid var(--border-color); padding:6px 10px}
+    `;
+}
+
+function composePreviewHtml(innerHtml) {
+    const custom = loadCustomCss();
+    // Use selected theme value or persisted theme
+    const theme = (themeSel && themeSel.value) || localStorage.getItem('karte-theme') || 'light';
+    if (custom) {
+        return `<!doctype html><html data-theme="${theme}"><head><meta charset="utf-8"><style>${custom}</style></head><body>${innerHtml}</body></html>`;
+    }
+    const themeVars = getThemeVariablesCSS();
+    const baseCSS = getBasePreviewCSS();
+    return `<!doctype html><html data-theme="${theme}"><head><meta charset="utf-8"><style>${themeVars}${baseCSS}</style></head><body>${innerHtml}</body></html>`;
+}
+
+// Initialize custom CSS status on load
+updateCustomCssStatus();
 
 // Export preview to PDF (Wails: save HTML and open in browser, Browser: print dialog)
 async function exportPdf() {

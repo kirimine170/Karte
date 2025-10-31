@@ -5,6 +5,8 @@ import {main} from '../models';
 
 export function BuildSite():Promise<void>;
 
+export function ClearCustomCSS():Promise<void>;
+
 export function ConnectToPeer(arg1:string,arg2:number):Promise<void>;
 
 export function CreateNewFile(arg1:string):Promise<boolean>;
@@ -17,6 +19,8 @@ export function ExportPreviewHTML(arg1:string):Promise<string>;
 
 export function GetConnectedPeers():Promise<Array<sync.Peer>>;
 
+export function GetCustomCSS():Promise<string>;
+
 export function GetFileList():Promise<Array<main.FileItem>>;
 
 export function GetGraphData():Promise<main.GraphData>;
@@ -28,3 +32,5 @@ export function LoadFile(arg1:string):Promise<string>;
 export function PreviewMarkdown(arg1:string):Promise<string>;
 
 export function SaveFile(arg1:string,arg2:string):Promise<void>;
+
+export function SetCustomCSS(arg1:string):Promise<void>;

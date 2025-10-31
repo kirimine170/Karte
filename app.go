@@ -722,6 +722,52 @@ func (a *App) ExportPDF(html string) (string, error) {
 	return pdfPath, nil
 }
 
+// ---- Custom CSS (preview-only) management ----
+
+func (a *App) customCSSPath() string {
+	return filepath.Join(a.dataDir, "themes", "custom.css")
+}
+
+// GetCustomCSS returns the custom CSS contents for preview (empty if none)
+func (a *App) GetCustomCSS() (string, error) {
+	p := a.customCSSPath()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to read custom.css: %v", err)
+	}
+	return string(b), nil
+}
+
+// SetCustomCSS saves custom CSS to karte_data/themes/custom.css
+func (a *App) SetCustomCSS(css string) error {
+	dir := filepath.Join(a.dataDir, "themes")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to ensure themes dir: %v", err)
+	}
+	p := a.customCSSPath()
+	if err := os.WriteFile(p, []byte(css), 0644); err != nil {
+		return fmt.Errorf("failed to write custom.css: %v", err)
+	}
+	a.logInfo(fmt.Sprintf("Saved custom CSS: %s (%d bytes)", p, len(css)))
+	return nil
+}
+
+// ClearCustomCSS deletes custom.css if present
+func (a *App) ClearCustomCSS() error {
+	p := a.customCSSPath()
+	if err := os.Remove(p); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to remove custom.css: %v", err)
+	}
+	a.logInfo("Cleared custom CSS")
+	return nil
+}
+
 // LinkInfo represents a link found in markdown content
 type LinkInfo struct {
 	Target string
