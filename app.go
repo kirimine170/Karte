@@ -13,10 +13,13 @@ import (
 	"strings"
 	"time"
 
+	gitvcs "karte/internal/git"
 	pdfexport "karte/internal/pdf"
 	"karte/internal/site"
 	"karte/internal/sync"
 
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -27,6 +30,7 @@ type App struct {
 	dataDir     string
 	logFilePath string
 	syncManager *sync.SyncManager
+	vcs         *gitvcs.VCS
 }
 
 // logInfo writes info logs to both Wails runtime and app log file
@@ -72,15 +76,19 @@ type GraphNode struct {
 	DegIn  int      `json:"degIn"`
 	DegOut int      `json:"degOut"`
 	Tags   []string `json:"tags"`
+	Hash   string   `json:"hash,omitempty"` // SHA256 hash of the file content
 }
 
 // GraphEdge represents an edge in the graph
 type GraphEdge struct {
-	ID     string `json:"id"`
-	Source string `json:"source"`
-	Target string `json:"target"`
-	Kind   string `json:"kind"`
-	Weight int    `json:"weight"`
+	ID          string `json:"id"`
+	Source      string `json:"source"`
+	Target      string `json:"target"`
+	Kind        string `json:"kind"`
+	Weight      int    `json:"weight"`
+	TargetHash  string `json:"targetHash,omitempty"`  // Hash of target file when link was created
+	SourceHash  string `json:"sourceHash,omitempty"`  // Hash of source file when link was created
+	LinkVersion int    `json:"linkVersion,omitempty"` // Version number when link was created
 }
 
 // GraphData represents the complete graph structure
@@ -181,6 +189,38 @@ func (a *App) initializeDataDirectory() error {
 		if _, err := os.Stat(filePath); os.IsNotExist(err) {
 			if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
 				return fmt.Errorf("failed to create default file %s: %v", filePath, err)
+			}
+		}
+	}
+
+	// Initialize Git repository
+	vcs, err := gitvcs.NewVCS(a.ctx, a.dataDir, a.logInfo)
+	if err != nil {
+		return fmt.Errorf("failed to initialize git repository: %v", err)
+	}
+	a.vcs = vcs
+
+	// Make initial commit if repository is new
+	_, err = vcs.Repository().Head()
+	if err != nil {
+		// No HEAD means it's a new repository, make initial commit
+		worktree, err := vcs.Repository().Worktree()
+		if err == nil {
+			// Add all files
+			worktree.Add(".")
+			// Make initial commit
+			_, err = worktree.Commit("Initial commit", &git.CommitOptions{
+				Author: &object.Signature{
+					Name:  "Karte User",
+					Email: "karte@localhost",
+					When:  time.Now(),
+				},
+			})
+			if err != nil {
+				a.logError(fmt.Sprintf("Failed to make initial commit: %v", err))
+				// Don't fail initialization if commit fails
+			} else {
+				a.logInfo("Created initial git commit")
 			}
 		}
 	}
@@ -317,9 +357,72 @@ func (a *App) SaveFile(path, content string) error {
 		return fmt.Errorf("invalid path: %s", path)
 	}
 
+	// Calculate hash before saving
+	var oldHash string
+	if existingContent, err := os.ReadFile(absPath); err == nil {
+		oldHash = gitvcs.CalculateHash(string(existingContent))
+	}
+
+	// Detect conflict before saving
+	if a.vcs != nil {
+		relPath, err := filepath.Rel(a.dataDir, absPath)
+		if err == nil {
+			conflict, err := gitvcs.DetectConflict(a.vcs, a.dataDir, relPath)
+			if err != nil {
+				a.logError(fmt.Sprintf("Failed to detect conflict: %v", err))
+			} else if conflict != nil {
+				// Create backup before handling conflict
+				if err := a.createBackup(path, content); err != nil {
+					a.logError(fmt.Sprintf("Failed to create backup: %v", err))
+				}
+
+				// Try auto-merge for auto-resolvable or warning conflicts
+				if conflict.Severity == gitvcs.ConflictAutoResolvable || conflict.Severity == gitvcs.ConflictWarning {
+					merged, severity, err := gitvcs.AutoMergeMarkdown(conflict.BaseContent, conflict.LocalContent, conflict.RemoteContent)
+					if err == nil && severity != gitvcs.ConflictCritical {
+						// Auto-merge successful - use merged content
+						content = merged
+						runtime.EventsEmit(a.ctx, "auto-merge-success", map[string]interface{}{
+							"path":        path,
+							"merged_hash": gitvcs.CalculateHash(merged),
+						})
+						a.logInfo(fmt.Sprintf("Auto-merged conflict for file: %s", path))
+					} else {
+						// Auto-merge failed or still has conflicts - notify user
+						runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
+						if conflict.Severity == gitvcs.ConflictCritical {
+							return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
+						}
+					}
+				} else {
+					// Critical conflict - require manual resolution
+					runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
+					return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
+				}
+			}
+		}
+	}
+
+	// Save file
 	err := os.WriteFile(absPath, []byte(content), 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to write file: %v", err)
+	}
+
+	// Calculate new hash
+	newHash := gitvcs.CalculateHash(content)
+
+	// Commit to Git if content changed
+	if a.vcs != nil && oldHash != newHash {
+		// Get relative path from dataDir
+		relPath, err := filepath.Rel(a.dataDir, absPath)
+		if err == nil {
+			commitMessage := fmt.Sprintf("Update: %s", path)
+			if err := a.vcs.CommitFile(relPath, commitMessage); err != nil {
+				a.logError(fmt.Sprintf("Failed to commit file to git: %v", err))
+				// Don't fail save if git commit fails
+			}
+		}
 	}
 
 	// Build the site after saving
@@ -327,16 +430,87 @@ func (a *App) SaveFile(path, content string) error {
 		runtime.LogError(a.ctx, fmt.Sprintf("Failed to build site after save: %v", err))
 	}
 
-	// Broadcast file change to peers (disabled for now - will be implemented with git integration)
-	// if a.syncManager != nil {
-	// 	if err := a.syncManager.BroadcastFileChange(path, content); err != nil {
-	// 		runtime.LogError(a.ctx, fmt.Sprintf("Failed to broadcast file change: %v", err))
-	// 	}
-	// }
-
 	// Emit file changed event
 	runtime.EventsEmit(a.ctx, "file-changed", path)
 
+	return nil
+}
+
+// createBackup creates a backup of the file before conflict resolution
+func (a *App) createBackup(path, content string) error {
+	backupDir := filepath.Join(a.dataDir, ".backups")
+	if err := os.MkdirAll(backupDir, 0755); err != nil {
+		return fmt.Errorf("failed to create backup directory: %v", err)
+	}
+
+	timestamp := time.Now().Format("20060102_150405")
+	safePath := strings.ReplaceAll(path, "/", "_")
+	backupPath := filepath.Join(backupDir, fmt.Sprintf("%s_%s.md", safePath, timestamp))
+
+	if err := os.WriteFile(backupPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write backup: %v", err)
+	}
+
+	a.logInfo(fmt.Sprintf("Created backup: %s", backupPath))
+	return nil
+}
+
+// ResolveConflict resolves a file conflict using the specified strategy
+func (a *App) ResolveConflict(path, strategy string) error {
+	absPath, ok := a.resolveContentPath(path)
+	if !ok {
+		return fmt.Errorf("invalid path: %s", path)
+	}
+
+	if a.vcs == nil {
+		return fmt.Errorf("git repository not initialized")
+	}
+
+	relPath, err := filepath.Rel(a.dataDir, absPath)
+	if err != nil {
+		return fmt.Errorf("failed to get relative path: %v", err)
+	}
+
+	// Get conflict info
+	conflict, err := gitvcs.DetectConflict(a.vcs, a.dataDir, relPath)
+	if err != nil {
+		return fmt.Errorf("failed to detect conflict: %v", err)
+	}
+	if conflict == nil {
+		return nil // No conflict
+	}
+
+	var resolvedContent string
+	switch strategy {
+	case "local":
+		// Use local version
+		resolvedContent = conflict.LocalContent
+	case "remote":
+		// Use remote version
+		resolvedContent = conflict.RemoteContent
+	case "merge":
+		// Try to merge
+		merged, _, err := gitvcs.AutoMergeMarkdown(conflict.BaseContent, conflict.LocalContent, conflict.RemoteContent)
+		if err != nil {
+			return fmt.Errorf("auto-merge failed: %v", err)
+		}
+		resolvedContent = merged
+	default:
+		return fmt.Errorf("unknown strategy: %s", strategy)
+	}
+
+	// Save resolved content
+	if err := os.WriteFile(absPath, []byte(resolvedContent), 0644); err != nil {
+		return fmt.Errorf("failed to write resolved file: %v", err)
+	}
+
+	// Commit the resolution
+	commitMessage := fmt.Sprintf("Resolve conflict: %s (strategy: %s)", path, strategy)
+	if err := a.vcs.CommitFile(relPath, commitMessage); err != nil {
+		a.logError(fmt.Sprintf("Failed to commit conflict resolution: %v", err))
+	}
+
+	a.logInfo(fmt.Sprintf("Resolved conflict for %s using strategy: %s", path, strategy))
 	return nil
 }
 
@@ -536,9 +710,15 @@ func (a *App) GetGraphData() (*GraphData, error) {
 		title := filepath.Base(filePath)
 		title = strings.TrimSuffix(title, ".md")
 
-		// フロントマターからタイトルを抽出
+		var fileHash string
+		var fileContent string
+
+		// ファイル内容を読み込み
 		if content, err := os.ReadFile(filepath.Join(a.dataDir, filePath)); err == nil {
-			title = a.extractTitleFromContent(string(content), title)
+			fileContent = string(content)
+			title = a.extractTitleFromContent(fileContent, title)
+			// ハッシュを計算
+			fileHash = gitvcs.CalculateHash(fileContent)
 		}
 
 		// ノードを作成
@@ -550,11 +730,12 @@ func (a *App) GetGraphData() (*GraphData, error) {
 			DegIn:  0,
 			DegOut: 0,
 			Tags:   []string{},
+			Hash:   fileHash,
 		}
 
 		// ファイル内容を解析してリンクを抽出
-		if content, err := os.ReadFile(filepath.Join(a.dataDir, filePath)); err == nil {
-			links := a.extractLinks(string(content))
+		if fileContent != "" {
+			links := a.extractLinks(fileContent)
 			a.logInfo(fmt.Sprintf("File %s: found %d links", filePath, len(links)))
 			for i, link := range links {
 				targetID := a.resolveLinkTarget(link, filePath)
@@ -564,16 +745,41 @@ func (a *App) GetGraphData() (*GraphData, error) {
 					edgeKey := nodeID + "->" + targetID
 					edgeCounts[edgeKey]++
 
+					// ターゲットファイルのハッシュを取得
+					targetHash := ""
+					if targetNode, exists := nodes[targetID]; exists {
+						targetHash = targetNode.Hash
+					} else {
+						// ターゲットファイルがまだ処理されていない場合、ファイルを読み込んでハッシュを計算
+						if strings.HasPrefix(targetID, "doc:/") {
+							targetPath := strings.TrimPrefix(targetID, "doc:/")
+							targetFilePath := filepath.Join(a.dataDir, "content", targetPath)
+							if targetContent, err := os.ReadFile(targetFilePath); err == nil {
+								targetHash = gitvcs.CalculateHash(string(targetContent))
+							}
+						}
+					}
+
 					// エッジを作成
 					edgeID := fmt.Sprintf("e_%s_%s", strings.ReplaceAll(nodeID, "/", "_"), strings.ReplaceAll(targetID, "/", "_"))
 					edges[edgeID] = &GraphEdge{
-						ID:     edgeID,
-						Source: nodeID,
-						Target: targetID,
-						Kind:   link.Kind,
-						Weight: edgeCounts[edgeKey],
+						ID:         edgeID,
+						Source:     nodeID,
+						Target:     targetID,
+						Kind:       link.Kind,
+						Weight:     edgeCounts[edgeKey],
+						SourceHash: fileHash,
+						TargetHash: targetHash,
 					}
-					a.logInfo(fmt.Sprintf("    Created edge: %s -> %s (weight: %d)", nodeID, targetID, edgeCounts[edgeKey]))
+					sourceHashShort := ""
+					if len(fileHash) >= 8 {
+						sourceHashShort = fileHash[:8]
+					}
+					targetHashShort := ""
+					if len(targetHash) >= 8 {
+						targetHashShort = targetHash[:8]
+					}
+					a.logInfo(fmt.Sprintf("    Created edge: %s -> %s (weight: %d, sourceHash: %s, targetHash: %s)", nodeID, targetID, edgeCounts[edgeKey], sourceHashShort, targetHashShort))
 				}
 			}
 		} else {
@@ -694,7 +900,7 @@ func (a *App) ExportPreviewHTML(html string) (string, error) {
 	filename := fmt.Sprintf("preview-%s.html", time.Now().Format("20060102-150405"))
 	fp := filepath.Join(exportDir, filename)
 	if err := os.WriteFile(fp, []byte(html), 0644); err != nil {
-		return "", fmt.Errorf("failed to write export file: %v")
+		return "", fmt.Errorf("failed to write export file: %v", err)
 	}
 	a.logInfo(fmt.Sprintf("Exported preview HTML: %s", fp))
 	// Build file URL

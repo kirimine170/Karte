@@ -491,4 +491,95 @@
   </style>
 </div>
 
+<!-- Conflict resolution modal -->
+<div id="conflictModal" class="modal" style="display:none;">
+  <div class="modal-content" style="min-width:600px;max-width:800px;">
+    <h3>ファイルが他の場所で変更されました</h3>
+    <p id="conflictFilePath" style="font-weight:bold;margin-bottom:15px;"></p>
+    <p style="margin-bottom:20px;">同じファイルが別の場所で編集されています。解決方法を選択してください：</p>
+
+    <div class="conflict-options" style="margin-bottom:20px;">
+      <label class="conflict-option">
+        <input type="radio" name="conflictResolution" value="local" checked>
+        <div>
+          <strong>自分の変更を保持</strong>
+          <small>あなたが編集した内容を優先します</small>
+        </div>
+      </label>
+
+      <label class="conflict-option">
+        <input type="radio" name="conflictResolution" value="remote">
+        <div>
+          <strong>他の変更を採用</strong>
+          <small>別の場所での変更を優先します</small>
+        </div>
+      </label>
+
+      <label class="conflict-option">
+        <input type="radio" name="conflictResolution" value="merge">
+        <div>
+          <strong>両方を統合（推奨）</strong>
+          <small>自動的に両方の変更を統合します</small>
+        </div>
+      </label>
+    </div>
+
+    <details class="conflict-diff" style="margin-bottom:20px;">
+      <summary style="cursor:pointer;padding:10px;background:var(--backgroundcolor-unhover);border-radius:6px;">変更内容を比較
+      </summary>
+      <div class="diff-view"
+        style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;max-height:400px;overflow:auto;">
+        <div class="diff-local" style="border:1px solid var(--border-color);border-radius:6px;padding:10px;">
+          <h4 style="margin-top:0;">あなたの変更</h4>
+          <pre id="diffLocal"
+            style="background:var(--input-color-unhover);padding:10px;border-radius:4px;overflow:auto;white-space:pre-wrap;font-size:12px;margin:0;"></pre>
+        </div>
+        <div class="diff-remote" style="border:1px solid var(--border-color);border-radius:6px;padding:10px;">
+          <h4 style="margin-top:0;">他の変更</h4>
+          <pre id="diffRemote"
+            style="background:var(--input-color-unhover);padding:10px;border-radius:4px;overflow:auto;white-space:pre-wrap;font-size:12px;margin:0;"></pre>
+        </div>
+      </div>
+    </details>
+
+    <div class="modal-buttons">
+      <button id="resolveConflictBtn" class="btn">解決</button>
+      <button id="cancelConflictBtn" class="btn btn-secondary">キャンセル</button>
+    </div>
+  </div>
+  <style>
+    .conflict-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px;
+      margin-bottom: 8px;
+      border: 2px solid var(--border-color);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .conflict-option:hover {
+      background: var(--backgroundcolor-unhover);
+      border-color: var(--accent);
+    }
+
+    .conflict-option input[type="radio"] {
+      margin-top: 4px;
+    }
+
+    .conflict-option strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .conflict-option small {
+      display: block;
+      color: var(--mute);
+      font-size: 12px;
+    }
+  </style>
+</div>
+
 <script type="module" src="/src/main.js"></script>

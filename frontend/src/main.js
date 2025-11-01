@@ -1,4 +1,4 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, GetCustomCSS, SetCustomCSS, ClearCustomCSS } from '../wailsjs/wailsjs/go/main/App';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict } from '../wailsjs/wailsjs/go/main/App';
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
@@ -65,7 +65,8 @@ const api = isBrowser ? mockFunctions : {
     ExportPDF,
     GetCustomCSS,
     SetCustomCSS,
-    ClearCustomCSS
+    ClearCustomCSS,
+    ResolveConflict
 };
 
 // Global variables
@@ -103,7 +104,16 @@ const clearCustomCssBtn = document.getElementById('clearCustomCssBtn');
 const cancelCustomCssBtn = document.getElementById('cancelCustomCssBtn');
 const customCssStatus = document.getElementById('customCssStatus');
 
+// Conflict modal elements
+const conflictModal = document.getElementById('conflictModal');
+const conflictFilePath = document.getElementById('conflictFilePath');
+const diffLocal = document.getElementById('diffLocal');
+const diffRemote = document.getElementById('diffRemote');
+const resolveConflictBtn = document.getElementById('resolveConflictBtn');
+const cancelConflictBtn = document.getElementById('cancelConflictBtn');
+
 let customCssCache = '';
+let currentConflictInfo = null;
 
 // Initialize the application
 async function init() {
@@ -135,6 +145,24 @@ async function init() {
                 console.log('File changed:', path);
                 updatePreview();
                 updateGraph();
+            });
+
+            // Conflict detection events
+            EventsOn('conflict-detected', (conflictInfo) => {
+                console.log('Conflict detected:', conflictInfo);
+                showConflictResolutionModal(conflictInfo);
+            });
+
+            EventsOn('auto-merge-success', (data) => {
+                console.log('Auto-merge succeeded:', data);
+                statusEl.textContent = `ファイル「${data.path}」の変更を自動的に統合しました`;
+                setTimeout(() => {
+                    statusEl.textContent = '';
+                }, 3000);
+                // Reload file to show merged content
+                if (currentPath) {
+                    loadFile(currentPath);
+                }
             });
         } else {
             console.log('Running in browser mode - Wails events disabled');
@@ -670,6 +698,73 @@ async function updateGraph() {
     } catch (error) {
         console.error('Failed to update graph:', error);
     }
+}
+
+// Show conflict resolution modal
+function showConflictResolutionModal(conflictInfo) {
+    currentConflictInfo = conflictInfo;
+
+    // Extract path from conflict info
+    const path = conflictInfo.path || conflictInfo.Path || '';
+    const localPath = path.startsWith('content/') ? path.replace('content/', '') : path;
+    conflictFilePath.textContent = localPath;
+
+    // Display diff content
+    diffLocal.textContent = conflictInfo.local_content || conflictInfo.LocalContent || '';
+    diffRemote.textContent = conflictInfo.remote_content || conflictInfo.RemoteContent || '';
+
+    // Show modal
+    conflictModal.style.display = 'flex';
+}
+
+// Hide conflict resolution modal
+function hideConflictResolutionModal() {
+    conflictModal.style.display = 'none';
+    currentConflictInfo = null;
+}
+
+// Handle conflict resolution
+async function resolveConflict(strategy) {
+    if (!currentConflictInfo) {
+        console.error('No conflict info available');
+        return;
+    }
+
+    const path = currentConflictInfo.path || currentConflictInfo.Path || '';
+    const localPath = path.startsWith('content/') ? path.replace('content/', '') : path;
+
+    try {
+        statusEl.textContent = 'コンフリクトを解決中...';
+        await api.ResolveConflict(localPath, strategy);
+        statusEl.textContent = 'コンフリクトを解決しました';
+        hideConflictResolutionModal();
+
+        // Reload file to show resolved content
+        if (currentPath === localPath) {
+            await loadFile(currentPath);
+        }
+
+        setTimeout(() => {
+            statusEl.textContent = '';
+        }, 3000);
+    } catch (error) {
+        console.error('Failed to resolve conflict:', error);
+        statusEl.textContent = `コンフリクト解決に失敗しました: ${error.message || error}`;
+    }
+}
+
+// Setup conflict resolution button handlers
+if (resolveConflictBtn && cancelConflictBtn) {
+    resolveConflictBtn.addEventListener('click', () => {
+        const selected = document.querySelector('input[name="conflictResolution"]:checked');
+        if (selected) {
+            resolveConflict(selected.value);
+        }
+    });
+
+    cancelConflictBtn.addEventListener('click', () => {
+        hideConflictResolutionModal();
+    });
 }
 
 // Initialize when DOM is loaded

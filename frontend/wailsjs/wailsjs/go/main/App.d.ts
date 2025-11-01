@@ -31,6 +31,8 @@ export function LoadFile(arg1:string):Promise<string>;
 
 export function PreviewMarkdown(arg1:string):Promise<string>;
 
+export function ResolveConflict(arg1:string,arg2:string):Promise<void>;
+
 export function SaveFile(arg1:string,arg2:string):Promise<void>;
 
 export function SetCustomCSS(arg1:string):Promise<void>;
