@@ -620,24 +620,20 @@ function switchToTab(tabName) {
 
         // Update graph data
         if (graphModule) {
-            updateGraph().then(() => {
-                // Resize SVG after data is updated
-                if (graphModule.svg && graphModule.container) {
-                    const width = graphModule.container.clientWidth;
-                    const height = graphModule.container.clientHeight;
+            // 少し遅延させてコンテナサイズを正しく取得（flexboxレイアウトの計算を待つ）
+            setTimeout(() => {
+                updateGraph().then(() => {
+                    // シミュレーションサイズを更新（SVGはCSSで自動的に追従）
+                    if (graphModule && typeof graphModule.updateSimulationSize === 'function') {
+                        graphModule.updateSimulationSize();
 
-                    console.log('Resizing SVG to:', { width, height });
-
-                    graphModule.svg
-                        .attr('width', width || 800)
-                        .attr('height', height || 600);
-
-                    // Restart simulation to apply changes
-                    if (graphModule.simulation) {
-                        graphModule.simulation.restart();
+                        // Restart simulation to apply changes
+                        if (graphModule.simulation) {
+                            graphModule.simulation.alpha(0.3).restart();
+                        }
                     }
-                }
-            });
+                });
+            }, 100);
         }
     }
 }

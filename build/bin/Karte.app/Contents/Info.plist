@@ -6,7 +6,7 @@
         <key>CFBundleName</key>
         <string>Karte</string>
         <key>CFBundleExecutable</key>
-        <string>karte</string>
+        <string>karte-macos-universal</string>
         <key>CFBundleIdentifier</key>
         <string>com.wails.Karte</string>
         <key>CFBundleVersion</key>
@@ -25,10 +25,5 @@
         <string>Copyright © 2024, kirimine170</string>
         
         
-        <key>NSAppTransportSecurity</key>
-        <dict>
-            <key>NSAllowsLocalNetworking</key>
-            <true/>
-        </dict>
     </dict>
 </plist>
