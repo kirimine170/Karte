@@ -31,6 +31,8 @@ class GraphD3Module {
         this.labelElements = null;
 
         this.tooltip = null;
+        this.resizeObserver = null;
+        this.handleResize = null;
 
         this.init();
     }
@@ -48,16 +50,13 @@ class GraphD3Module {
             offsetHeight: this.container.offsetHeight
         });
 
-        // SVG要素を作成
-        const width = this.container.clientWidth || 800;
-        const height = this.container.clientHeight || 600;
-
-        console.log('Creating SVG with dimensions:', { width, height });
-
+        // SVG要素を作成（viewBoxなし、CSSのみでサイズ追従）
+        // エディタ側（textarea/iframe）と同じアプローチ：CSSのみで親要素に追従
         this.svg = d3.select(this.container)
             .append('svg')
-            .attr('width', width)
-            .attr('height', height);
+            .attr('width', '100%')
+            .attr('height', '100%')
+            .style('display', 'block');
 
         console.log('SVG created successfully:', !!this.svg);
 
@@ -79,13 +78,48 @@ class GraphD3Module {
         this.setupEventListeners();
     }
 
+    updateSimulationSize() {
+        // viewBoxなしの実装：コンテナサイズを直接取得してシミュレーションに反映
+        if (!this.container) return;
+
+        const rect = this.container.getBoundingClientRect();
+        if (!rect || rect.width <= 0 || rect.height <= 0) return;
+
+        const width = rect.width;
+        const height = rect.height;
+
+        // シミュレーションのサイズを更新
+        if (this.simulation) {
+            const centerForce = this.simulation.force('center');
+            if (centerForce) {
+                centerForce.x(width / 2).y(height / 2);
+            }
+        }
+    }
+
     setupEventListeners() {
-        // リサイズイベント
-        window.addEventListener('resize', () => {
-            const width = this.container.clientWidth;
-            const height = this.container.clientHeight;
-            this.svg.attr('width', width).attr('height', height);
-        });
+        // リサイズイベント（viewBoxなしなので、シミュレーションサイズのみ更新）
+        let resizeTimeout;
+        this.handleResize = (entries) => {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(() => {
+                // シミュレーションサイズを更新（SVGはCSSで自動的に追従）
+                this.updateSimulationSize();
+
+                // シミュレーションを再起動
+                if (this.simulation) {
+                    this.simulation.alpha(0.3).restart();
+                }
+            }, 50);
+        };
+
+        window.addEventListener('resize', () => this.handleResize([]));
+
+        // ResizeObserverでコンテナサイズの変化を監視
+        if (typeof ResizeObserver !== 'undefined') {
+            this.resizeObserver = new ResizeObserver(this.handleResize);
+            this.resizeObserver.observe(this.container);
+        }
     }
 
     // API メソッド
@@ -182,8 +216,56 @@ class GraphD3Module {
 
         console.log('Starting to render nodes and edges');
 
-        const width = this.container.clientWidth;
-        const height = this.container.clientHeight || 600;
+        // コンテナサイズをforce simulationに渡すために取得
+        // viewBoxなしなので、ピクセル単位で直接使用
+        const rect = this.container.getBoundingClientRect();
+        const width = rect.width > 0 ? rect.width : (this.container.clientWidth || 800);
+        const height = rect.height > 0 ? rect.height : (this.container.clientHeight || 600);
+
+        // カスタムforce: 枠への斥力
+        const self = this;
+        function forceBoundary(alpha) {
+            const margin = 50; // マージン距離
+            const strength = 0.3; // 斥力の強度
+
+            // 現在のコンテナサイズを取得（固定値として使用）
+            const rect = self.container.getBoundingClientRect();
+            if (!rect || rect.width <= 0 || rect.height <= 0) return; // 無効なサイズの場合は処理をスキップ
+
+            const currentWidth = Math.floor(rect.width);
+            const currentHeight = Math.floor(rect.height);
+
+            if (!self.data || !self.data.nodes) return;
+
+            for (let i = 0; i < self.data.nodes.length; i++) {
+                const node = self.data.nodes[i];
+                if (node.x == null || node.y == null) continue;
+
+                // ノードの半径を取得
+                const nodeRadius = self.getNodeSize(node);
+
+                // 左端への斥力
+                if (node.x < margin + nodeRadius) {
+                    const distance = margin + nodeRadius - node.x;
+                    node.vx = (node.vx || 0) + (distance * strength * alpha);
+                }
+                // 右端への斥力
+                if (node.x > currentWidth - margin - nodeRadius) {
+                    const distance = node.x - (currentWidth - margin - nodeRadius);
+                    node.vx = (node.vx || 0) - (distance * strength * alpha);
+                }
+                // 上端への斥力
+                if (node.y < margin + nodeRadius) {
+                    const distance = margin + nodeRadius - node.y;
+                    node.vy = (node.vy || 0) + (distance * strength * alpha);
+                }
+                // 下端への斥力
+                if (node.y > currentHeight - margin - nodeRadius) {
+                    const distance = node.y - (currentHeight - margin - nodeRadius);
+                    node.vy = (node.vy || 0) - (distance * strength * alpha);
+                }
+            }
+        }
 
         // Force simulationを作成
         this.simulation = d3.forceSimulation(this.data.nodes)
@@ -192,8 +274,9 @@ class GraphD3Module {
                 .distance(100)
             )
             .force('charge', d3.forceManyBody().strength(-500))
-            .force('center', d3.forceCenter(width / 2, height / 2))
-            .force('collision', d3.forceCollide().radius(30));
+            .force('center', d3.forceCenter(width / 2, height / 2).strength(0.1))
+            .force('collision', d3.forceCollide().radius(30))
+            .force('boundary', forceBoundary);
 
         // エッジを描画
         this.edgeElements = this.svg.append('g')
@@ -279,6 +362,8 @@ class GraphD3Module {
         // シミュレーション開始後にビューを調整
         setTimeout(() => {
             this.centerView();
+            // シミュレーションサイズを更新（SVGはCSSで自動的に追従）
+            this.updateSimulationSize();
         }, 500);
     }
 
@@ -442,6 +527,13 @@ class GraphD3Module {
         }
         if (this.tooltip) {
             this.tooltip.remove();
+        }
+        if (this.handleResize) {
+            window.removeEventListener('resize', this.handleResize);
+        }
+        if (this.resizeObserver) {
+            this.resizeObserver.disconnect();
+            this.resizeObserver = null;
         }
     }
 }
