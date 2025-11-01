@@ -81,14 +81,15 @@ type GraphNode struct {
 
 // GraphEdge represents an edge in the graph
 type GraphEdge struct {
-	ID          string `json:"id"`
-	Source      string `json:"source"`
-	Target      string `json:"target"`
-	Kind        string `json:"kind"`
-	Weight      int    `json:"weight"`
-	TargetHash  string `json:"targetHash,omitempty"`  // Hash of target file when link was created
-	SourceHash  string `json:"sourceHash,omitempty"`  // Hash of source file when link was created
-	LinkVersion int    `json:"linkVersion,omitempty"` // Version number when link was created
+	ID            string `json:"id"`
+	Source        string `json:"source"`
+	Target        string `json:"target"`
+	Kind          string `json:"kind"`
+	Weight        int    `json:"weight"`
+	TargetHash    string `json:"targetHash,omitempty"`    // Hash of target file when link was created
+	SourceHash    string `json:"sourceHash,omitempty"`    // Hash of source file when link was created
+	LinkVersion   int    `json:"linkVersion,omitempty"`   // Version number when link was created
+	TargetUpdated bool   `json:"targetUpdated,omitempty"` // True if target file has been updated since link creation
 }
 
 // GraphData represents the complete graph structure
@@ -745,41 +746,62 @@ func (a *App) GetGraphData() (*GraphData, error) {
 					edgeKey := nodeID + "->" + targetID
 					edgeCounts[edgeKey]++
 
-					// ターゲットファイルのハッシュを取得
-					targetHash := ""
+					// ターゲットファイルのハッシュを取得（現在のバージョン）
+					currentTargetHash := ""
 					if targetNode, exists := nodes[targetID]; exists {
-						targetHash = targetNode.Hash
+						currentTargetHash = targetNode.Hash
 					} else {
 						// ターゲットファイルがまだ処理されていない場合、ファイルを読み込んでハッシュを計算
 						if strings.HasPrefix(targetID, "doc:/") {
 							targetPath := strings.TrimPrefix(targetID, "doc:/")
 							targetFilePath := filepath.Join(a.dataDir, "content", targetPath)
 							if targetContent, err := os.ReadFile(targetFilePath); err == nil {
-								targetHash = gitvcs.CalculateHash(string(targetContent))
+								currentTargetHash = gitvcs.CalculateHash(string(targetContent))
 							}
 						}
 					}
 
-					// エッジを作成
+					// エッジIDを生成
 					edgeID := fmt.Sprintf("e_%s_%s", strings.ReplaceAll(nodeID, "/", "_"), strings.ReplaceAll(targetID, "/", "_"))
+
+					// 既存のエッジがあるかチェックして、ターゲットの更新状況を判定
+					targetUpdated := false
+					storedTargetHash := currentTargetHash // デフォルトは現在のハッシュ
+
+					if existingEdge, exists := edges[edgeID]; exists && existingEdge.TargetHash != "" {
+						// 既存のエッジがあり、以前のターゲットハッシュが記録されている場合
+						storedTargetHash = existingEdge.TargetHash // 以前記録されたハッシュを保持
+
+						// 現在のターゲットハッシュと以前のハッシュを比較
+						if currentTargetHash != "" && storedTargetHash != "" && currentTargetHash != storedTargetHash {
+							targetUpdated = true
+						}
+					}
+
+					// エッジを作成または更新
 					edges[edgeID] = &GraphEdge{
-						ID:         edgeID,
-						Source:     nodeID,
-						Target:     targetID,
-						Kind:       link.Kind,
-						Weight:     edgeCounts[edgeKey],
-						SourceHash: fileHash,
-						TargetHash: targetHash,
+						ID:            edgeID,
+						Source:        nodeID,
+						Target:        targetID,
+						Kind:          link.Kind,
+						Weight:        edgeCounts[edgeKey],
+						SourceHash:    fileHash,
+						TargetHash:    storedTargetHash, // 以前のハッシュを保持（初回は現在のハッシュ）
+						TargetUpdated: targetUpdated,
 					}
 					sourceHashShort := ""
 					if len(fileHash) >= 8 {
 						sourceHashShort = fileHash[:8]
 					}
 					targetHashShort := ""
-					if len(targetHash) >= 8 {
-						targetHashShort = targetHash[:8]
+					if len(storedTargetHash) >= 8 {
+						targetHashShort = storedTargetHash[:8]
 					}
-					a.logInfo(fmt.Sprintf("    Created edge: %s -> %s (weight: %d, sourceHash: %s, targetHash: %s)", nodeID, targetID, edgeCounts[edgeKey], sourceHashShort, targetHashShort))
+					updateStatus := ""
+					if targetUpdated {
+						updateStatus = " [TARGET UPDATED]"
+					}
+					a.logInfo(fmt.Sprintf("    Created edge: %s -> %s (weight: %d, sourceHash: %s, targetHash: %s)%s", nodeID, targetID, edgeCounts[edgeKey], sourceHashShort, targetHashShort, updateStatus))
 				}
 			}
 		} else {
@@ -852,6 +874,44 @@ func (a *App) GetGraphData() (*GraphData, error) {
 		}
 	}
 
+	// 永続化されたリンク情報を読み込む
+	linkInfoPath := filepath.Join(a.dataDir, ".mdsys", "links.json")
+	persistedLinks := make(map[string]*GraphEdge)
+	if linkData, err := os.ReadFile(linkInfoPath); err == nil {
+		var persistedEdges []GraphEdge
+		if err := json.Unmarshal(linkData, &persistedEdges); err == nil {
+			for i := range persistedEdges {
+				persistedLinks[persistedEdges[i].ID] = &persistedEdges[i]
+			}
+			a.logInfo(fmt.Sprintf("Loaded %d persisted link records", len(persistedLinks)))
+		}
+	}
+
+	// 永続化された情報とマージして、ターゲット更新を検出
+	for edgeID, edge := range edges {
+		if persistedEdge, exists := persistedLinks[edgeID]; exists && persistedEdge.TargetHash != "" {
+			// 永続化されたハッシュがある場合、それと比較
+			currentHash := ""
+			if targetNode, exists := nodes[edge.Target]; exists {
+				currentHash = targetNode.Hash
+			} else if strings.HasPrefix(edge.Target, "doc:/") {
+				targetPath := strings.TrimPrefix(edge.Target, "doc:/")
+				targetFilePath := filepath.Join(a.dataDir, "content", targetPath)
+				if targetContent, err := os.ReadFile(targetFilePath); err == nil {
+					currentHash = gitvcs.CalculateHash(string(targetContent))
+				}
+			}
+
+			if currentHash != "" && persistedEdge.TargetHash != currentHash {
+				edge.TargetUpdated = true
+				a.logInfo(fmt.Sprintf("Target updated detected for edge %s: old=%s, new=%s", edgeID, persistedEdge.TargetHash[:8], currentHash[:8]))
+			}
+			// 永続化されたハッシュを保持（リンク作成時のハッシュ）
+			edge.TargetHash = persistedEdge.TargetHash
+		}
+		// 新しいエッジの場合、現在のハッシュが既にedge.TargetHashに設定されている
+	}
+
 	// スライスに変換
 	var nodeList []GraphNode
 	for _, node := range nodes {
@@ -861,6 +921,15 @@ func (a *App) GetGraphData() (*GraphData, error) {
 	var edgeList []GraphEdge
 	for _, edge := range edges {
 		edgeList = append(edgeList, *edge)
+	}
+
+	// リンク情報を永続化
+	if linkInfoJSON, err := json.MarshalIndent(edgeList, "", "  "); err == nil {
+		if err := os.MkdirAll(filepath.Dir(linkInfoPath), 0755); err == nil {
+			if err := os.WriteFile(linkInfoPath, linkInfoJSON, 0644); err == nil {
+				a.logInfo(fmt.Sprintf("Saved %d link records to %s", len(edgeList), linkInfoPath))
+			}
+		}
 	}
 
 	// デバッグ用：ノードIDとエッジの詳細をログ出力

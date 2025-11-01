@@ -284,10 +284,18 @@ class GraphD3Module {
             .data(this.data.edges)
             .enter()
             .append('line')
-            .attr('stroke', d => this.getEdgeColor(d.kind))
+            .attr('stroke', d => this.getEdgeColor(d))
             .attr('stroke-width', d => this.getEdgeWidth(d.weight))
             .attr('stroke-dasharray', d => this.getEdgeDash(d.kind))
-            .attr('marker-end', 'url(#arrowhead)');
+            .attr('marker-end', 'url(#arrowhead)')
+            .attr('class', d => d.targetUpdated ? 'edge-updated' : 'edge-normal')
+            .attr('cursor', 'pointer')
+            .on('mouseover', (event, d) => {
+                this.showTooltip(event, d);
+            })
+            .on('mouseout', () => {
+                this.hideTooltip();
+            });
 
         // ノードを描画
         this.nodeElements = this.svg.append('g')
@@ -453,14 +461,30 @@ class GraphD3Module {
     }
 
     showTooltip(event, data) {
-        const content = `
-            <div style="font-weight: bold; margin-bottom: 4px;">${data.label || 'Unknown'}</div>
-            <div><strong>ID:</strong> ${data.id || 'N/A'}</div>
-            <div><strong>Type:</strong> ${data.kind || 'N/A'}</div>
-            <div><strong>Exists:</strong> ${data.exists ? 'Yes' : 'No'}</div>
-            <div><strong>Incoming:</strong> ${data.degIn || 0}</div>
-            <div><strong>Outgoing:</strong> ${data.degOut || 0}</div>
-        `;
+        let content = '';
+
+        // ノードの場合
+        if (data.kind && (data.kind === 'note' || data.kind === 'asset:image')) {
+            content = `
+                <div style="font-weight: bold; margin-bottom: 4px;">${data.label || 'Unknown'}</div>
+                <div><strong>ID:</strong> ${data.id || 'N/A'}</div>
+                <div><strong>Type:</strong> ${data.kind || 'N/A'}</div>
+                <div><strong>Exists:</strong> ${data.exists ? 'Yes' : 'No'}</div>
+                <div><strong>Incoming:</strong> ${data.degIn || 0}</div>
+                <div><strong>Outgoing:</strong> ${data.degOut || 0}</div>
+                ${data.hash ? `<div><strong>Hash:</strong> ${data.hash.substring(0, 8)}...</div>` : ''}
+            `;
+        } else {
+            // エッジの場合
+            content = `
+                <div style="font-weight: bold; margin-bottom: 4px;">Link: ${data.source?.split('/').pop() || 'Unknown'} → ${data.target?.split('/').pop() || 'Unknown'}</div>
+                <div><strong>Type:</strong> ${data.kind || 'N/A'}</div>
+                <div><strong>Weight:</strong> ${data.weight || 1}</div>
+                ${data.targetUpdated ? '<div style="color: #f39c12;"><strong>⚠️ Target Updated</strong></div>' : ''}
+                ${data.sourceHash ? `<div><strong>Source Hash:</strong> ${data.sourceHash.substring(0, 8)}...</div>` : ''}
+                ${data.targetHash ? `<div><strong>Target Hash:</strong> ${data.targetHash.substring(0, 8)}...</div>` : ''}
+            `;
+        }
 
         this.tooltip
             .style('left', (event.pageX + 10) + 'px')
@@ -490,7 +514,13 @@ class GraphD3Module {
         return this.style.palette[kind] || this.style.palette.note;
     }
 
-    getEdgeColor(kind) {
+    getEdgeColor(edge) {
+        const kind = edge.kind;
+
+        // ターゲットが更新された場合は警告色（オレンジ/黄色）
+        if (edge.targetUpdated) {
+            return '#f39c12'; // オレンジ色
+        }
         return this.style.palette[kind] || this.style.palette.wikilink;
     }
 

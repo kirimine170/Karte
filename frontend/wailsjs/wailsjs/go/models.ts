@@ -35,6 +35,7 @@ export namespace main {
 	    targetHash?: string;
 	    sourceHash?: string;
 	    linkVersion?: number;
+	    targetUpdated?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new GraphEdge(source);
@@ -50,6 +51,7 @@ export namespace main {
 	        this.targetHash = source["targetHash"];
 	        this.sourceHash = source["sourceHash"];
 	        this.linkVersion = source["linkVersion"];
+	        this.targetUpdated = source["targetUpdated"];
 	    }
 	}
 	export class GraphNode {
