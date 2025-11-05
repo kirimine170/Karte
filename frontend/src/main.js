@@ -174,11 +174,24 @@ async function init() {
             graphModule = new GraphModule('graph-container');
             graphModule.on('node:click', (data) => {
                 console.log('Node clicked:', data);
-                if (data.id && data.id.startsWith('doc:/')) {
-                    loadFile(data.id);
+                const nodeId = data.id || data.ID;
+                if (nodeId && nodeId.startsWith('doc:/')) {
+                    loadFile(nodeId);
                     switchToTab('editor');
                 }
             });
+
+            // Setup tag nodes toggle button
+            const toggleTagNodesBtn = document.getElementById('toggleTagNodesBtn');
+            if (toggleTagNodesBtn) {
+                toggleTagNodesBtn.addEventListener('click', () => {
+                    if (graphModule) {
+                        graphModule.toggleTagNodes();
+                        toggleTagNodesBtn.textContent = `タグノード表示: ${graphModule.showTagNodes ? 'ON' : 'OFF'}`;
+                    }
+                });
+            }
+
             await updateGraph();
         } catch (error) {
             console.error('Failed to initialize graph module:', error);
@@ -375,12 +388,38 @@ async function updatePreview() {
     try {
         const content = ta.value;
         const mdHtml = await api.PreviewMarkdown(content);
-        const finalHtml = composePreviewHtml(mdHtml);
+
+        // Extract theme from frontmatter
+        let theme = (themeSel && themeSel.value) || localStorage.getItem('karte-theme') || 'light';
+
+        // Try to parse frontmatter from content
+        if (content.startsWith('---')) {
+            const fmEnd = content.indexOf('\n---\n');
+            if (fmEnd > 0) {
+                const fmContent = content.substring(0, fmEnd + 5);
+                const yamlContent = content.substring(4, fmEnd);
+                // Simple regex to extract theme
+                const themeMatch = yamlContent.match(/^theme:\s*["']?([^"'\n]+)["']?\s*$/m);
+                if (themeMatch) {
+                    theme = themeMatch[1].trim();
+                }
+            }
+        }
+
+        const finalHtml = composePreviewHtml(mdHtml, theme);
         pv.srcdoc = finalHtml;
     } catch (error) {
         console.error('Failed to update preview:', error);
-        pv.srcdoc = '<p>Preview failed to load</p>';
+        const errorMsg = error?.message || error?.toString() || 'Unknown error';
+        pv.srcdoc = `<p style="color: red; padding: 20px;">Preview failed to load<br><small>${escapeHtml(errorMsg)}</small></p>`;
     }
+}
+
+// Helper function to escape HTML
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 // Setup event listeners
@@ -577,10 +616,10 @@ function getBasePreviewCSS() {
     `;
 }
 
-function composePreviewHtml(innerHtml) {
+function composePreviewHtml(innerHtml, themeOverride = null) {
     const custom = loadCustomCss();
-    // Use selected theme value or persisted theme
-    const theme = (themeSel && themeSel.value) || localStorage.getItem('karte-theme') || 'light';
+    // Use themeOverride if provided, otherwise use selected theme value or persisted theme
+    const theme = themeOverride || (themeSel && themeSel.value) || localStorage.getItem('karte-theme') || 'light';
     if (custom) {
         return `<!doctype html><html data-theme="${theme}"><head><meta charset="utf-8"><style>${custom}</style></head><body>${innerHtml}</body></html>`;
     }

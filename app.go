@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	fm "karte/internal/frontmatter"
 	gitvcs "karte/internal/git"
 	pdfexport "karte/internal/pdf"
 	"karte/internal/site"
@@ -257,19 +258,7 @@ func (a *App) GetFileList() []FileItem {
 
 			// Try to extract title from frontmatter
 			if b, err := os.ReadFile(p); err == nil {
-				s := string(b)
-				if strings.HasPrefix(s, "---") {
-					if i := strings.Index(s, "\n---"); i > 0 {
-						fm := s[:i]
-						for _, ln := range strings.Split(fm, "\n") {
-							if strings.HasPrefix(strings.TrimSpace(ln), "title:") {
-								title = strings.TrimSpace(strings.TrimPrefix(ln, "title:"))
-								title = strings.Trim(title, `"' `)
-								break
-							}
-						}
-					}
-				}
+				title = fm.ExtractTitle(string(b), title)
 			}
 			fileItem := FileItem{
 				Path:  filepath.ToSlash(rel),
@@ -362,6 +351,14 @@ func (a *App) SaveFile(path, content string) error {
 	var oldHash string
 	if existingContent, err := os.ReadFile(absPath); err == nil {
 		oldHash = gitvcs.CalculateHash(string(existingContent))
+	}
+
+	// Parse and format frontmatter before saving
+	frontMatter, markdownBody := fm.ParseFrontMatter(content)
+	if frontMatter != nil {
+		// Format frontmatter with normalized tags
+		formattedFM := fm.FormatFrontMatter(frontMatter)
+		content = formattedFM + markdownBody
 	}
 
 	// Detect conflict before saving
@@ -517,21 +514,42 @@ func (a *App) ResolveConflict(path, strategy string) error {
 
 // PreviewMarkdown renders markdown content to HTML
 func (a *App) PreviewMarkdown(content string) (string, error) {
+	// Remove frontmatter before rendering
+	_, markdownBody := fm.ParseFrontMatter(content)
+
+	// Ensure markdownBody doesn't start with frontmatter markers
+	// This is a safety check in case ParseFrontMatter didn't fully remove the frontmatter
+	markdownBody = strings.TrimSpace(markdownBody)
+	if strings.HasPrefix(markdownBody, "---") {
+		// If body still starts with ---, try to find the end of frontmatter
+		if idx := strings.Index(markdownBody[3:], "\n---"); idx >= 0 {
+			markdownBody = strings.TrimSpace(markdownBody[idx+7:])
+		}
+	}
+
 	// Create a temporary file for rendering
-	tmpFile := filepath.Join(a.root, ".mdsys", "temp_preview.md")
+	tmpFile := filepath.Join(a.dataDir, ".mdsys", "temp_preview.md")
 	err := os.MkdirAll(filepath.Dir(tmpFile), 0o755)
 	if err != nil {
+		a.logError(fmt.Sprintf("PreviewMarkdown: failed to create temp directory: %v", err))
 		return "", fmt.Errorf("failed to create temp directory: %v", err)
 	}
 
-	err = os.WriteFile(tmpFile, []byte(content), 0o644)
+	err = os.WriteFile(tmpFile, []byte(markdownBody), 0o644)
 	if err != nil {
+		a.logError(fmt.Sprintf("PreviewMarkdown: failed to write temp file: %v", err))
 		return "", fmt.Errorf("failed to write temp file: %v", err)
 	}
-	defer os.Remove(tmpFile)
+	defer func() {
+		if removeErr := os.Remove(tmpFile); removeErr != nil {
+			a.logError(fmt.Sprintf("PreviewMarkdown: failed to remove temp file: %v", removeErr))
+		}
+	}()
 
-	html, _, err := site.RenderMarkdown(a.root, tmpFile)
+	// Use dataDir as root so that site.RenderMarkdown can find themes directory
+	html, _, err := site.RenderMarkdown(a.dataDir, tmpFile)
 	if err != nil {
+		a.logError(fmt.Sprintf("PreviewMarkdown: failed to render markdown: %v (root: %s, tmpFile: %s)", err, a.dataDir, tmpFile))
 		return "", fmt.Errorf("failed to render markdown: %v", err)
 	}
 
@@ -715,10 +733,26 @@ func (a *App) GetGraphData() (*GraphData, error) {
 		var fileContent string
 
 		// ファイル内容を読み込み
+		var tags []string
+		var markdownBody string
 		if content, err := os.ReadFile(filepath.Join(a.dataDir, filePath)); err == nil {
 			fileContent = string(content)
 			title = a.extractTitleFromContent(fileContent, title)
-			// ハッシュを計算
+			// タグを抽出
+			tags = fm.ExtractTags(fileContent)
+			// デバッグ: フロントマターのパース結果を確認
+			frontMatter, body := fm.ParseFrontMatter(fileContent)
+			if frontMatter != nil {
+				a.logInfo(fmt.Sprintf("File %s: frontmatter parsed - title: %q, tags: %q, theme: %q", filePath, frontMatter.Title, frontMatter.Tags, frontMatter.Theme))
+				a.logInfo(fmt.Sprintf("File %s: extracted tags: %v", filePath, tags))
+			} else {
+				a.logInfo(fmt.Sprintf("File %s: no frontmatter found", filePath))
+			}
+			markdownBody = body
+			if markdownBody == "" {
+				markdownBody = fileContent // フロントマターがない場合
+			}
+			// ハッシュを計算（フルコンテンツ）
 			fileHash = gitvcs.CalculateHash(fileContent)
 		}
 
@@ -730,13 +764,13 @@ func (a *App) GetGraphData() (*GraphData, error) {
 			Exists: true,
 			DegIn:  0,
 			DegOut: 0,
-			Tags:   []string{},
+			Tags:   tags,
 			Hash:   fileHash,
 		}
 
-		// ファイル内容を解析してリンクを抽出
-		if fileContent != "" {
-			links := a.extractLinks(fileContent)
+		// ファイル内容を解析してリンクを抽出（フロントマターを除いた本文を使用）
+		if markdownBody != "" {
+			links := a.extractLinks(markdownBody)
 			a.logInfo(fmt.Sprintf("File %s: found %d links", filePath, len(links)))
 			for i, link := range links {
 				targetID := a.resolveLinkTarget(link, filePath)
@@ -818,14 +852,32 @@ func (a *App) GetGraphData() (*GraphData, error) {
 				title := filepath.Base(path)
 				title = strings.TrimSuffix(title, ".md")
 
-				nodes[edge.Target] = &GraphNode{
-					ID:     edge.Target,
-					Label:  title,
-					Kind:   "note",
-					Exists: false,
-					DegIn:  0,
-					DegOut: 0,
-					Tags:   []string{},
+				// ファイルが存在する場合はフロントマターからタイトルとタグを取得
+				var tags []string
+				filePath := filepath.Join(a.dataDir, "content", path)
+				if content, err := os.ReadFile(filePath); err == nil {
+					fileContent := string(content)
+					title = a.extractTitleFromContent(fileContent, title)
+					tags = fm.ExtractTags(fileContent)
+					nodes[edge.Target] = &GraphNode{
+						ID:     edge.Target,
+						Label:  title,
+						Kind:   "note",
+						Exists: true, // ファイルが存在する
+						DegIn:  0,
+						DegOut: 0,
+						Tags:   tags,
+					}
+				} else {
+					nodes[edge.Target] = &GraphNode{
+						ID:     edge.Target,
+						Label:  title,
+						Kind:   "note",
+						Exists: false,
+						DegIn:  0,
+						DegOut: 0,
+						Tags:   []string{},
+					}
 				}
 				a.logInfo(fmt.Sprintf("Created missing target node: %s", edge.Target))
 			} else if strings.HasPrefix(edge.Target, "img:/") {
@@ -851,14 +903,32 @@ func (a *App) GetGraphData() (*GraphData, error) {
 			title := filepath.Base(path)
 			title = strings.TrimSuffix(title, ".md")
 
-			nodes[edge.Source] = &GraphNode{
-				ID:     edge.Source,
-				Label:  title,
-				Kind:   "note",
-				Exists: false,
-				DegIn:  0,
-				DegOut: 0,
-				Tags:   []string{},
+			// ファイルが存在する場合はフロントマターからタイトルとタグを取得
+			var tags []string
+			filePath := filepath.Join(a.dataDir, "content", path)
+			if content, err := os.ReadFile(filePath); err == nil {
+				fileContent := string(content)
+				title = a.extractTitleFromContent(fileContent, title)
+				tags = fm.ExtractTags(fileContent)
+				nodes[edge.Source] = &GraphNode{
+					ID:     edge.Source,
+					Label:  title,
+					Kind:   "note",
+					Exists: true, // ファイルが存在する
+					DegIn:  0,
+					DegOut: 0,
+					Tags:   tags,
+				}
+			} else {
+				nodes[edge.Source] = &GraphNode{
+					ID:     edge.Source,
+					Label:  title,
+					Kind:   "note",
+					Exists: false,
+					DegIn:  0,
+					DegOut: 0,
+					Tags:   []string{},
+				}
 			}
 			a.logInfo(fmt.Sprintf("Created missing source node: %s", edge.Source))
 		}
@@ -922,6 +992,57 @@ func (a *App) GetGraphData() (*GraphData, error) {
 	for _, edge := range edges {
 		edgeList = append(edgeList, *edge)
 	}
+
+	// タグノードを作成し、同じタグを持つドキュメントと接続
+	tagNodes := make(map[string]*GraphNode)
+	tagNodeCount := 0
+	for _, node := range nodeList {
+		if len(node.Tags) > 0 {
+			a.logInfo(fmt.Sprintf("Node %s has %d tags: %v", node.ID, len(node.Tags), node.Tags))
+		}
+		for _, tag := range node.Tags {
+			if tag == "" {
+				continue
+			}
+			tagID := "tag:/" + tag
+
+			// タグノードが存在しない場合は作成
+			if _, exists := tagNodes[tagID]; !exists {
+				tagNodes[tagID] = &GraphNode{
+					ID:     tagID,
+					Label:  "#" + tag,
+					Kind:   "tag",
+					Exists: true,
+					DegIn:  0,
+					DegOut: 0,
+					Tags:   []string{},
+				}
+				tagNodeCount++
+				a.logInfo(fmt.Sprintf("Creating tag node: %s (label: #%s)", tagID, tag))
+			}
+
+			// ドキュメントノードとタグノードを接続するエッジを作成
+			edgeID := fmt.Sprintf("tag_edge_%s_%s", strings.ReplaceAll(node.ID, "/", "_"), strings.ReplaceAll(tagID, "/", "_"))
+			edgeList = append(edgeList, GraphEdge{
+				ID:     edgeID,
+				Source: node.ID,
+				Target: tagID,
+				Kind:   "tag",
+				Weight: 1,
+			})
+			a.logInfo(fmt.Sprintf("Created tag edge: %s -> %s", node.ID, tagID))
+
+			// タグノードの入次数を増やす
+			tagNodes[tagID].DegIn++
+			// ドキュメントノードの出次数を増やす（既にカウントされている可能性があるが、念のため）
+		}
+	}
+
+	// タグノードをノードリストに追加
+	for _, tagNode := range tagNodes {
+		nodeList = append(nodeList, *tagNode)
+	}
+	a.logInfo(fmt.Sprintf("Created %d tag nodes (total nodes: %d, total edges: %d)", tagNodeCount, len(nodeList), len(edgeList)))
 
 	// リンク情報を永続化
 	if linkInfoJSON, err := json.MarshalIndent(edgeList, "", "  "); err == nil {
@@ -1051,20 +1172,7 @@ type LinkInfo struct {
 
 // extractTitleFromContent extracts title from frontmatter
 func (a *App) extractTitleFromContent(content, defaultTitle string) string {
-	if strings.HasPrefix(content, "---") {
-		if i := strings.Index(content, "\n---"); i > 0 {
-			fm := content[:i]
-			for _, line := range strings.Split(fm, "\n") {
-				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "title:") {
-					title := strings.TrimSpace(strings.TrimPrefix(line, "title:"))
-					title = strings.Trim(title, `"' `)
-					return title
-				}
-			}
-		}
-	}
-	return defaultTitle
+	return fm.ExtractTitle(content, defaultTitle)
 }
 
 // extractLinks extracts various types of links from markdown content
