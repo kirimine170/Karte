@@ -387,8 +387,30 @@ async function save() {
 async function updatePreview() {
     try {
         const content = ta.value;
+
+        // Check if this is a Marp presentation
+        let isMarp = false;
+        if (content.startsWith('---')) {
+            const fmEnd = content.indexOf('\n---\n');
+            if (fmEnd > 0) {
+                const yamlContent = content.substring(4, fmEnd);
+                // Check for marp: true
+                const marpMatch = yamlContent.match(/^marp:\s*(true|false)\s*$/m);
+                if (marpMatch && marpMatch[1] === 'true') {
+                    isMarp = true;
+                }
+            }
+        }
+
         const mdHtml = await api.PreviewMarkdown(content);
 
+        // For Marp presentations, use the HTML directly (it's already a complete HTML document)
+        if (isMarp) {
+            pv.srcdoc = mdHtml;
+            return;
+        }
+
+        // Regular markdown preview
         // Extract theme from frontmatter
         let theme = (themeSel && themeSel.value) || localStorage.getItem('karte-theme') || 'light';
 

@@ -15,6 +15,7 @@ import (
 
 	fm "karte/internal/frontmatter"
 	gitvcs "karte/internal/git"
+	"karte/internal/marp"
 	pdfexport "karte/internal/pdf"
 	"karte/internal/site"
 	"karte/internal/sync"
@@ -514,11 +515,23 @@ func (a *App) ResolveConflict(path, strategy string) error {
 
 // PreviewMarkdown renders markdown content to HTML
 func (a *App) PreviewMarkdown(content string) (string, error) {
-	// Remove frontmatter before rendering
-	_, markdownBody := fm.ParseFrontMatter(content)
+	// Parse frontmatter to check if this is a Marp presentation
+	frontMatter, markdownBody := fm.ParseFrontMatter(content)
 
+	// Check if Marp mode is enabled
+	if frontMatter != nil && frontMatter.Marp {
+		// Render as Marp presentation
+		slides := marp.ParseSlides(markdownBody)
+		title := frontMatter.Title
+		if title == "" {
+			title = "Presentation"
+		}
+		html := marp.RenderMarpHTML(slides, title)
+		return html, nil
+	}
+
+	// Regular markdown rendering
 	// Ensure markdownBody doesn't start with frontmatter markers
-	// This is a safety check in case ParseFrontMatter didn't fully remove the frontmatter
 	markdownBody = strings.TrimSpace(markdownBody)
 	if strings.HasPrefix(markdownBody, "---") {
 		// If body still starts with ---, try to find the end of frontmatter

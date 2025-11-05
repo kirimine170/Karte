@@ -14,6 +14,7 @@ type FrontMatter struct {
 	Title string         `yaml:"title"`
 	Tags  string         `yaml:"tags"` // Comma-separated tags string
 	Theme string         `yaml:"theme"`
+	Marp  bool           `yaml:"marp"` // Marp presentation mode
 	Raw   map[string]any // Capture remaining custom fields
 }
 
@@ -39,6 +40,10 @@ func (fm *FrontMatter) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	if theme, ok := raw["theme"].(string); ok {
 		fm.Theme = theme
 		delete(raw, "theme")
+	}
+	if marp, ok := raw["marp"].(bool); ok {
+		fm.Marp = marp
+		delete(raw, "marp")
 	}
 
 	// Store remaining fields in Raw
