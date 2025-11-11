@@ -33,6 +33,15 @@ type App struct {
 	logFilePath string
 	syncManager *sync.SyncManager
 	vcs         *gitvcs.VCS
+	// presenter windows keyed by document id (e.g., "content/xxx.md")
+	presenters map[string]*Presenter
+}
+
+// Presenter window context
+type Presenter struct {
+	win   runtime.Window
+	ctx   context.Context
+	docID string
 }
 
 // logInfo writes info logs to both Wails runtime and app log file
@@ -115,6 +124,9 @@ func NewApp() *App {
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	if a.presenters == nil {
+		a.presenters = make(map[string]*Presenter)
+	}
 	// Determine base directory from executable location
 	exePath, err := os.Executable()
 	if err != nil {
@@ -519,14 +531,49 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 	frontMatter, markdownBody := fm.ParseFrontMatter(content)
 
 	// Check if Marp mode is enabled
-	if frontMatter != nil && frontMatter.Marp {
+	// Marp mode is enabled if:
+	// 1. marp: true is explicitly set
+	// 2. or Marp-specific fields (header, footer, paginate) are present
+	isMarpMode := false
+	header := ""
+	footer := ""
+	paginate := false
+	aspectRatio := "" // Default will be 16:9
+
+	if frontMatter != nil {
+		if frontMatter.Marp {
+			isMarpMode = true
+		}
+
+		// Extract header, footer, paginate, and aspectRatio from Raw
+		if frontMatter.Raw != nil {
+			if h, ok := frontMatter.Raw["header"].(string); ok {
+				header = h
+				isMarpMode = true // Header presence indicates Marp mode
+			}
+			if f, ok := frontMatter.Raw["footer"].(string); ok {
+				footer = f
+				isMarpMode = true // Footer presence indicates Marp mode
+			}
+			if p, ok := frontMatter.Raw["paginate"].(bool); ok {
+				paginate = p
+				isMarpMode = true // Paginate presence indicates Marp mode
+			}
+			if ar, ok := frontMatter.Raw["aspectRatio"].(string); ok {
+				aspectRatio = ar
+			}
+		}
+	}
+
+	if isMarpMode {
 		// Render as Marp presentation
 		slides := marp.ParseSlides(markdownBody)
 		title := frontMatter.Title
 		if title == "" {
 			title = "Presentation"
 		}
-		html := marp.RenderMarpHTML(slides, title)
+
+		html := marp.RenderMarpHTML(slides, title, header, footer, paginate, aspectRatio)
 		return html, nil
 	}
 
@@ -1129,6 +1176,63 @@ func (a *App) ExportPDF(html string) (string, error) {
 	}
 	a.logInfo(fmt.Sprintf("PDF exported: %s", pdfPath))
 	return pdfPath, nil
+}
+
+// ---- Presenter multi-window APIs ----
+
+// OpenPresenter opens or focuses a presenter window for the specified document id.
+// docID should be a content path like "content/xxx.md".
+func (a *App) OpenPresenter(docID, title string) error {
+	if docID == "" {
+		return fmt.Errorf("docID is required")
+	}
+	if a.presenters == nil {
+		a.presenters = make(map[string]*Presenter)
+	}
+	// If already exists, just focus
+	if p, ok := a.presenters[docID]; ok && p != nil && p.win != nil {
+		runtime.WindowShow(p.win)
+		runtime.WindowFocus(p.win)
+		return nil
+	}
+	// Create new window
+	opts := &runtime.WindowOptions{
+		Title:  fmt.Sprintf("Presenter - %s", title),
+		Width:  1280,
+		Height: 720,
+		Center: true,
+		URL:    "index.html#presenter",
+	}
+	win, wctx, err := runtime.NewWindow(a.ctx, opts)
+	if err != nil {
+		return fmt.Errorf("failed to create presenter window: %v", err)
+	}
+	p := &Presenter{win: win, ctx: wctx, docID: docID}
+	a.presenters[docID] = p
+	// cleanup on close
+	runtime.WindowOnClose(wctx, func() {
+		delete(a.presenters, docID)
+	})
+	// notify presenter window of doc id
+	runtime.EventsEmit(wctx, "presenter:init", map[string]any{"docId": docID})
+	return nil
+}
+
+// UpdatePresenter pushes latest HTML and slide index to presenter window.
+func (a *App) UpdatePresenter(docID, html string, index, total int) {
+	if a.presenters == nil {
+		return
+	}
+	if p, ok := a.presenters[docID]; ok && p != nil {
+		runtime.EventsEmit(p.ctx, "presenter:render", map[string]any{"html": html})
+		runtime.EventsEmit(p.ctx, "presenter:slide", map[string]any{"index": index, "total": total})
+	}
+}
+
+// PresenterSlideChanged is invoked from presenter window to inform editor about slide change.
+func (a *App) PresenterSlideChanged(docID string, index int) {
+	// Re-broadcast to main window(s)
+	runtime.EventsEmit(a.ctx, "editor:slide", map[string]any{"docId": docID, "index": index})
 }
 
 // ---- Custom CSS (preview-only) management ----

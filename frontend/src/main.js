@@ -73,6 +73,7 @@ const api = isBrowser ? mockFunctions : {
 let currentPath = '';
 let files = [];
 let graphModule = null;
+let lastMarpSlideIndex = 0;
 
 // DOM elements
 const statusEl = document.getElementById('status');
@@ -387,6 +388,8 @@ async function save() {
 async function updatePreview() {
     try {
         const content = ta.value;
+        const caretIndex = typeof ta.selectionStart === 'number' ? ta.selectionStart : 0;
+        const caretLine = getCaretLineNumber(content, caretIndex);
 
         // Check if this is a Marp presentation
         let isMarp = false;
@@ -399,6 +402,15 @@ async function updatePreview() {
                 if (marpMatch && marpMatch[1] === 'true') {
                     isMarp = true;
                 }
+                // Check for Marp-specific fields (header, footer, paginate)
+                if (!isMarp) {
+                    const hasHeader = yamlContent.match(/^header:\s*["']?/m);
+                    const hasFooter = yamlContent.match(/^footer:\s*["']?/m);
+                    const hasPaginate = yamlContent.match(/^paginate:\s*(true|false)\s*$/m);
+                    if (hasHeader || hasFooter || hasPaginate) {
+                        isMarp = true;
+                    }
+                }
             }
         }
 
@@ -406,6 +418,33 @@ async function updatePreview() {
 
         // For Marp presentations, use the HTML directly (it's already a complete HTML document)
         if (isMarp) {
+            const slideInfo = computeMarpSlideInfo(content, caretLine);
+            if (slideInfo) {
+                const { index, total } = slideInfo;
+                if (Number.isFinite(index)) {
+                    lastMarpSlideIndex = Math.max(0, Math.min(index, Math.max(total - 1, 0)));
+                }
+            }
+            const targetSlide = Math.max(0, lastMarpSlideIndex || 0);
+
+            pv.onload = () => {
+                try {
+                    const applySlide = (attempt = 0) => {
+                        const frame = pv.contentWindow;
+                        if (frame && typeof frame.showSlide === 'function') {
+                            frame.showSlide(targetSlide);
+                        } else if (attempt < 5) {
+                            setTimeout(() => applySlide(attempt + 1), 50);
+                        }
+                    };
+                    applySlide();
+                } catch (err) {
+                    console.warn('Failed to restore Marp slide position:', err);
+                } finally {
+                    pv.onload = null;
+                }
+            };
+
             pv.srcdoc = mdHtml;
             return;
         }
@@ -435,6 +474,69 @@ async function updatePreview() {
         const errorMsg = error?.message || error?.toString() || 'Unknown error';
         pv.srcdoc = `<p style="color: red; padding: 20px;">Preview failed to load<br><small>${escapeHtml(errorMsg)}</small></p>`;
     }
+}
+
+function getCaretLineNumber(text, caretIndex) {
+    if (caretIndex <= 0) return 0;
+    const upToCaret = text.slice(0, Math.min(caretIndex, text.length));
+    return upToCaret.split('\n').length - 1;
+}
+
+function splitFrontMatter(content) {
+    if (!content.startsWith('---')) {
+        return { body: content, offsetLines: 0 };
+    }
+    const frontMatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
+    const match = content.match(frontMatterRegex);
+    if (!match) {
+        return { body: content, offsetLines: 0 };
+    }
+    const fmText = match[0];
+    const offsetLines = fmText.split('\n').length;
+    const body = content.slice(fmText.length);
+    return { body, offsetLines };
+}
+
+function computeMarpSlideInfo(content, caretLine) {
+    const { body, offsetLines } = splitFrontMatter(content);
+    const lines = body.split('\n');
+
+    const slideRanges = [];
+    let currentStart = offsetLines;
+
+    for (let i = 0; i < lines.length; i++) {
+        const absoluteLine = offsetLines + i;
+        const trimmed = lines[i].trim();
+        if (trimmed === '---') {
+            slideRanges.push({
+                start: currentStart,
+                end: Math.max(currentStart, absoluteLine - 1)
+            });
+            currentStart = absoluteLine + 1;
+        }
+    }
+
+    // Add final slide
+    const finalEnd = offsetLines + Math.max(lines.length - 1, 0);
+    slideRanges.push({
+        start: currentStart,
+        end: Math.max(currentStart, finalEnd)
+    });
+
+    const totalSlides = Math.max(slideRanges.length, 1);
+
+    if (caretLine < offsetLines) {
+        return { index: 0, total: totalSlides };
+    }
+
+    for (let i = 0; i < slideRanges.length; i++) {
+        const { start, end } = slideRanges[i];
+        if (caretLine >= start && (caretLine <= end || i === slideRanges.length - 1)) {
+            return { index: i, total: totalSlides };
+        }
+    }
+
+    return { index: totalSlides - 1, total: totalSlides };
 }
 
 // Helper function to escape HTML
