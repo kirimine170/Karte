@@ -1,9 +1,13 @@
 import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict } from '../wailsjs/wailsjs/go/main/App';
+// Note: OpenPresenter, UpdatePresenter, PresenterSlideChanged are v3 event-based, not available in v2 bindings
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
 // Check if running in browser (no Wails backend)
 const isBrowser = typeof window !== 'undefined' && !window.go;
+
+// Check if this is a presenter window
+const isPresenterWindow = location.hash === '#presenter';
 
 // Mock functions for browser testing
 const mockFunctions = {
@@ -66,7 +70,11 @@ const api = isBrowser ? mockFunctions : {
     GetCustomCSS,
     SetCustomCSS,
     ClearCustomCSS,
-    ResolveConflict
+    ResolveConflict,
+    // v3 functions - will be implemented via events
+    OpenPresenter: async () => { console.warn('OpenPresenter: v3 event-based, not available in v2 build'); },
+    UpdatePresenter: async () => { console.warn('UpdatePresenter: v3 event-based, not available in v2 build'); },
+    PresenterSlideChanged: async () => { console.warn('PresenterSlideChanged: v3 event-based, not available in v2 build'); }
 };
 
 // Global variables
@@ -119,6 +127,13 @@ let currentConflictInfo = null;
 // Initialize the application
 async function init() {
     console.log('Initializing Karte application...');
+
+    // Initialize presenter mode if this is a presenter window
+    if (isPresenterWindow) {
+        initPresenterMode();
+        return; // Don't initialize editor mode
+    }
+
     try {
         // Load file list
         console.log('Loading file list...');
@@ -165,6 +180,25 @@ async function init() {
                     loadFile(currentPath);
                 }
             });
+
+            // Sync slide position from presenter window
+            EventsOn('editor:slide', (data) => {
+                const docId = data?.docId || data?.path;
+                const index = (data && typeof data.index === 'number') ? data.index : 0;
+                if (docId === currentPath) {
+                    lastMarpSlideIndex = index;
+                    // Update preview iframe slide position
+                    const applySlide = (attempt = 0) => {
+                        const frame = pv?.contentWindow;
+                        if (frame && typeof frame.showSlide === 'function') {
+                            frame.showSlide(index);
+                        } else if (attempt < 5) {
+                            setTimeout(() => applySlide(attempt + 1), 50);
+                        }
+                    };
+                    applySlide();
+                }
+            });
         } else {
             console.log('Running in browser mode - Wails events disabled');
         }
@@ -203,6 +237,97 @@ async function init() {
         console.error('Failed to initialize:', error);
         statusEl.textContent = 'Initialization failed: ' + error.message;
     }
+}
+
+// Initialize presenter mode
+function initPresenterMode() {
+    console.log('Initializing presenter mode...');
+
+    // Replace body content with presenter root
+    document.body.innerHTML = '<div id="presenter-root" style="height:100%;width:100%;overflow:hidden;"></div>';
+
+    let currentDocId = null;
+    const root = document.getElementById('presenter-root');
+
+    // Listen for presenter events
+    if (!isBrowser) {
+        EventsOn('presenter:init', (data) => {
+            const docId = data?.docId || data;
+            currentDocId = docId;
+            console.log('Presenter initialized for doc:', docId);
+        });
+
+        EventsOn('presenter:render', (data) => {
+            const html = data?.html || data || '';
+            if (html) {
+                // Marp HTML is a complete HTML document, extract body content
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                const bodyContent = doc.body || doc.documentElement;
+
+                // Replace root content with body content
+                root.innerHTML = bodyContent.innerHTML;
+
+                // Execute any scripts in the HTML
+                const scripts = bodyContent.querySelectorAll('script');
+                scripts.forEach(oldScript => {
+                    const newScript = document.createElement('script');
+                    Array.from(oldScript.attributes).forEach(attr => {
+                        newScript.setAttribute(attr.name, attr.value);
+                    });
+                    newScript.textContent = oldScript.textContent;
+                    root.appendChild(newScript);
+                });
+
+                // Wait for content to load and restore slide position
+                setTimeout(() => {
+                    // Slide position will be set by presenter:slide event
+                }, 100);
+            }
+        });
+
+        EventsOn('presenter:slide', (data) => {
+            const index = (data && typeof data.index === 'number') ? data.index : 0;
+            const total = (data && typeof data.total === 'number') ? data.total : 1;
+            console.log('Presenter slide changed:', index, '/', total);
+
+            // Marp HTML has showSlide function in window scope
+            const applySlide = (attempt = 0) => {
+                if (typeof window.showSlide === 'function') {
+                    window.showSlide(index);
+                } else if (attempt < 10) {
+                    // Retry if showSlide is not yet available (scripts may still be loading)
+                    setTimeout(() => applySlide(attempt + 1), 100);
+                } else {
+                    console.warn('showSlide function not found after retries');
+                }
+            };
+            applySlide();
+        });
+    }
+
+    // Keyboard navigation for presenter
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowRight' || e.key === ' ') {
+            e.preventDefault();
+            if (typeof window.nextSlide === 'function') {
+                window.nextSlide();
+                if (currentDocId && typeof window.currentSlide === 'number') {
+                    api.PresenterSlideChanged(currentDocId, window.currentSlide);
+                }
+            }
+        } else if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            if (typeof window.previousSlide === 'function') {
+                window.previousSlide();
+                if (currentDocId && typeof window.currentSlide === 'number') {
+                    api.PresenterSlideChanged(currentDocId, window.currentSlide);
+                }
+            }
+        }
+    });
+
+    console.log('Presenter mode initialized');
 }
 
 // Create new file
@@ -419,13 +544,25 @@ async function updatePreview() {
         // For Marp presentations, use the HTML directly (it's already a complete HTML document)
         if (isMarp) {
             const slideInfo = computeMarpSlideInfo(content, caretLine);
+            let totalSlides = 1;
             if (slideInfo) {
                 const { index, total } = slideInfo;
+                totalSlides = total || 1;
                 if (Number.isFinite(index)) {
                     lastMarpSlideIndex = Math.max(0, Math.min(index, Math.max(total - 1, 0)));
                 }
             }
             const targetSlide = Math.max(0, lastMarpSlideIndex || 0);
+
+            // Update presenter window if open
+            if (currentPath) {
+                try {
+                    await api.UpdatePresenter(currentPath, mdHtml, targetSlide, totalSlides);
+                } catch (err) {
+                    // Presenter window might not be open, ignore error
+                    console.debug('UpdatePresenter failed (window may not be open):', err);
+                }
+            }
 
             pv.onload = () => {
                 try {
@@ -564,6 +701,12 @@ function setupEventListeners() {
         exportPdfBtn.onclick = exportPdf;
     }
 
+    // Open presenter window button (if exists)
+    const presenterBtn = document.getElementById('presenterBtn');
+    if (presenterBtn) {
+        presenterBtn.onclick = openPresenterWindow;
+    }
+
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
@@ -680,6 +823,39 @@ async function openExternalPreview() {
     } catch (error) {
         console.error('Failed to open external preview:', error);
         statusEl.textContent = 'Failed to open external preview';
+    }
+}
+
+// Open presenter window
+async function openPresenterWindow() {
+    if (!currentPath) {
+        statusEl.textContent = 'ファイルを開いてください';
+        return;
+    }
+
+    try {
+        // Extract title from frontmatter or use filename
+        const content = ta.value || '';
+        let title = currentPath.split('/').pop().replace(/\.md$/, '');
+        if (content.startsWith('---')) {
+            const fmEnd = content.indexOf('\n---\n');
+            if (fmEnd > 0) {
+                const yamlContent = content.substring(4, fmEnd);
+                const titleMatch = yamlContent.match(/^title:\s*["']?([^"'\n]+)["']?\s*$/m);
+                if (titleMatch) {
+                    title = titleMatch[1].trim();
+                }
+            }
+        }
+
+        await api.OpenPresenter(currentPath, title);
+        statusEl.textContent = 'プレゼンウィンドウを開きました';
+        setTimeout(() => {
+            statusEl.textContent = '';
+        }, 2000);
+    } catch (error) {
+        console.error('Failed to open presenter window:', error);
+        statusEl.textContent = 'プレゼンウィンドウのオープンに失敗しました: ' + (error.message || error);
     }
 }
 

@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	// "github.com/wailsapp/wails/v2/pkg/runtime" // Removed: v2 dependency, sync is currently disabled
 )
 
 // SyncManager manages file synchronization between peers
@@ -66,7 +66,7 @@ func (sm *SyncManager) Start() error {
 	// Start accepting connections
 	go sm.acceptConnections()
 
-	runtime.LogInfo(sm.ctx, fmt.Sprintf("Sync manager started on port %d", sm.port))
+	log.Printf("[Sync] Sync manager started on port %d", sm.port)
 	return nil
 }
 
@@ -123,7 +123,7 @@ func (sm *SyncManager) ConnectToPeer(address string, port int) error {
 	// Start handling peer messages
 	go sm.handlePeerMessages(peer)
 
-	runtime.LogInfo(sm.ctx, fmt.Sprintf("Connected to peer %s", peer.Name))
+	log.Printf("[Sync] Connected to peer %s", peer.Name)
 	return nil
 }
 
@@ -148,7 +148,7 @@ func (sm *SyncManager) BroadcastFileChange(path, content string) error {
 		if peer.Conn != nil {
 			_, err := peer.Conn.Write(append(data, '\n'))
 			if err != nil {
-				runtime.LogError(sm.ctx, fmt.Sprintf("Failed to send to peer %s: %v", peer.Name, err))
+				log.Printf("[Sync] Error: Failed to send to peer %s: %v", peer.Name, err)
 			}
 		}
 	}
@@ -227,7 +227,7 @@ func (sm *SyncManager) acceptConnections() {
 			if sm.ctx.Err() != nil {
 				return
 			}
-			runtime.LogError(sm.ctx, fmt.Sprintf("Failed to accept connection: %v", err))
+			log.Printf("[Sync] Error: Failed to accept connection: %v", err)
 			continue
 		}
 
@@ -263,18 +263,18 @@ func (sm *SyncManager) handlePeerMessages(peer *Peer) {
 		var change FileChange
 		err := decoder.Decode(&change)
 		if err != nil {
-			runtime.LogError(sm.ctx, fmt.Sprintf("Failed to decode message from peer %s: %v", peer.Name, err))
+			log.Printf("[Sync] Error: Failed to decode message from peer %s: %v", peer.Name, err)
 			return
 		}
 
 		// Apply file change
 		err = sm.applyFileChange(change)
 		if err != nil {
-			runtime.LogError(sm.ctx, fmt.Sprintf("Failed to apply file change: %v", err))
+			log.Printf("[Sync] Error: Failed to apply file change: %v", err)
 		}
 
-		// Emit event to frontend
-		runtime.EventsEmit(sm.ctx, "file-synced", change)
+		// Emit event to frontend (disabled: v2 dependency removed)
+		// runtime.EventsEmit(sm.ctx, "file-synced", change)
 	}
 }
 
@@ -299,6 +299,6 @@ func (sm *SyncManager) applyFileChange(change FileChange) error {
 		return fmt.Errorf("failed to write file: %v", err)
 	}
 
-	runtime.LogInfo(sm.ctx, fmt.Sprintf("Applied file change from peer: %s", change.Path))
+	log.Printf("[Sync] Applied file change from peer: %s", change.Path)
 	return nil
 }

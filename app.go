@@ -22,7 +22,8 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
 // App struct
@@ -35,24 +36,26 @@ type App struct {
 	vcs         *gitvcs.VCS
 	// presenter windows keyed by document id (e.g., "content/xxx.md")
 	presenters map[string]*Presenter
+	// v3 application & main window
+	app        *application.App
+	mainWindow *application.WebviewWindow
 }
 
 // Presenter window context
 type Presenter struct {
-	win   runtime.Window
-	ctx   context.Context
+	win   *application.WebviewWindow
 	docID string
 }
 
 // logInfo writes info logs to both Wails runtime and app log file
 func (a *App) logInfo(msg string) {
-	runtime.LogInfo(a.ctx, msg)
+	log.Println("[INFO]", msg)
 	a.appendLog("INFO", msg)
 }
 
 // logError writes error logs to both Wails runtime and app log file
 func (a *App) logError(msg string) {
-	runtime.LogError(a.ctx, msg)
+	log.Println("[ERROR]", msg)
 	a.appendLog("ERROR", msg)
 }
 
@@ -120,6 +123,23 @@ func NewApp() *App {
 	return &App{}
 }
 
+// InitApp initialises v3 application references and runs startup initialisation.
+func (a *App) InitApp(app *application.App, main *application.WebviewWindow) {
+	a.app = app
+	a.mainWindow = main
+	if a.ctx == nil {
+		a.ctx = context.Background()
+	}
+	a.startup(a.ctx)
+}
+
+// emitMain sends an event via main window if available.
+func (a *App) emitMain(event string, payload any) {
+	if a.mainWindow != nil {
+		a.mainWindow.EmitEvent(event, payload)
+	}
+}
+
 // startup is called when the app starts. The context is saved
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
@@ -130,7 +150,7 @@ func (a *App) startup(ctx context.Context) {
 	// Determine base directory from executable location
 	exePath, err := os.Executable()
 	if err != nil {
-		runtime.LogError(ctx, fmt.Sprintf("Failed to get executable path: %v", err))
+		a.logError(fmt.Sprintf("Failed to get executable path: %v", err))
 		return
 	}
 	exeDir := filepath.Dir(exePath)
@@ -151,7 +171,7 @@ func (a *App) startup(ctx context.Context) {
 	// Initialize karte_data directory next to the application
 	a.dataDir = filepath.Join(a.root, "karte_data")
 	if err := a.initializeDataDirectory(); err != nil {
-		runtime.LogError(ctx, fmt.Sprintf("Failed to initialize data directory: %v", err))
+		a.logError(fmt.Sprintf("Failed to initialize data directory: %v", err))
 		return
 	}
 
@@ -160,7 +180,7 @@ func (a *App) startup(ctx context.Context) {
 	// Initialize sync manager (disabled for now - will be implemented with git integration)
 	// a.syncManager = sync.NewSyncManager(ctx, a.root)
 	// if err := a.syncManager.Start(); err != nil {
-	// 	runtime.LogError(ctx, fmt.Sprintf("Failed to start sync manager: %v", err))
+	// 	a.logError(fmt.Sprintf("Failed to start sync manager: %v", err))
 	// }
 }
 
@@ -333,23 +353,23 @@ func (a *App) CreateNewFile(filename string) (bool, error) {
 
 // LoadFile loads the content of a markdown file
 func (a *App) LoadFile(path string) (string, error) {
-	runtime.LogInfo(a.ctx, fmt.Sprintf("LoadFile called with path: %s", path))
+	a.logInfo(fmt.Sprintf("LoadFile called with path: %s", path))
 
 	absPath, ok := a.resolveContentPath(path)
 	if !ok {
-		runtime.LogError(a.ctx, fmt.Sprintf("Invalid path: %s", path))
+		a.logError(fmt.Sprintf("Invalid path: %s", path))
 		return "", fmt.Errorf("invalid path: %s", path)
 	}
 
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Resolved path: %s", absPath))
+	a.logInfo(fmt.Sprintf("Resolved path: %s", absPath))
 
 	content, err := os.ReadFile(absPath)
 	if err != nil {
-		runtime.LogError(a.ctx, fmt.Sprintf("Failed to read file %s: %v", absPath, err))
+		a.logError(fmt.Sprintf("Failed to read file %s: %v", absPath, err))
 		return "", fmt.Errorf("failed to read file: %v", err)
 	}
 
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Successfully loaded file, content length: %d", len(content)))
+	a.logInfo(fmt.Sprintf("Successfully loaded file, content length: %d", len(content)))
 	return string(content), nil
 }
 
@@ -393,21 +413,21 @@ func (a *App) SaveFile(path, content string) error {
 					if err == nil && severity != gitvcs.ConflictCritical {
 						// Auto-merge successful - use merged content
 						content = merged
-						runtime.EventsEmit(a.ctx, "auto-merge-success", map[string]interface{}{
+						a.emitMain("auto-merge-success", map[string]interface{}{
 							"path":        path,
 							"merged_hash": gitvcs.CalculateHash(merged),
 						})
 						a.logInfo(fmt.Sprintf("Auto-merged conflict for file: %s", path))
 					} else {
 						// Auto-merge failed or still has conflicts - notify user
-						runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
+						a.emitMain("conflict-detected", conflict)
 						if conflict.Severity == gitvcs.ConflictCritical {
 							return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
 						}
 					}
 				} else {
 					// Critical conflict - require manual resolution
-					runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
+					a.emitMain("conflict-detected", conflict)
 					return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
 				}
 			}
@@ -438,11 +458,11 @@ func (a *App) SaveFile(path, content string) error {
 
 	// Build the site after saving
 	if err := a.BuildSite(); err != nil {
-		runtime.LogError(a.ctx, fmt.Sprintf("Failed to build site after save: %v", err))
+		a.logError(fmt.Sprintf("Failed to build site after save: %v", err))
 	}
 
 	// Emit file changed event
-	runtime.EventsEmit(a.ctx, "file-changed", path)
+	a.emitMain("file-changed", path)
 
 	return nil
 }
@@ -1191,30 +1211,25 @@ func (a *App) OpenPresenter(docID, title string) error {
 	}
 	// If already exists, just focus
 	if p, ok := a.presenters[docID]; ok && p != nil && p.win != nil {
-		runtime.WindowShow(p.win)
-		runtime.WindowFocus(p.win)
+		p.win.Show()
+		p.win.Focus()
 		return nil
 	}
 	// Create new window
-	opts := &runtime.WindowOptions{
+	win := application.NewWindow(application.WebviewWindowOptions{
 		Title:  fmt.Sprintf("Presenter - %s", title),
 		Width:  1280,
 		Height: 720,
-		Center: true,
 		URL:    "index.html#presenter",
-	}
-	win, wctx, err := runtime.NewWindow(a.ctx, opts)
-	if err != nil {
-		return fmt.Errorf("failed to create presenter window: %v", err)
-	}
-	p := &Presenter{win: win, ctx: wctx, docID: docID}
+	})
+	p := &Presenter{win: win, docID: docID}
 	a.presenters[docID] = p
 	// cleanup on close
-	runtime.WindowOnClose(wctx, func() {
+	win.OnWindowEvent(events.Common.WindowClosing, func(event *application.WindowEvent) {
 		delete(a.presenters, docID)
 	})
 	// notify presenter window of doc id
-	runtime.EventsEmit(wctx, "presenter:init", map[string]any{"docId": docID})
+	win.EmitEvent("presenter:init", map[string]any{"docId": docID})
 	return nil
 }
 
@@ -1223,16 +1238,17 @@ func (a *App) UpdatePresenter(docID, html string, index, total int) {
 	if a.presenters == nil {
 		return
 	}
-	if p, ok := a.presenters[docID]; ok && p != nil {
-		runtime.EventsEmit(p.ctx, "presenter:render", map[string]any{"html": html})
-		runtime.EventsEmit(p.ctx, "presenter:slide", map[string]any{"index": index, "total": total})
+	if p, ok := a.presenters[docID]; ok && p != nil && p.win != nil {
+		// Send events to presenter window
+		p.win.EmitEvent("presenter:render", map[string]any{"docId": docID, "html": html})
+		p.win.EmitEvent("presenter:slide", map[string]any{"docId": docID, "index": index, "total": total})
 	}
 }
 
 // PresenterSlideChanged is invoked from presenter window to inform editor about slide change.
 func (a *App) PresenterSlideChanged(docID string, index int) {
 	// Re-broadcast to main window(s)
-	runtime.EventsEmit(a.ctx, "editor:slide", map[string]any{"docId": docID, "index": index})
+	a.emitMain("editor:slide", map[string]any{"docId": docID, "index": index})
 }
 
 // ---- Custom CSS (preview-only) management ----
@@ -1299,7 +1315,7 @@ func (a *App) extractLinks(content string) []LinkInfo {
 	// Wikiリンク [[title]] または [[title|display]]
 	wikiLinkRegex := regexp.MustCompile(`\[\[([^|\]]+)(?:\|([^\]]+))?\]\]`)
 	matches := wikiLinkRegex.FindAllStringSubmatch(content, -1)
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d wiki links", len(matches)))
+	a.logInfo(fmt.Sprintf("Found %d wiki links", len(matches)))
 	for _, match := range matches {
 		title := match[1]
 		// .md拡張子を追加
@@ -1307,51 +1323,51 @@ func (a *App) extractLinks(content string) []LinkInfo {
 			title += ".md"
 		}
 		links = append(links, LinkInfo{Target: title, Kind: "wikilink"})
-		runtime.LogInfo(a.ctx, fmt.Sprintf("  Wiki link: %s", title))
+		a.logInfo(fmt.Sprintf("  Wiki link: %s", title))
 	}
 
 	// Markdownリンク [text](url)
 	markdownLinkRegex := regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
 	matches = markdownLinkRegex.FindAllStringSubmatch(content, -1)
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d markdown links", len(matches)))
+	a.logInfo(fmt.Sprintf("Found %d markdown links", len(matches)))
 	for _, match := range matches {
 		url := match[2]
 		if strings.HasSuffix(strings.ToLower(url), ".md") {
 			links = append(links, LinkInfo{Target: url, Kind: "markdown_link"})
-			runtime.LogInfo(a.ctx, fmt.Sprintf("  Markdown link: %s", url))
+			a.logInfo(fmt.Sprintf("  Markdown link: %s", url))
 		}
 	}
 
 	// 画像リンク ![alt](src)
 	imgLinkRegex := regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
 	matches = imgLinkRegex.FindAllStringSubmatch(content, -1)
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d image links", len(matches)))
+	a.logInfo(fmt.Sprintf("Found %d image links", len(matches)))
 	for _, match := range matches {
 		src := match[2]
 		links = append(links, LinkInfo{Target: src, Kind: "img"})
-		runtime.LogInfo(a.ctx, fmt.Sprintf("  Image link: %s", src))
+		a.logInfo(fmt.Sprintf("  Image link: %s", src))
 	}
 
 	// 引用 > text 内のWikiリンク
 	quoteRegex := regexp.MustCompile(`(?m)^>\s*.*?\[\[([^|\]]+)(?:\|([^\]]+))?\]\].*$`)
 	matches = quoteRegex.FindAllStringSubmatch(content, -1)
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d quote blocks with wiki links", len(matches)))
+	a.logInfo(fmt.Sprintf("Found %d quote blocks with wiki links", len(matches)))
 	for _, match := range matches {
 		title := match[1]
 		if !strings.HasSuffix(strings.ToLower(title), ".md") {
 			title += ".md"
 		}
 		links = append(links, LinkInfo{Target: title, Kind: "quote"})
-		runtime.LogInfo(a.ctx, fmt.Sprintf("  Quote link: %s", title))
+		a.logInfo(fmt.Sprintf("  Quote link: %s", title))
 	}
 
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Total links extracted: %d", len(links)))
+	a.logInfo(fmt.Sprintf("Total links extracted: %d", len(links)))
 	return links
 }
 
 // resolveLinkTarget resolves a link target to a node ID
 func (a *App) resolveLinkTarget(link LinkInfo, currentFile string) string {
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Resolving link: %s (kind: %s) from file: %s", link.Target, link.Kind, currentFile))
+	a.logInfo(fmt.Sprintf("Resolving link: %s (kind: %s) from file: %s", link.Target, link.Kind, currentFile))
 
 	switch link.Kind {
 	case "wikilink", "markdown_link":
@@ -1364,14 +1380,14 @@ func (a *App) resolveLinkTarget(link LinkInfo, currentFile string) string {
 			target = filepath.ToSlash(target)
 		}
 		result := "doc:/" + strings.TrimPrefix(target, "content/")
-		runtime.LogInfo(a.ctx, fmt.Sprintf("  Resolved to: %s", result))
+		a.logInfo(fmt.Sprintf("  Resolved to: %s", result))
 		return result
 	case "img":
 		result := "img:/" + link.Target
-		runtime.LogInfo(a.ctx, fmt.Sprintf("  Resolved to: %s", result))
+		a.logInfo(fmt.Sprintf("  Resolved to: %s", result))
 		return result
 	default:
-		runtime.LogInfo(a.ctx, fmt.Sprintf("  No resolution for kind: %s", link.Kind))
+		a.logInfo(fmt.Sprintf("  No resolution for kind: %s", link.Kind))
 		return ""
 	}
 }
