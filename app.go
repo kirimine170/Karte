@@ -545,13 +545,14 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 	footer := ""
 	paginate := false
 	aspectRatio := "" // Default will be 16:9
+	marpTheme := "default" // Default Marp theme
 
 	if frontMatter != nil {
 		if frontMatter.Marp {
 			isMarpMode = true
 		}
 
-		// Extract header, footer, paginate, and aspectRatio from Raw
+		// Extract header, footer, paginate, aspectRatio, and marpTheme from Raw
 		if frontMatter.Raw != nil {
 			if h, ok := frontMatter.Raw["header"].(string); ok {
 				header = h
@@ -568,6 +569,9 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 			if ar, ok := frontMatter.Raw["aspectRatio"].(string); ok {
 				aspectRatio = ar
 			}
+			if mt, ok := frontMatter.Raw["marpTheme"].(string); ok {
+				marpTheme = mt
+			}
 		}
 	}
 
@@ -579,7 +583,7 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 			title = "Presentation"
 		}
 
-		html := marp.RenderMarpHTML(slides, title, header, footer, paginate, aspectRatio)
+		html := marp.RenderMarpHTML(slides, title, header, footer, paginate, aspectRatio, marpTheme)
 		return html, nil
 	}
 

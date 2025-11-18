@@ -489,12 +489,54 @@ func processInlineFormatting(text string) string {
 	return text
 }
 
+// getMarpThemeCSS returns CSS variables for the specified Marp theme
+func getMarpThemeCSS(theme string) string {
+	switch theme {
+	case "gaia":
+		return `
+			--color-background: #f8f8f8;
+			--color-foreground: #1a1a1a;
+			--color-highlight: #4285f4;
+			--color-sub-background: #e8f0fe;
+		`
+	case "uncover":
+		return `
+			--color-background: #1a1a1a;
+			--color-foreground: #ffffff;
+			--color-highlight: #ff6b6b;
+			--color-sub-background: #2d2d2d;
+		`
+	case "lead":
+		return `
+			--color-background: #ffffff;
+			--color-foreground: #2c3e50;
+			--color-highlight: #3498db;
+			--color-sub-background: #ecf0f1;
+		`
+	default: // "default"
+		return `
+			--color-background: #ffffff;
+			--color-foreground: #363636;
+			--color-highlight: #96368f;
+			--color-sub-background: #e3cafa;
+		`
+	}
+}
+
 // RenderMarpHTML generates complete HTML for Marp presentation
-func RenderMarpHTML(slides []string, title string, header string, footer string, paginate bool, aspectRatio string) string {
+func RenderMarpHTML(slides []string, title string, header string, footer string, paginate bool, aspectRatio string, theme string) string {
 	// Default aspect ratio
 	if aspectRatio == "" {
 		aspectRatio = "16:9"
 	}
+
+	// Default theme
+	if theme == "" {
+		theme = "default"
+	}
+
+	// Get theme CSS variables
+	themeCSS := getMarpThemeCSS(theme)
 
 	// Calculate aspect ratio for CSS
 	var aspectRatioCSS string
@@ -611,10 +653,7 @@ func RenderMarpHTML(slides []string, title string, header string, footer string,
 		}
 		
 		:root {
-			--color-background: #ffffff;
-			--color-foreground: #363636;
-			--color-highlight: #96368f;
-			--color-sub-background: #e3cafa;
+			%s
 			--slide-base-width: %.0fpx;
 			--slide-base-height: %.0fpx;
 			--slide-scale: 1;
@@ -1140,7 +1179,7 @@ func RenderMarpHTML(slides []string, title string, header string, footer string,
 		showSlide(0);
 	</script>
 </body>
-</html>`, html.EscapeString(title), baseWidth, baseHeight, aspectRatioCSS, aspectRatioWidth, aspectRatioHeight, aspectRatioWidth, aspectRatioHeight, strings.Join(slideHTMLs, "\n"), len(slides))
+</html>`, html.EscapeString(title), themeCSS, baseWidth, baseHeight, aspectRatioCSS, aspectRatioWidth, aspectRatioHeight, aspectRatioWidth, aspectRatioHeight, strings.Join(slideHTMLs, "\n"), len(slides))
 
 	return html
 }

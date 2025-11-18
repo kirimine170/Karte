@@ -1,4 +1,4 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict } from '../wailsjs/wailsjs/go/main/App';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict } from '../wailsjs/wailsjs/go/main/App';
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
@@ -51,6 +51,36 @@ const mockFunctions = {
         console.log('Mock CreateNewFile called:', filename);
         // Simulate file creation
         return true;
+    },
+
+    async ExportPDF(html) {
+        console.log('Mock ExportPDF called, HTML length:', html.length);
+        return '/mock/path/to/export.pdf';
+    },
+
+    async ExportPreviewHTML(html) {
+        console.log('Mock ExportPreviewHTML called, HTML length:', html.length);
+        return 'file:///mock/path/to/preview.html';
+    },
+
+    async GetCustomCSS() {
+        console.log('Mock GetCustomCSS called');
+        return '';
+    },
+
+    async SetCustomCSS(css) {
+        console.log('Mock SetCustomCSS called, CSS length:', css.length);
+        return true;
+    },
+
+    async ClearCustomCSS() {
+        console.log('Mock ClearCustomCSS called');
+        return true;
+    },
+
+    async ResolveConflict(path, strategy) {
+        console.log('Mock ResolveConflict called:', path, strategy);
+        return true;
     }
 };
 
@@ -63,6 +93,7 @@ const api = isBrowser ? mockFunctions : {
     GetGraphData,
     CreateNewFile,
     ExportPDF,
+    ExportPreviewHTML,
     GetCustomCSS,
     SetCustomCSS,
     ClearCustomCSS,
@@ -449,10 +480,12 @@ async function updatePreview() {
             return;
         }
 
-        // Regular markdown preview
+        // Regular markdown preview (with or without YAML frontmatter)
         // site.RenderMarkdown already returns a complete HTML document,
-        // so use it directly like Marp presentations
-        pv.srcdoc = mdHtml;
+        // but we need to inject custom CSS and theme variables
+        // Custom CSS is always applied to regular markdown, regardless of frontmatter
+        const finalHtml = injectCustomCSS(mdHtml);
+        pv.srcdoc = finalHtml;
     } catch (error) {
         console.error('Failed to update preview:', error);
         const errorMsg = error?.message || error?.toString() || 'Unknown error';
@@ -724,6 +757,90 @@ function getBasePreviewCSS() {
     `;
 }
 
+// Inject custom CSS and theme variables into a complete HTML document
+function injectCustomCSS(html) {
+    const custom = loadCustomCss();
+    const theme = (themeSel && themeSel.value) || localStorage.getItem('karte-theme') || 'light';
+    const themeVars = getThemeVariablesCSS();
+    const baseCSS = getBasePreviewCSS();
+
+    console.log('injectCustomCSS: custom CSS length:', custom ? custom.length : 0);
+    console.log('injectCustomCSS: HTML has </head>:', html.includes('</head>'));
+    console.log('injectCustomCSS: HTML has <head>:', html.includes('<head>'));
+    console.log('injectCustomCSS: HTML has <html>:', html.includes('<html'));
+
+    // Build CSS to inject
+    let cssToInject = themeVars + baseCSS;
+    if (custom) {
+        cssToInject += '\n' + custom;
+    }
+
+    console.log('injectCustomCSS: CSS to inject length:', cssToInject.length);
+
+    // Check if there's already a custom CSS style tag
+    const customStyleRegex = /<style[^>]*id="karte-custom-css"[^>]*>[\s\S]*?<\/style>/i;
+    if (customStyleRegex.test(html)) {
+        // Replace existing custom CSS
+        html = html.replace(customStyleRegex, `<style id="karte-custom-css">${cssToInject}</style>`);
+        console.log('injectCustomCSS: Replaced existing custom CSS style tag');
+    } else {
+        // Try different insertion strategies based on HTML structure
+        if (html.includes('</head>')) {
+            // Standard HTML with </head> tag
+            html = html.replace('</head>', `<style id="karte-custom-css">${cssToInject}</style></head>`);
+            console.log('injectCustomCSS: Inserted CSS before </head>');
+        } else if (html.includes('<head>')) {
+            // Has <head> but no </head>
+            html = html.replace('<head>', `<head><style id="karte-custom-css">${cssToInject}</style>`);
+            console.log('injectCustomCSS: Inserted CSS after <head>');
+        } else if (html.includes('<html')) {
+            // Has <html> tag but no <head>
+            html = html.replace(/<html([^>]*)>/i, (match, attrs) => {
+                // Remove existing data-theme if present
+                attrs = attrs.replace(/\s*data-theme="[^"]*"/i, '');
+                return `<html${attrs} data-theme="${theme}"><head><style id="karte-custom-css">${cssToInject}</style></head>`;
+            });
+            console.log('injectCustomCSS: Added head section with CSS after <html>');
+        } else if (html.includes('<!doctype html>')) {
+            // preview.html template structure: <!doctype html> followed by meta tags
+            // Insert after the first <style> tag or before <body>
+            if (html.includes('</style>')) {
+                // Find the last </style> tag and insert after it
+                const lastStyleEnd = html.lastIndexOf('</style>');
+                if (lastStyleEnd !== -1) {
+                    html = html.slice(0, lastStyleEnd + 8) + `\n<style id="karte-custom-css">${cssToInject}</style>` + html.slice(lastStyleEnd + 8);
+                    console.log('injectCustomCSS: Inserted CSS after last </style> tag');
+                }
+            } else if (html.includes('<body>')) {
+                // Insert before <body>
+                html = html.replace('<body>', `<style id="karte-custom-css">${cssToInject}</style>\n<body>`);
+                console.log('injectCustomCSS: Inserted CSS before <body>');
+            } else {
+                // Fallback: insert after <!doctype html>
+                html = html.replace('<!doctype html>', `<!doctype html>\n<style id="karte-custom-css">${cssToInject}</style>`);
+                console.log('injectCustomCSS: Inserted CSS after <!doctype html>');
+            }
+        } else {
+            // Fallback: try to add at the beginning
+            html = `<style id="karte-custom-css">${cssToInject}</style>\n` + html;
+            console.log('injectCustomCSS: Added CSS at the beginning');
+        }
+    }
+
+    // Update data-theme attribute if <html> tag exists
+    if (html.includes('<html')) {
+        html = html.replace(/<html([^>]*)>/i, (match, attrs) => {
+            // Remove existing data-theme if present
+            attrs = attrs.replace(/\s*data-theme="[^"]*"/i, '');
+            return `<html${attrs} data-theme="${theme}">`;
+        });
+    }
+
+    console.log('injectCustomCSS: Final HTML has karte-custom-css:', html.includes('karte-custom-css'));
+
+    return html;
+}
+
 function composePreviewHtml(innerHtml, themeOverride = null) {
     const custom = loadCustomCss();
     // Use themeOverride if provided, otherwise use selected theme value or persisted theme
@@ -747,7 +864,41 @@ async function exportPdf() {
         }
         statusEl.textContent = 'Exporting PDF...';
         const content = ta.value || '';
-        const html = await api.PreviewMarkdown(content);
+
+        // Check if this is a Marp presentation (same logic as updatePreview)
+        let isMarp = false;
+        if (content.startsWith('---')) {
+            const fmEnd = content.indexOf('\n---\n');
+            if (fmEnd > 0) {
+                const yamlContent = content.substring(4, fmEnd);
+                const marpMatch = yamlContent.match(/^marp:\s*(true|false)\s*$/m);
+                if (marpMatch && marpMatch[1] === 'true') {
+                    isMarp = true;
+                }
+                if (!isMarp) {
+                    const hasHeader = yamlContent.match(/^header:\s*["']?/m);
+                    const hasFooter = yamlContent.match(/^footer:\s*["']?/m);
+                    const hasPaginate = yamlContent.match(/^paginate:\s*(true|false)\s*$/m);
+                    if (hasHeader || hasFooter || hasPaginate) {
+                        isMarp = true;
+                    }
+                }
+            }
+        }
+
+        let html = await api.PreviewMarkdown(content);
+        console.log('exportPdf: isMarp =', isMarp);
+        console.log('exportPdf: HTML length =', html.length);
+        console.log('exportPdf: HTML preview (first 500 chars):', html.substring(0, 500));
+
+        // For regular markdown, inject custom CSS (same as preview)
+        if (!isMarp) {
+            console.log('exportPdf: Injecting custom CSS for regular markdown');
+            html = injectCustomCSS(html);
+        } else {
+            console.log('exportPdf: Skipping custom CSS injection for Marp');
+        }
+
         if (!isBrowser) {
             const pdfPath = await api.ExportPDF(html);
             statusEl.textContent = 'PDF exported: ' + pdfPath;
@@ -774,6 +925,71 @@ async function exportPdf() {
         if (exportPdfBtn) {
             exportPdfBtn.disabled = false;
         }
+    }
+}
+
+// Export preview to HTML file
+async function exportHtml() {
+    try {
+        statusEl.textContent = 'Exporting HTML...';
+        const content = ta.value || '';
+
+        // Check if this is a Marp presentation (same logic as updatePreview)
+        let isMarp = false;
+        if (content.startsWith('---')) {
+            const fmEnd = content.indexOf('\n---\n');
+            if (fmEnd > 0) {
+                const yamlContent = content.substring(4, fmEnd);
+                const marpMatch = yamlContent.match(/^marp:\s*(true|false)\s*$/m);
+                if (marpMatch && marpMatch[1] === 'true') {
+                    isMarp = true;
+                }
+                if (!isMarp) {
+                    const hasHeader = yamlContent.match(/^header:\s*["']?/m);
+                    const hasFooter = yamlContent.match(/^footer:\s*["']?/m);
+                    const hasPaginate = yamlContent.match(/^paginate:\s*(true|false)\s*$/m);
+                    if (hasHeader || hasFooter || hasPaginate) {
+                        isMarp = true;
+                    }
+                }
+            }
+        }
+
+        let html = await api.PreviewMarkdown(content);
+        console.log('exportHtml: isMarp =', isMarp);
+        console.log('exportHtml: HTML length =', html.length);
+        console.log('exportHtml: HTML preview (first 500 chars):', html.substring(0, 500));
+
+        // For regular markdown, inject custom CSS (same as preview)
+        if (!isMarp) {
+            console.log('exportHtml: Injecting custom CSS for regular markdown');
+            html = injectCustomCSS(html);
+        } else {
+            console.log('exportHtml: Skipping custom CSS injection for Marp');
+        }
+
+        if (!isBrowser) {
+            const fileUrl = await api.ExportPreviewHTML(html);
+            statusEl.textContent = 'HTML exported: ' + fileUrl;
+            BrowserOpenURL(fileUrl);
+        } else {
+            // In browser, download the HTML file
+            const blob = new Blob([html], { type: 'text/html' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `preview-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)}.html`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            statusEl.textContent = 'HTML downloaded';
+        }
+    } catch (error) {
+        console.error('Export HTML failed:', error);
+        const msg = (error && (error.message || String(error))) || 'Export HTML failed';
+        statusEl.textContent = msg;
+        alert(msg);
     }
 }
 
