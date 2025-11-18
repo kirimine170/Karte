@@ -33,16 +33,20 @@ type App struct {
 	logFilePath string
 	syncManager *sync.SyncManager
 	vcs         *gitvcs.VCS
+	// NOTE: Multi-window support requires Wails v3 (currently in development)
+	// Uncomment when upgrading to Wails v3:
 	// presenter windows keyed by document id (e.g., "content/xxx.md")
-	presenters map[string]*Presenter
+	// presenters map[string]*Presenter
 }
 
+// NOTE: Multi-window support requires Wails v3 (currently in development)
+// Uncomment when upgrading to Wails v3:
 // Presenter window context
-type Presenter struct {
-	win   runtime.Window
-	ctx   context.Context
-	docID string
-}
+// type Presenter struct {
+// 	win   runtime.Window
+// 	ctx   context.Context
+// 	docID string
+// }
 
 // logInfo writes info logs to both Wails runtime and app log file
 func (a *App) logInfo(msg string) {
@@ -124,9 +128,11 @@ func NewApp() *App {
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	if a.presenters == nil {
-		a.presenters = make(map[string]*Presenter)
-	}
+	// NOTE: Multi-window support requires Wails v3 (currently in development)
+	// Uncomment when upgrading to Wails v3:
+	// if a.presenters == nil {
+	// 	a.presenters = make(map[string]*Presenter)
+	// }
 	// Determine base directory from executable location
 	exePath, err := os.Executable()
 	if err != nil {
@@ -1179,61 +1185,63 @@ func (a *App) ExportPDF(html string) (string, error) {
 }
 
 // ---- Presenter multi-window APIs ----
+// NOTE: Multi-window support requires Wails v3 (currently in development)
+// Uncomment when upgrading to Wails v3:
 
 // OpenPresenter opens or focuses a presenter window for the specified document id.
 // docID should be a content path like "content/xxx.md".
-func (a *App) OpenPresenter(docID, title string) error {
-	if docID == "" {
-		return fmt.Errorf("docID is required")
-	}
-	if a.presenters == nil {
-		a.presenters = make(map[string]*Presenter)
-	}
-	// If already exists, just focus
-	if p, ok := a.presenters[docID]; ok && p != nil && p.win != nil {
-		runtime.WindowShow(p.win)
-		runtime.WindowFocus(p.win)
-		return nil
-	}
-	// Create new window
-	opts := &runtime.WindowOptions{
-		Title:  fmt.Sprintf("Presenter - %s", title),
-		Width:  1280,
-		Height: 720,
-		Center: true,
-		URL:    "index.html#presenter",
-	}
-	win, wctx, err := runtime.NewWindow(a.ctx, opts)
-	if err != nil {
-		return fmt.Errorf("failed to create presenter window: %v", err)
-	}
-	p := &Presenter{win: win, ctx: wctx, docID: docID}
-	a.presenters[docID] = p
-	// cleanup on close
-	runtime.WindowOnClose(wctx, func() {
-		delete(a.presenters, docID)
-	})
-	// notify presenter window of doc id
-	runtime.EventsEmit(wctx, "presenter:init", map[string]any{"docId": docID})
-	return nil
-}
+// func (a *App) OpenPresenter(docID, title string) error {
+// 	if docID == "" {
+// 		return fmt.Errorf("docID is required")
+// 	}
+// 	if a.presenters == nil {
+// 		a.presenters = make(map[string]*Presenter)
+// 	}
+// 	// If already exists, just focus
+// 	if p, ok := a.presenters[docID]; ok && p != nil && p.win != nil {
+// 		runtime.WindowShow(p.win)
+// 		runtime.WindowFocus(p.win)
+// 		return nil
+// 	}
+// 	// Create new window
+// 	opts := &runtime.WindowOptions{
+// 		Title:  fmt.Sprintf("Presenter - %s", title),
+// 		Width:  1280,
+// 		Height: 720,
+// 		Center: true,
+// 		URL:    "index.html#presenter",
+// 	}
+// 	win, wctx, err := runtime.NewWindow(a.ctx, opts)
+// 	if err != nil {
+// 		return fmt.Errorf("failed to create presenter window: %v", err)
+// 	}
+// 	p := &Presenter{win: win, ctx: wctx, docID: docID}
+// 	a.presenters[docID] = p
+// 	// cleanup on close
+// 	runtime.WindowOnClose(wctx, func() {
+// 		delete(a.presenters, docID)
+// 	})
+// 	// notify presenter window of doc id
+// 	runtime.EventsEmit(wctx, "presenter:init", map[string]any{"docId": docID})
+// 	return nil
+// }
 
 // UpdatePresenter pushes latest HTML and slide index to presenter window.
-func (a *App) UpdatePresenter(docID, html string, index, total int) {
-	if a.presenters == nil {
-		return
-	}
-	if p, ok := a.presenters[docID]; ok && p != nil {
-		runtime.EventsEmit(p.ctx, "presenter:render", map[string]any{"html": html})
-		runtime.EventsEmit(p.ctx, "presenter:slide", map[string]any{"index": index, "total": total})
-	}
-}
+// func (a *App) UpdatePresenter(docID, html string, index, total int) {
+// 	if a.presenters == nil {
+// 		return
+// 	}
+// 	if p, ok := a.presenters[docID]; ok && p != nil {
+// 		runtime.EventsEmit(p.ctx, "presenter:render", map[string]any{"html": html})
+// 		runtime.EventsEmit(p.ctx, "presenter:slide", map[string]any{"index": index, "total": total})
+// 	}
+// }
 
 // PresenterSlideChanged is invoked from presenter window to inform editor about slide change.
-func (a *App) PresenterSlideChanged(docID string, index int) {
-	// Re-broadcast to main window(s)
-	runtime.EventsEmit(a.ctx, "editor:slide", map[string]any{"docId": docID, "index": index})
-}
+// func (a *App) PresenterSlideChanged(docID string, index int) {
+// 	// Re-broadcast to main window(s)
+// 	runtime.EventsEmit(a.ctx, "editor:slide", map[string]any{"docId": docID, "index": index})
+// }
 
 // ---- Custom CSS (preview-only) management ----
 

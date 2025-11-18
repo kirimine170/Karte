@@ -450,25 +450,9 @@ async function updatePreview() {
         }
 
         // Regular markdown preview
-        // Extract theme from frontmatter
-        let theme = (themeSel && themeSel.value) || localStorage.getItem('karte-theme') || 'light';
-
-        // Try to parse frontmatter from content
-        if (content.startsWith('---')) {
-            const fmEnd = content.indexOf('\n---\n');
-            if (fmEnd > 0) {
-                const fmContent = content.substring(0, fmEnd + 5);
-                const yamlContent = content.substring(4, fmEnd);
-                // Simple regex to extract theme
-                const themeMatch = yamlContent.match(/^theme:\s*["']?([^"'\n]+)["']?\s*$/m);
-                if (themeMatch) {
-                    theme = themeMatch[1].trim();
-                }
-            }
-        }
-
-        const finalHtml = composePreviewHtml(mdHtml, theme);
-        pv.srcdoc = finalHtml;
+        // site.RenderMarkdown already returns a complete HTML document,
+        // so use it directly like Marp presentations
+        pv.srcdoc = mdHtml;
     } catch (error) {
         console.error('Failed to update preview:', error);
         const errorMsg = error?.message || error?.toString() || 'Unknown error';
