@@ -1,4 +1,4 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, GetCustomCSS, SetCustomCSS, ClearCustomCSS } from '../wailsjs/wailsjs/go/main/App';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict } from '../wailsjs/wailsjs/go/main/App';
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
@@ -65,13 +65,15 @@ const api = isBrowser ? mockFunctions : {
     ExportPDF,
     GetCustomCSS,
     SetCustomCSS,
-    ClearCustomCSS
+    ClearCustomCSS,
+    ResolveConflict
 };
 
 // Global variables
 let currentPath = '';
 let files = [];
 let graphModule = null;
+let lastMarpSlideIndex = 0;
 
 // DOM elements
 const statusEl = document.getElementById('status');
@@ -103,7 +105,16 @@ const clearCustomCssBtn = document.getElementById('clearCustomCssBtn');
 const cancelCustomCssBtn = document.getElementById('cancelCustomCssBtn');
 const customCssStatus = document.getElementById('customCssStatus');
 
+// Conflict modal elements
+const conflictModal = document.getElementById('conflictModal');
+const conflictFilePath = document.getElementById('conflictFilePath');
+const diffLocal = document.getElementById('diffLocal');
+const diffRemote = document.getElementById('diffRemote');
+const resolveConflictBtn = document.getElementById('resolveConflictBtn');
+const cancelConflictBtn = document.getElementById('cancelConflictBtn');
+
 let customCssCache = '';
+let currentConflictInfo = null;
 
 // Initialize the application
 async function init() {
@@ -136,6 +147,24 @@ async function init() {
                 updatePreview();
                 updateGraph();
             });
+
+            // Conflict detection events
+            EventsOn('conflict-detected', (conflictInfo) => {
+                console.log('Conflict detected:', conflictInfo);
+                showConflictResolutionModal(conflictInfo);
+            });
+
+            EventsOn('auto-merge-success', (data) => {
+                console.log('Auto-merge succeeded:', data);
+                statusEl.textContent = `ファイル「${data.path}」の変更を自動的に統合しました`;
+                setTimeout(() => {
+                    statusEl.textContent = '';
+                }, 3000);
+                // Reload file to show merged content
+                if (currentPath) {
+                    loadFile(currentPath);
+                }
+            });
         } else {
             console.log('Running in browser mode - Wails events disabled');
         }
@@ -146,11 +175,24 @@ async function init() {
             graphModule = new GraphModule('graph-container');
             graphModule.on('node:click', (data) => {
                 console.log('Node clicked:', data);
-                if (data.id && data.id.startsWith('doc:/')) {
-                    loadFile(data.id);
+                const nodeId = data.id || data.ID;
+                if (nodeId && nodeId.startsWith('doc:/')) {
+                    loadFile(nodeId);
                     switchToTab('editor');
                 }
             });
+
+            // Setup tag nodes toggle button
+            const toggleTagNodesBtn = document.getElementById('toggleTagNodesBtn');
+            if (toggleTagNodesBtn) {
+                toggleTagNodesBtn.addEventListener('click', () => {
+                    if (graphModule) {
+                        graphModule.toggleTagNodes();
+                        toggleTagNodesBtn.textContent = `タグノード表示: ${graphModule.showTagNodes ? 'ON' : 'OFF'}`;
+                    }
+                });
+            }
+
             await updateGraph();
         } catch (error) {
             console.error('Failed to initialize graph module:', error);
@@ -346,13 +388,146 @@ async function save() {
 async function updatePreview() {
     try {
         const content = ta.value;
+        const caretIndex = typeof ta.selectionStart === 'number' ? ta.selectionStart : 0;
+        const caretLine = getCaretLineNumber(content, caretIndex);
+
+        // Check if this is a Marp presentation
+        let isMarp = false;
+        if (content.startsWith('---')) {
+            const fmEnd = content.indexOf('\n---\n');
+            if (fmEnd > 0) {
+                const yamlContent = content.substring(4, fmEnd);
+                // Check for marp: true
+                const marpMatch = yamlContent.match(/^marp:\s*(true|false)\s*$/m);
+                if (marpMatch && marpMatch[1] === 'true') {
+                    isMarp = true;
+                }
+                // Check for Marp-specific fields (header, footer, paginate)
+                if (!isMarp) {
+                    const hasHeader = yamlContent.match(/^header:\s*["']?/m);
+                    const hasFooter = yamlContent.match(/^footer:\s*["']?/m);
+                    const hasPaginate = yamlContent.match(/^paginate:\s*(true|false)\s*$/m);
+                    if (hasHeader || hasFooter || hasPaginate) {
+                        isMarp = true;
+                    }
+                }
+            }
+        }
+
         const mdHtml = await api.PreviewMarkdown(content);
-        const finalHtml = composePreviewHtml(mdHtml);
-        pv.srcdoc = finalHtml;
+
+        // For Marp presentations, use the HTML directly (it's already a complete HTML document)
+        if (isMarp) {
+            const slideInfo = computeMarpSlideInfo(content, caretLine);
+            if (slideInfo) {
+                const { index, total } = slideInfo;
+                if (Number.isFinite(index)) {
+                    lastMarpSlideIndex = Math.max(0, Math.min(index, Math.max(total - 1, 0)));
+                }
+            }
+            const targetSlide = Math.max(0, lastMarpSlideIndex || 0);
+
+            pv.onload = () => {
+                try {
+                    const applySlide = (attempt = 0) => {
+                        const frame = pv.contentWindow;
+                        if (frame && typeof frame.showSlide === 'function') {
+                            frame.showSlide(targetSlide);
+                        } else if (attempt < 5) {
+                            setTimeout(() => applySlide(attempt + 1), 50);
+                        }
+                    };
+                    applySlide();
+                } catch (err) {
+                    console.warn('Failed to restore Marp slide position:', err);
+                } finally {
+                    pv.onload = null;
+                }
+            };
+
+            pv.srcdoc = mdHtml;
+            return;
+        }
+
+        // Regular markdown preview
+        // site.RenderMarkdown already returns a complete HTML document,
+        // so use it directly like Marp presentations
+        pv.srcdoc = mdHtml;
     } catch (error) {
         console.error('Failed to update preview:', error);
-        pv.srcdoc = '<p>Preview failed to load</p>';
+        const errorMsg = error?.message || error?.toString() || 'Unknown error';
+        pv.srcdoc = `<p style="color: red; padding: 20px;">Preview failed to load<br><small>${escapeHtml(errorMsg)}</small></p>`;
     }
+}
+
+function getCaretLineNumber(text, caretIndex) {
+    if (caretIndex <= 0) return 0;
+    const upToCaret = text.slice(0, Math.min(caretIndex, text.length));
+    return upToCaret.split('\n').length - 1;
+}
+
+function splitFrontMatter(content) {
+    if (!content.startsWith('---')) {
+        return { body: content, offsetLines: 0 };
+    }
+    const frontMatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
+    const match = content.match(frontMatterRegex);
+    if (!match) {
+        return { body: content, offsetLines: 0 };
+    }
+    const fmText = match[0];
+    const offsetLines = fmText.split('\n').length;
+    const body = content.slice(fmText.length);
+    return { body, offsetLines };
+}
+
+function computeMarpSlideInfo(content, caretLine) {
+    const { body, offsetLines } = splitFrontMatter(content);
+    const lines = body.split('\n');
+
+    const slideRanges = [];
+    let currentStart = offsetLines;
+
+    for (let i = 0; i < lines.length; i++) {
+        const absoluteLine = offsetLines + i;
+        const trimmed = lines[i].trim();
+        if (trimmed === '---') {
+            slideRanges.push({
+                start: currentStart,
+                end: Math.max(currentStart, absoluteLine - 1)
+            });
+            currentStart = absoluteLine + 1;
+        }
+    }
+
+    // Add final slide
+    const finalEnd = offsetLines + Math.max(lines.length - 1, 0);
+    slideRanges.push({
+        start: currentStart,
+        end: Math.max(currentStart, finalEnd)
+    });
+
+    const totalSlides = Math.max(slideRanges.length, 1);
+
+    if (caretLine < offsetLines) {
+        return { index: 0, total: totalSlides };
+    }
+
+    for (let i = 0; i < slideRanges.length; i++) {
+        const { start, end } = slideRanges[i];
+        if (caretLine >= start && (caretLine <= end || i === slideRanges.length - 1)) {
+            return { index: i, total: totalSlides };
+        }
+    }
+
+    return { index: totalSlides - 1, total: totalSlides };
+}
+
+// Helper function to escape HTML
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 // Setup event listeners
@@ -549,10 +724,10 @@ function getBasePreviewCSS() {
     `;
 }
 
-function composePreviewHtml(innerHtml) {
+function composePreviewHtml(innerHtml, themeOverride = null) {
     const custom = loadCustomCss();
-    // Use selected theme value or persisted theme
-    const theme = (themeSel && themeSel.value) || localStorage.getItem('karte-theme') || 'light';
+    // Use themeOverride if provided, otherwise use selected theme value or persisted theme
+    const theme = themeOverride || (themeSel && themeSel.value) || localStorage.getItem('karte-theme') || 'light';
     if (custom) {
         return `<!doctype html><html data-theme="${theme}"><head><meta charset="utf-8"><style>${custom}</style></head><body>${innerHtml}</body></html>`;
     }
@@ -670,6 +845,73 @@ async function updateGraph() {
     } catch (error) {
         console.error('Failed to update graph:', error);
     }
+}
+
+// Show conflict resolution modal
+function showConflictResolutionModal(conflictInfo) {
+    currentConflictInfo = conflictInfo;
+
+    // Extract path from conflict info
+    const path = conflictInfo.path || conflictInfo.Path || '';
+    const localPath = path.startsWith('content/') ? path.replace('content/', '') : path;
+    conflictFilePath.textContent = localPath;
+
+    // Display diff content
+    diffLocal.textContent = conflictInfo.local_content || conflictInfo.LocalContent || '';
+    diffRemote.textContent = conflictInfo.remote_content || conflictInfo.RemoteContent || '';
+
+    // Show modal
+    conflictModal.style.display = 'flex';
+}
+
+// Hide conflict resolution modal
+function hideConflictResolutionModal() {
+    conflictModal.style.display = 'none';
+    currentConflictInfo = null;
+}
+
+// Handle conflict resolution
+async function resolveConflict(strategy) {
+    if (!currentConflictInfo) {
+        console.error('No conflict info available');
+        return;
+    }
+
+    const path = currentConflictInfo.path || currentConflictInfo.Path || '';
+    const localPath = path.startsWith('content/') ? path.replace('content/', '') : path;
+
+    try {
+        statusEl.textContent = 'コンフリクトを解決中...';
+        await api.ResolveConflict(localPath, strategy);
+        statusEl.textContent = 'コンフリクトを解決しました';
+        hideConflictResolutionModal();
+
+        // Reload file to show resolved content
+        if (currentPath === localPath) {
+            await loadFile(currentPath);
+        }
+
+        setTimeout(() => {
+            statusEl.textContent = '';
+        }, 3000);
+    } catch (error) {
+        console.error('Failed to resolve conflict:', error);
+        statusEl.textContent = `コンフリクト解決に失敗しました: ${error.message || error}`;
+    }
+}
+
+// Setup conflict resolution button handlers
+if (resolveConflictBtn && cancelConflictBtn) {
+    resolveConflictBtn.addEventListener('click', () => {
+        const selected = document.querySelector('input[name="conflictResolution"]:checked');
+        if (selected) {
+            resolveConflict(selected.value);
+        }
+    });
+
+    cancelConflictBtn.addEventListener('click', () => {
+        hideConflictResolutionModal();
+    });
 }
 
 // Initialize when DOM is loaded

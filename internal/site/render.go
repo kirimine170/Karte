@@ -52,9 +52,13 @@ func RenderMarkdownWithOptions(root, path string, hardwrap bool) (string, *Front
 	body := b
 	if m := fmRe.FindSubmatch(b); m != nil {
 		if err := yaml.Unmarshal(m[1], fm); err != nil {
-			return "", nil, err
+			// If YAML parsing fails, treat as if there's no frontmatter
+			// This allows rendering markdown even with malformed frontmatter
+			fm = &FrontMatter{}
+			body = b
+		} else {
+			body = b[len(m[0]):]
 		}
-		body = b[len(m[0]):]
 	}
 	expanded := impRe.ReplaceAllFunc(body, func(line []byte) []byte {
 		argStr := string(line)

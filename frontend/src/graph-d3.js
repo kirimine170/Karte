@@ -18,9 +18,11 @@ class GraphD3Module {
                 wikilink: '#2c3e50',
                 markdown_link: '#34495e',
                 quote: '#f39c12',
-                img: '#9b59b6'
+                img: '#9b59b6',
+                tag: '#10b981' // Green color for tag nodes
             }
         };
+        this.showTagNodes = true; // Default: show tag nodes
         this.focus = { roots: [], depth: 3 };
         this.eventHandlers = {};
 
@@ -126,18 +128,66 @@ class GraphD3Module {
 
     setData(graph) {
         console.log('GraphD3Module.setData called with:', graph);
-        this.data = graph;
-
-        if (graph && graph.nodes && graph.edges) {
-            console.log('Adding elements to D3:', {
-                nodes: graph.nodes.length,
-                edges: graph.edges.length
-            });
-
-            this.render();
-        } else {
-            console.warn('Invalid graph data structure:', graph);
+        if (!graph || (!graph.nodes && !graph.Nodes)) {
+            console.warn('setData called with invalid graph data');
+            return;
         }
+        // Normalize data structure (support both lowercase and uppercase field names)
+        this.data = {
+            nodes: graph.nodes || graph.Nodes || [],
+            edges: graph.edges || graph.Edges || []
+        };
+        // Normalize node IDs (convert ID to id for consistency)
+        this.data.nodes = this.data.nodes.map(node => {
+            if (node.ID && !node.id) {
+                node.id = node.ID;
+            }
+            if (node.Kind && !node.kind) {
+                node.kind = node.Kind;
+            }
+            if (node.Label && !node.label) {
+                node.label = node.Label;
+            }
+            if (node.Tags && !node.tags) {
+                node.tags = node.Tags;
+            }
+            // Debug: log tag nodes
+            if (node.kind === 'tag' || node.Kind === 'tag') {
+                console.log('Found tag node:', node.id || node.ID, node.label || node.Label);
+            }
+            return node;
+        });
+
+        // Count tag nodes
+        const tagNodeCount = this.data.nodes.filter(n => (n.kind || n.Kind) === 'tag').length;
+        const tagEdgeCount = this.data.edges.filter(e => (e.kind || e.Kind) === 'tag').length;
+        console.log(`Graph data: ${this.data.nodes.length} nodes (${tagNodeCount} tag nodes), ${this.data.edges.length} edges (${tagEdgeCount} tag edges)`);
+        // Normalize edge IDs and references
+        this.data.edges = this.data.edges.map(edge => {
+            if (edge.ID && !edge.id) {
+                edge.id = edge.ID;
+            }
+            if (edge.Kind && !edge.kind) {
+                edge.kind = edge.Kind;
+            }
+            if (edge.Source && !edge.source) {
+                edge.source = edge.Source;
+            }
+            if (edge.Target && !edge.target) {
+                edge.target = edge.Target;
+            }
+            return edge;
+        });
+        console.log('Normalized data:', this.data);
+        if (this.data.nodes.length > 0 || this.data.edges.length > 0) {
+            this.render();
+        }
+    }
+
+    // Toggle tag nodes visibility
+    toggleTagNodes() {
+        this.showTagNodes = !this.showTagNodes;
+        this.render();
     }
 
     mergeData(patch) {
@@ -267,10 +317,10 @@ class GraphD3Module {
             }
         }
 
-        // Force simulationを作成
+        // Force simulationを作成（全ノードを使用）
         this.simulation = d3.forceSimulation(this.data.nodes)
             .force('link', d3.forceLink(this.data.edges)
-                .id(d => d.id)
+                .id(d => d.id || d.ID)
                 .distance(100)
             )
             .force('charge', d3.forceManyBody().strength(-500))
@@ -278,21 +328,45 @@ class GraphD3Module {
             .force('collision', d3.forceCollide().radius(30))
             .force('boundary', forceBoundary);
 
-        // エッジを描画
+        // エッジを描画（タグエッジの表示/非表示を制御）
+        const visibleEdges = this.data.edges.filter(d => {
+            const kind = d.kind || d.Kind;
+            if (kind === 'tag') {
+                return this.showTagNodes;
+            }
+            return true;
+        });
+
         this.edgeElements = this.svg.append('g')
             .selectAll('line')
-            .data(this.data.edges)
+            .data(visibleEdges)
             .enter()
             .append('line')
-            .attr('stroke', d => this.getEdgeColor(d.kind))
+            .attr('stroke', d => this.getEdgeColor(d))
             .attr('stroke-width', d => this.getEdgeWidth(d.weight))
             .attr('stroke-dasharray', d => this.getEdgeDash(d.kind))
-            .attr('marker-end', 'url(#arrowhead)');
+            .attr('marker-end', 'url(#arrowhead)')
+            .attr('class', d => d.targetUpdated ? 'edge-updated' : 'edge-normal')
+            .attr('cursor', 'pointer')
+            .on('mouseover', (event, d) => {
+                this.showTooltip(event, d);
+            })
+            .on('mouseout', () => {
+                this.hideTooltip();
+            });
 
-        // ノードを描画
+        // ノードを描画（タグノードの表示/非表示を制御）
+        const visibleNodes = this.data.nodes.filter(d => {
+            const kind = d.kind || d.Kind;
+            if (kind === 'tag') {
+                return this.showTagNodes;
+            }
+            return true;
+        });
+
         this.nodeElements = this.svg.append('g')
             .selectAll('circle')
-            .data(this.data.nodes)
+            .data(visibleNodes)
             .enter()
             .append('circle')
             .attr('r', d => this.getNodeSize(d))
@@ -304,7 +378,7 @@ class GraphD3Module {
         // ラベルを描画
         this.labelElements = this.svg.append('g')
             .selectAll('text')
-            .data(this.data.nodes)
+            .data(visibleNodes)
             .enter()
             .append('text')
             .text(d => d.label)
@@ -345,10 +419,23 @@ class GraphD3Module {
         // シミュレーションを開始
         this.simulation.on('tick', () => {
             this.edgeElements
-                .attr('x1', d => d.source.x)
-                .attr('y1', d => d.source.y)
-                .attr('x2', d => d.target.x)
-                .attr('y2', d => d.target.y);
+                .attr('x1', d => {
+                    // D3 forceLink converts source/target to node objects, but we may have IDs
+                    const source = typeof d.source === 'object' ? d.source : this.data.nodes.find(n => (n.id || n.ID) === (d.source || d.Source));
+                    return source ? (source.x || 0) : 0;
+                })
+                .attr('y1', d => {
+                    const source = typeof d.source === 'object' ? d.source : this.data.nodes.find(n => (n.id || n.ID) === (d.source || d.Source));
+                    return source ? (source.y || 0) : 0;
+                })
+                .attr('x2', d => {
+                    const target = typeof d.target === 'object' ? d.target : this.data.nodes.find(n => (n.id || n.ID) === (d.target || d.Target));
+                    return target ? (target.x || 0) : 0;
+                })
+                .attr('y2', d => {
+                    const target = typeof d.target === 'object' ? d.target : this.data.nodes.find(n => (n.id || n.ID) === (d.target || d.Target));
+                    return target ? (target.y || 0) : 0;
+                });
 
             this.nodeElements
                 .attr('cx', d => d.x)
@@ -453,14 +540,38 @@ class GraphD3Module {
     }
 
     showTooltip(event, data) {
-        const content = `
-            <div style="font-weight: bold; margin-bottom: 4px;">${data.label || 'Unknown'}</div>
-            <div><strong>ID:</strong> ${data.id || 'N/A'}</div>
-            <div><strong>Type:</strong> ${data.kind || 'N/A'}</div>
-            <div><strong>Exists:</strong> ${data.exists ? 'Yes' : 'No'}</div>
-            <div><strong>Incoming:</strong> ${data.degIn || 0}</div>
-            <div><strong>Outgoing:</strong> ${data.degOut || 0}</div>
-        `;
+        let content = '';
+
+        const kind = data.kind || data.Kind;
+        const label = data.label || data.Label;
+        const id = data.id || data.ID;
+
+        // ノードの場合
+        if (kind && (kind === 'note' || kind === 'asset:image' || kind === 'tag')) {
+            const tags = data.tags || data.Tags || [];
+            content = `
+                <div style="font-weight: bold; margin-bottom: 4px;">${label || 'Unknown'}</div>
+                <div><strong>ID:</strong> ${id || 'N/A'}</div>
+                <div><strong>Type:</strong> ${kind || 'N/A'}</div>
+                ${kind !== 'tag' ? `<div><strong>Exists:</strong> ${(data.exists !== undefined ? data.exists : data.Exists) ? 'Yes' : 'No'}</div>` : ''}
+                <div><strong>Incoming:</strong> ${data.degIn || data.DegIn || 0}</div>
+                <div><strong>Outgoing:</strong> ${data.degOut || data.DegOut || 0}</div>
+                ${tags.length > 0 ? `<div><strong>Tags:</strong> ${tags.join(', ')}</div>` : ''}
+                ${data.hash || data.Hash ? `<div><strong>Hash:</strong> ${(data.hash || data.Hash).substring(0, 8)}...</div>` : ''}
+            `;
+        } else {
+            // エッジの場合
+            const source = data.source || data.Source || '';
+            const target = data.target || data.Target || '';
+            content = `
+                <div style="font-weight: bold; margin-bottom: 4px;">Link: ${source.split('/').pop() || 'Unknown'} → ${target.split('/').pop() || 'Unknown'}</div>
+                <div><strong>Type:</strong> ${kind || 'N/A'}</div>
+                <div><strong>Weight:</strong> ${data.weight || data.Weight || 1}</div>
+                ${(data.targetUpdated || data.TargetUpdated) ? '<div style="color: #f39c12;"><strong>⚠️ Target Updated</strong></div>' : ''}
+                ${data.sourceHash || data.SourceHash ? `<div><strong>Source Hash:</strong> ${(data.sourceHash || data.SourceHash).substring(0, 8)}...</div>` : ''}
+                ${data.targetHash || data.TargetHash ? `<div><strong>Target Hash:</strong> ${(data.targetHash || data.TargetHash).substring(0, 8)}...</div>` : ''}
+            `;
+        }
 
         this.tooltip
             .style('left', (event.pageX + 10) + 'px')
@@ -484,13 +595,25 @@ class GraphD3Module {
     }
 
     getNodeColor(node) {
-        const kind = node.kind;
-        const exists = node.exists;
+        const kind = node.kind || node.Kind;
+        const exists = node.exists !== undefined ? node.exists : node.Exists;
         if (!exists) return this.style.palette.missing;
         return this.style.palette[kind] || this.style.palette.note;
     }
 
-    getEdgeColor(kind) {
+    getEdgeColor(edge) {
+        const kind = edge.kind || edge.Kind;
+
+        // ターゲットが更新された場合は警告色（オレンジ/黄色）
+        if (edge.targetUpdated || edge.TargetUpdated) {
+            return '#f39c12'; // オレンジ色
+        }
+
+        // タグエッジには特別な色
+        if (kind === 'tag') {
+            return '#10b981'; // タグノードと同じ緑色
+        }
+
         return this.style.palette[kind] || this.style.palette.wikilink;
     }
 

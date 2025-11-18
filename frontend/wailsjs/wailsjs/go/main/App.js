@@ -58,6 +58,10 @@ export function PreviewMarkdown(arg1) {
   return window['go']['main']['App']['PreviewMarkdown'](arg1);
 }
 
+export function ResolveConflict(arg1, arg2) {
+  return window['go']['main']['App']['ResolveConflict'](arg1, arg2);
+}
+
 export function SaveFile(arg1, arg2) {
   return window['go']['main']['App']['SaveFile'](arg1, arg2);
 }

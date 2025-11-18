@@ -13,10 +13,15 @@ import (
 	"strings"
 	"time"
 
+	fm "karte/internal/frontmatter"
+	gitvcs "karte/internal/git"
+	"karte/internal/marp"
 	pdfexport "karte/internal/pdf"
 	"karte/internal/site"
 	"karte/internal/sync"
 
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -27,7 +32,21 @@ type App struct {
 	dataDir     string
 	logFilePath string
 	syncManager *sync.SyncManager
+	vcs         *gitvcs.VCS
+	// NOTE: Multi-window support requires Wails v3 (currently in development)
+	// Uncomment when upgrading to Wails v3:
+	// presenter windows keyed by document id (e.g., "content/xxx.md")
+	// presenters map[string]*Presenter
 }
+
+// NOTE: Multi-window support requires Wails v3 (currently in development)
+// Uncomment when upgrading to Wails v3:
+// Presenter window context
+// type Presenter struct {
+// 	win   runtime.Window
+// 	ctx   context.Context
+// 	docID string
+// }
 
 // logInfo writes info logs to both Wails runtime and app log file
 func (a *App) logInfo(msg string) {
@@ -72,15 +91,20 @@ type GraphNode struct {
 	DegIn  int      `json:"degIn"`
 	DegOut int      `json:"degOut"`
 	Tags   []string `json:"tags"`
+	Hash   string   `json:"hash,omitempty"` // SHA256 hash of the file content
 }
 
 // GraphEdge represents an edge in the graph
 type GraphEdge struct {
-	ID     string `json:"id"`
-	Source string `json:"source"`
-	Target string `json:"target"`
-	Kind   string `json:"kind"`
-	Weight int    `json:"weight"`
+	ID            string `json:"id"`
+	Source        string `json:"source"`
+	Target        string `json:"target"`
+	Kind          string `json:"kind"`
+	Weight        int    `json:"weight"`
+	TargetHash    string `json:"targetHash,omitempty"`    // Hash of target file when link was created
+	SourceHash    string `json:"sourceHash,omitempty"`    // Hash of source file when link was created
+	LinkVersion   int    `json:"linkVersion,omitempty"`   // Version number when link was created
+	TargetUpdated bool   `json:"targetUpdated,omitempty"` // True if target file has been updated since link creation
 }
 
 // GraphData represents the complete graph structure
@@ -104,6 +128,11 @@ func NewApp() *App {
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	// NOTE: Multi-window support requires Wails v3 (currently in development)
+	// Uncomment when upgrading to Wails v3:
+	// if a.presenters == nil {
+	// 	a.presenters = make(map[string]*Presenter)
+	// }
 	// Determine base directory from executable location
 	exePath, err := os.Executable()
 	if err != nil {
@@ -185,6 +214,38 @@ func (a *App) initializeDataDirectory() error {
 		}
 	}
 
+	// Initialize Git repository
+	vcs, err := gitvcs.NewVCS(a.ctx, a.dataDir, a.logInfo)
+	if err != nil {
+		return fmt.Errorf("failed to initialize git repository: %v", err)
+	}
+	a.vcs = vcs
+
+	// Make initial commit if repository is new
+	_, err = vcs.Repository().Head()
+	if err != nil {
+		// No HEAD means it's a new repository, make initial commit
+		worktree, err := vcs.Repository().Worktree()
+		if err == nil {
+			// Add all files
+			worktree.Add(".")
+			// Make initial commit
+			_, err = worktree.Commit("Initial commit", &git.CommitOptions{
+				Author: &object.Signature{
+					Name:  "Karte User",
+					Email: "karte@localhost",
+					When:  time.Now(),
+				},
+			})
+			if err != nil {
+				a.logError(fmt.Sprintf("Failed to make initial commit: %v", err))
+				// Don't fail initialization if commit fails
+			} else {
+				a.logInfo("Created initial git commit")
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -216,19 +277,7 @@ func (a *App) GetFileList() []FileItem {
 
 			// Try to extract title from frontmatter
 			if b, err := os.ReadFile(p); err == nil {
-				s := string(b)
-				if strings.HasPrefix(s, "---") {
-					if i := strings.Index(s, "\n---"); i > 0 {
-						fm := s[:i]
-						for _, ln := range strings.Split(fm, "\n") {
-							if strings.HasPrefix(strings.TrimSpace(ln), "title:") {
-								title = strings.TrimSpace(strings.TrimPrefix(ln, "title:"))
-								title = strings.Trim(title, `"' `)
-								break
-							}
-						}
-					}
-				}
+				title = fm.ExtractTitle(string(b), title)
 			}
 			fileItem := FileItem{
 				Path:  filepath.ToSlash(rel),
@@ -317,9 +366,80 @@ func (a *App) SaveFile(path, content string) error {
 		return fmt.Errorf("invalid path: %s", path)
 	}
 
+	// Calculate hash before saving
+	var oldHash string
+	if existingContent, err := os.ReadFile(absPath); err == nil {
+		oldHash = gitvcs.CalculateHash(string(existingContent))
+	}
+
+	// Parse and format frontmatter before saving
+	frontMatter, markdownBody := fm.ParseFrontMatter(content)
+	if frontMatter != nil {
+		// Format frontmatter with normalized tags
+		formattedFM := fm.FormatFrontMatter(frontMatter)
+		content = formattedFM + markdownBody
+	}
+
+	// Detect conflict before saving
+	if a.vcs != nil {
+		relPath, err := filepath.Rel(a.dataDir, absPath)
+		if err == nil {
+			conflict, err := gitvcs.DetectConflict(a.vcs, a.dataDir, relPath)
+			if err != nil {
+				a.logError(fmt.Sprintf("Failed to detect conflict: %v", err))
+			} else if conflict != nil {
+				// Create backup before handling conflict
+				if err := a.createBackup(path, content); err != nil {
+					a.logError(fmt.Sprintf("Failed to create backup: %v", err))
+				}
+
+				// Try auto-merge for auto-resolvable or warning conflicts
+				if conflict.Severity == gitvcs.ConflictAutoResolvable || conflict.Severity == gitvcs.ConflictWarning {
+					merged, severity, err := gitvcs.AutoMergeMarkdown(conflict.BaseContent, conflict.LocalContent, conflict.RemoteContent)
+					if err == nil && severity != gitvcs.ConflictCritical {
+						// Auto-merge successful - use merged content
+						content = merged
+						runtime.EventsEmit(a.ctx, "auto-merge-success", map[string]interface{}{
+							"path":        path,
+							"merged_hash": gitvcs.CalculateHash(merged),
+						})
+						a.logInfo(fmt.Sprintf("Auto-merged conflict for file: %s", path))
+					} else {
+						// Auto-merge failed or still has conflicts - notify user
+						runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
+						if conflict.Severity == gitvcs.ConflictCritical {
+							return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
+						}
+					}
+				} else {
+					// Critical conflict - require manual resolution
+					runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
+					return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
+				}
+			}
+		}
+	}
+
+	// Save file
 	err := os.WriteFile(absPath, []byte(content), 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to write file: %v", err)
+	}
+
+	// Calculate new hash
+	newHash := gitvcs.CalculateHash(content)
+
+	// Commit to Git if content changed
+	if a.vcs != nil && oldHash != newHash {
+		// Get relative path from dataDir
+		relPath, err := filepath.Rel(a.dataDir, absPath)
+		if err == nil {
+			commitMessage := fmt.Sprintf("Update: %s", path)
+			if err := a.vcs.CommitFile(relPath, commitMessage); err != nil {
+				a.logError(fmt.Sprintf("Failed to commit file to git: %v", err))
+				// Don't fail save if git commit fails
+			}
+		}
 	}
 
 	// Build the site after saving
@@ -327,36 +447,175 @@ func (a *App) SaveFile(path, content string) error {
 		runtime.LogError(a.ctx, fmt.Sprintf("Failed to build site after save: %v", err))
 	}
 
-	// Broadcast file change to peers (disabled for now - will be implemented with git integration)
-	// if a.syncManager != nil {
-	// 	if err := a.syncManager.BroadcastFileChange(path, content); err != nil {
-	// 		runtime.LogError(a.ctx, fmt.Sprintf("Failed to broadcast file change: %v", err))
-	// 	}
-	// }
-
 	// Emit file changed event
 	runtime.EventsEmit(a.ctx, "file-changed", path)
 
 	return nil
 }
 
+// createBackup creates a backup of the file before conflict resolution
+func (a *App) createBackup(path, content string) error {
+	backupDir := filepath.Join(a.dataDir, ".backups")
+	if err := os.MkdirAll(backupDir, 0755); err != nil {
+		return fmt.Errorf("failed to create backup directory: %v", err)
+	}
+
+	timestamp := time.Now().Format("20060102_150405")
+	safePath := strings.ReplaceAll(path, "/", "_")
+	backupPath := filepath.Join(backupDir, fmt.Sprintf("%s_%s.md", safePath, timestamp))
+
+	if err := os.WriteFile(backupPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write backup: %v", err)
+	}
+
+	a.logInfo(fmt.Sprintf("Created backup: %s", backupPath))
+	return nil
+}
+
+// ResolveConflict resolves a file conflict using the specified strategy
+func (a *App) ResolveConflict(path, strategy string) error {
+	absPath, ok := a.resolveContentPath(path)
+	if !ok {
+		return fmt.Errorf("invalid path: %s", path)
+	}
+
+	if a.vcs == nil {
+		return fmt.Errorf("git repository not initialized")
+	}
+
+	relPath, err := filepath.Rel(a.dataDir, absPath)
+	if err != nil {
+		return fmt.Errorf("failed to get relative path: %v", err)
+	}
+
+	// Get conflict info
+	conflict, err := gitvcs.DetectConflict(a.vcs, a.dataDir, relPath)
+	if err != nil {
+		return fmt.Errorf("failed to detect conflict: %v", err)
+	}
+	if conflict == nil {
+		return nil // No conflict
+	}
+
+	var resolvedContent string
+	switch strategy {
+	case "local":
+		// Use local version
+		resolvedContent = conflict.LocalContent
+	case "remote":
+		// Use remote version
+		resolvedContent = conflict.RemoteContent
+	case "merge":
+		// Try to merge
+		merged, _, err := gitvcs.AutoMergeMarkdown(conflict.BaseContent, conflict.LocalContent, conflict.RemoteContent)
+		if err != nil {
+			return fmt.Errorf("auto-merge failed: %v", err)
+		}
+		resolvedContent = merged
+	default:
+		return fmt.Errorf("unknown strategy: %s", strategy)
+	}
+
+	// Save resolved content
+	if err := os.WriteFile(absPath, []byte(resolvedContent), 0644); err != nil {
+		return fmt.Errorf("failed to write resolved file: %v", err)
+	}
+
+	// Commit the resolution
+	commitMessage := fmt.Sprintf("Resolve conflict: %s (strategy: %s)", path, strategy)
+	if err := a.vcs.CommitFile(relPath, commitMessage); err != nil {
+		a.logError(fmt.Sprintf("Failed to commit conflict resolution: %v", err))
+	}
+
+	a.logInfo(fmt.Sprintf("Resolved conflict for %s using strategy: %s", path, strategy))
+	return nil
+}
+
 // PreviewMarkdown renders markdown content to HTML
 func (a *App) PreviewMarkdown(content string) (string, error) {
+	// Parse frontmatter to check if this is a Marp presentation
+	frontMatter, markdownBody := fm.ParseFrontMatter(content)
+
+	// Check if Marp mode is enabled
+	// Marp mode is enabled if:
+	// 1. marp: true is explicitly set
+	// 2. or Marp-specific fields (header, footer, paginate) are present
+	isMarpMode := false
+	header := ""
+	footer := ""
+	paginate := false
+	aspectRatio := "" // Default will be 16:9
+
+	if frontMatter != nil {
+		if frontMatter.Marp {
+			isMarpMode = true
+		}
+
+		// Extract header, footer, paginate, and aspectRatio from Raw
+		if frontMatter.Raw != nil {
+			if h, ok := frontMatter.Raw["header"].(string); ok {
+				header = h
+				isMarpMode = true // Header presence indicates Marp mode
+			}
+			if f, ok := frontMatter.Raw["footer"].(string); ok {
+				footer = f
+				isMarpMode = true // Footer presence indicates Marp mode
+			}
+			if p, ok := frontMatter.Raw["paginate"].(bool); ok {
+				paginate = p
+				isMarpMode = true // Paginate presence indicates Marp mode
+			}
+			if ar, ok := frontMatter.Raw["aspectRatio"].(string); ok {
+				aspectRatio = ar
+			}
+		}
+	}
+
+	if isMarpMode {
+		// Render as Marp presentation
+		slides := marp.ParseSlides(markdownBody)
+		title := frontMatter.Title
+		if title == "" {
+			title = "Presentation"
+		}
+
+		html := marp.RenderMarpHTML(slides, title, header, footer, paginate, aspectRatio)
+		return html, nil
+	}
+
+	// Regular markdown rendering
+	// Ensure markdownBody doesn't start with frontmatter markers
+	markdownBody = strings.TrimSpace(markdownBody)
+	if strings.HasPrefix(markdownBody, "---") {
+		// If body still starts with ---, try to find the end of frontmatter
+		if idx := strings.Index(markdownBody[3:], "\n---"); idx >= 0 {
+			markdownBody = strings.TrimSpace(markdownBody[idx+7:])
+		}
+	}
+
 	// Create a temporary file for rendering
-	tmpFile := filepath.Join(a.root, ".mdsys", "temp_preview.md")
+	tmpFile := filepath.Join(a.dataDir, ".mdsys", "temp_preview.md")
 	err := os.MkdirAll(filepath.Dir(tmpFile), 0o755)
 	if err != nil {
+		a.logError(fmt.Sprintf("PreviewMarkdown: failed to create temp directory: %v", err))
 		return "", fmt.Errorf("failed to create temp directory: %v", err)
 	}
 
-	err = os.WriteFile(tmpFile, []byte(content), 0o644)
+	err = os.WriteFile(tmpFile, []byte(markdownBody), 0o644)
 	if err != nil {
+		a.logError(fmt.Sprintf("PreviewMarkdown: failed to write temp file: %v", err))
 		return "", fmt.Errorf("failed to write temp file: %v", err)
 	}
-	defer os.Remove(tmpFile)
+	defer func() {
+		if removeErr := os.Remove(tmpFile); removeErr != nil {
+			a.logError(fmt.Sprintf("PreviewMarkdown: failed to remove temp file: %v", removeErr))
+		}
+	}()
 
-	html, _, err := site.RenderMarkdown(a.root, tmpFile)
+	// Use dataDir as root so that site.RenderMarkdown can find themes directory
+	html, _, err := site.RenderMarkdown(a.dataDir, tmpFile)
 	if err != nil {
+		a.logError(fmt.Sprintf("PreviewMarkdown: failed to render markdown: %v (root: %s, tmpFile: %s)", err, a.dataDir, tmpFile))
 		return "", fmt.Errorf("failed to render markdown: %v", err)
 	}
 
@@ -536,9 +795,31 @@ func (a *App) GetGraphData() (*GraphData, error) {
 		title := filepath.Base(filePath)
 		title = strings.TrimSuffix(title, ".md")
 
-		// フロントマターからタイトルを抽出
+		var fileHash string
+		var fileContent string
+
+		// ファイル内容を読み込み
+		var tags []string
+		var markdownBody string
 		if content, err := os.ReadFile(filepath.Join(a.dataDir, filePath)); err == nil {
-			title = a.extractTitleFromContent(string(content), title)
+			fileContent = string(content)
+			title = a.extractTitleFromContent(fileContent, title)
+			// タグを抽出
+			tags = fm.ExtractTags(fileContent)
+			// デバッグ: フロントマターのパース結果を確認
+			frontMatter, body := fm.ParseFrontMatter(fileContent)
+			if frontMatter != nil {
+				a.logInfo(fmt.Sprintf("File %s: frontmatter parsed - title: %q, tags: %q, theme: %q", filePath, frontMatter.Title, frontMatter.Tags, frontMatter.Theme))
+				a.logInfo(fmt.Sprintf("File %s: extracted tags: %v", filePath, tags))
+			} else {
+				a.logInfo(fmt.Sprintf("File %s: no frontmatter found", filePath))
+			}
+			markdownBody = body
+			if markdownBody == "" {
+				markdownBody = fileContent // フロントマターがない場合
+			}
+			// ハッシュを計算（フルコンテンツ）
+			fileHash = gitvcs.CalculateHash(fileContent)
 		}
 
 		// ノードを作成
@@ -549,12 +830,13 @@ func (a *App) GetGraphData() (*GraphData, error) {
 			Exists: true,
 			DegIn:  0,
 			DegOut: 0,
-			Tags:   []string{},
+			Tags:   tags,
+			Hash:   fileHash,
 		}
 
-		// ファイル内容を解析してリンクを抽出
-		if content, err := os.ReadFile(filepath.Join(a.dataDir, filePath)); err == nil {
-			links := a.extractLinks(string(content))
+		// ファイル内容を解析してリンクを抽出（フロントマターを除いた本文を使用）
+		if markdownBody != "" {
+			links := a.extractLinks(markdownBody)
 			a.logInfo(fmt.Sprintf("File %s: found %d links", filePath, len(links)))
 			for i, link := range links {
 				targetID := a.resolveLinkTarget(link, filePath)
@@ -564,16 +846,62 @@ func (a *App) GetGraphData() (*GraphData, error) {
 					edgeKey := nodeID + "->" + targetID
 					edgeCounts[edgeKey]++
 
-					// エッジを作成
-					edgeID := fmt.Sprintf("e_%s_%s", strings.ReplaceAll(nodeID, "/", "_"), strings.ReplaceAll(targetID, "/", "_"))
-					edges[edgeID] = &GraphEdge{
-						ID:     edgeID,
-						Source: nodeID,
-						Target: targetID,
-						Kind:   link.Kind,
-						Weight: edgeCounts[edgeKey],
+					// ターゲットファイルのハッシュを取得（現在のバージョン）
+					currentTargetHash := ""
+					if targetNode, exists := nodes[targetID]; exists {
+						currentTargetHash = targetNode.Hash
+					} else {
+						// ターゲットファイルがまだ処理されていない場合、ファイルを読み込んでハッシュを計算
+						if strings.HasPrefix(targetID, "doc:/") {
+							targetPath := strings.TrimPrefix(targetID, "doc:/")
+							targetFilePath := filepath.Join(a.dataDir, "content", targetPath)
+							if targetContent, err := os.ReadFile(targetFilePath); err == nil {
+								currentTargetHash = gitvcs.CalculateHash(string(targetContent))
+							}
+						}
 					}
-					a.logInfo(fmt.Sprintf("    Created edge: %s -> %s (weight: %d)", nodeID, targetID, edgeCounts[edgeKey]))
+
+					// エッジIDを生成
+					edgeID := fmt.Sprintf("e_%s_%s", strings.ReplaceAll(nodeID, "/", "_"), strings.ReplaceAll(targetID, "/", "_"))
+
+					// 既存のエッジがあるかチェックして、ターゲットの更新状況を判定
+					targetUpdated := false
+					storedTargetHash := currentTargetHash // デフォルトは現在のハッシュ
+
+					if existingEdge, exists := edges[edgeID]; exists && existingEdge.TargetHash != "" {
+						// 既存のエッジがあり、以前のターゲットハッシュが記録されている場合
+						storedTargetHash = existingEdge.TargetHash // 以前記録されたハッシュを保持
+
+						// 現在のターゲットハッシュと以前のハッシュを比較
+						if currentTargetHash != "" && storedTargetHash != "" && currentTargetHash != storedTargetHash {
+							targetUpdated = true
+						}
+					}
+
+					// エッジを作成または更新
+					edges[edgeID] = &GraphEdge{
+						ID:            edgeID,
+						Source:        nodeID,
+						Target:        targetID,
+						Kind:          link.Kind,
+						Weight:        edgeCounts[edgeKey],
+						SourceHash:    fileHash,
+						TargetHash:    storedTargetHash, // 以前のハッシュを保持（初回は現在のハッシュ）
+						TargetUpdated: targetUpdated,
+					}
+					sourceHashShort := ""
+					if len(fileHash) >= 8 {
+						sourceHashShort = fileHash[:8]
+					}
+					targetHashShort := ""
+					if len(storedTargetHash) >= 8 {
+						targetHashShort = storedTargetHash[:8]
+					}
+					updateStatus := ""
+					if targetUpdated {
+						updateStatus = " [TARGET UPDATED]"
+					}
+					a.logInfo(fmt.Sprintf("    Created edge: %s -> %s (weight: %d, sourceHash: %s, targetHash: %s)%s", nodeID, targetID, edgeCounts[edgeKey], sourceHashShort, targetHashShort, updateStatus))
 				}
 			}
 		} else {
@@ -590,14 +918,32 @@ func (a *App) GetGraphData() (*GraphData, error) {
 				title := filepath.Base(path)
 				title = strings.TrimSuffix(title, ".md")
 
-				nodes[edge.Target] = &GraphNode{
-					ID:     edge.Target,
-					Label:  title,
-					Kind:   "note",
-					Exists: false,
-					DegIn:  0,
-					DegOut: 0,
-					Tags:   []string{},
+				// ファイルが存在する場合はフロントマターからタイトルとタグを取得
+				var tags []string
+				filePath := filepath.Join(a.dataDir, "content", path)
+				if content, err := os.ReadFile(filePath); err == nil {
+					fileContent := string(content)
+					title = a.extractTitleFromContent(fileContent, title)
+					tags = fm.ExtractTags(fileContent)
+					nodes[edge.Target] = &GraphNode{
+						ID:     edge.Target,
+						Label:  title,
+						Kind:   "note",
+						Exists: true, // ファイルが存在する
+						DegIn:  0,
+						DegOut: 0,
+						Tags:   tags,
+					}
+				} else {
+					nodes[edge.Target] = &GraphNode{
+						ID:     edge.Target,
+						Label:  title,
+						Kind:   "note",
+						Exists: false,
+						DegIn:  0,
+						DegOut: 0,
+						Tags:   []string{},
+					}
 				}
 				a.logInfo(fmt.Sprintf("Created missing target node: %s", edge.Target))
 			} else if strings.HasPrefix(edge.Target, "img:/") {
@@ -623,14 +969,32 @@ func (a *App) GetGraphData() (*GraphData, error) {
 			title := filepath.Base(path)
 			title = strings.TrimSuffix(title, ".md")
 
-			nodes[edge.Source] = &GraphNode{
-				ID:     edge.Source,
-				Label:  title,
-				Kind:   "note",
-				Exists: false,
-				DegIn:  0,
-				DegOut: 0,
-				Tags:   []string{},
+			// ファイルが存在する場合はフロントマターからタイトルとタグを取得
+			var tags []string
+			filePath := filepath.Join(a.dataDir, "content", path)
+			if content, err := os.ReadFile(filePath); err == nil {
+				fileContent := string(content)
+				title = a.extractTitleFromContent(fileContent, title)
+				tags = fm.ExtractTags(fileContent)
+				nodes[edge.Source] = &GraphNode{
+					ID:     edge.Source,
+					Label:  title,
+					Kind:   "note",
+					Exists: true, // ファイルが存在する
+					DegIn:  0,
+					DegOut: 0,
+					Tags:   tags,
+				}
+			} else {
+				nodes[edge.Source] = &GraphNode{
+					ID:     edge.Source,
+					Label:  title,
+					Kind:   "note",
+					Exists: false,
+					DegIn:  0,
+					DegOut: 0,
+					Tags:   []string{},
+				}
 			}
 			a.logInfo(fmt.Sprintf("Created missing source node: %s", edge.Source))
 		}
@@ -646,6 +1010,44 @@ func (a *App) GetGraphData() (*GraphData, error) {
 		}
 	}
 
+	// 永続化されたリンク情報を読み込む
+	linkInfoPath := filepath.Join(a.dataDir, ".mdsys", "links.json")
+	persistedLinks := make(map[string]*GraphEdge)
+	if linkData, err := os.ReadFile(linkInfoPath); err == nil {
+		var persistedEdges []GraphEdge
+		if err := json.Unmarshal(linkData, &persistedEdges); err == nil {
+			for i := range persistedEdges {
+				persistedLinks[persistedEdges[i].ID] = &persistedEdges[i]
+			}
+			a.logInfo(fmt.Sprintf("Loaded %d persisted link records", len(persistedLinks)))
+		}
+	}
+
+	// 永続化された情報とマージして、ターゲット更新を検出
+	for edgeID, edge := range edges {
+		if persistedEdge, exists := persistedLinks[edgeID]; exists && persistedEdge.TargetHash != "" {
+			// 永続化されたハッシュがある場合、それと比較
+			currentHash := ""
+			if targetNode, exists := nodes[edge.Target]; exists {
+				currentHash = targetNode.Hash
+			} else if strings.HasPrefix(edge.Target, "doc:/") {
+				targetPath := strings.TrimPrefix(edge.Target, "doc:/")
+				targetFilePath := filepath.Join(a.dataDir, "content", targetPath)
+				if targetContent, err := os.ReadFile(targetFilePath); err == nil {
+					currentHash = gitvcs.CalculateHash(string(targetContent))
+				}
+			}
+
+			if currentHash != "" && persistedEdge.TargetHash != currentHash {
+				edge.TargetUpdated = true
+				a.logInfo(fmt.Sprintf("Target updated detected for edge %s: old=%s, new=%s", edgeID, persistedEdge.TargetHash[:8], currentHash[:8]))
+			}
+			// 永続化されたハッシュを保持（リンク作成時のハッシュ）
+			edge.TargetHash = persistedEdge.TargetHash
+		}
+		// 新しいエッジの場合、現在のハッシュが既にedge.TargetHashに設定されている
+	}
+
 	// スライスに変換
 	var nodeList []GraphNode
 	for _, node := range nodes {
@@ -655,6 +1057,66 @@ func (a *App) GetGraphData() (*GraphData, error) {
 	var edgeList []GraphEdge
 	for _, edge := range edges {
 		edgeList = append(edgeList, *edge)
+	}
+
+	// タグノードを作成し、同じタグを持つドキュメントと接続
+	tagNodes := make(map[string]*GraphNode)
+	tagNodeCount := 0
+	for _, node := range nodeList {
+		if len(node.Tags) > 0 {
+			a.logInfo(fmt.Sprintf("Node %s has %d tags: %v", node.ID, len(node.Tags), node.Tags))
+		}
+		for _, tag := range node.Tags {
+			if tag == "" {
+				continue
+			}
+			tagID := "tag:/" + tag
+
+			// タグノードが存在しない場合は作成
+			if _, exists := tagNodes[tagID]; !exists {
+				tagNodes[tagID] = &GraphNode{
+					ID:     tagID,
+					Label:  "#" + tag,
+					Kind:   "tag",
+					Exists: true,
+					DegIn:  0,
+					DegOut: 0,
+					Tags:   []string{},
+				}
+				tagNodeCount++
+				a.logInfo(fmt.Sprintf("Creating tag node: %s (label: #%s)", tagID, tag))
+			}
+
+			// ドキュメントノードとタグノードを接続するエッジを作成
+			edgeID := fmt.Sprintf("tag_edge_%s_%s", strings.ReplaceAll(node.ID, "/", "_"), strings.ReplaceAll(tagID, "/", "_"))
+			edgeList = append(edgeList, GraphEdge{
+				ID:     edgeID,
+				Source: node.ID,
+				Target: tagID,
+				Kind:   "tag",
+				Weight: 1,
+			})
+			a.logInfo(fmt.Sprintf("Created tag edge: %s -> %s", node.ID, tagID))
+
+			// タグノードの入次数を増やす
+			tagNodes[tagID].DegIn++
+			// ドキュメントノードの出次数を増やす（既にカウントされている可能性があるが、念のため）
+		}
+	}
+
+	// タグノードをノードリストに追加
+	for _, tagNode := range tagNodes {
+		nodeList = append(nodeList, *tagNode)
+	}
+	a.logInfo(fmt.Sprintf("Created %d tag nodes (total nodes: %d, total edges: %d)", tagNodeCount, len(nodeList), len(edgeList)))
+
+	// リンク情報を永続化
+	if linkInfoJSON, err := json.MarshalIndent(edgeList, "", "  "); err == nil {
+		if err := os.MkdirAll(filepath.Dir(linkInfoPath), 0755); err == nil {
+			if err := os.WriteFile(linkInfoPath, linkInfoJSON, 0644); err == nil {
+				a.logInfo(fmt.Sprintf("Saved %d link records to %s", len(edgeList), linkInfoPath))
+			}
+		}
 	}
 
 	// デバッグ用：ノードIDとエッジの詳細をログ出力
@@ -694,7 +1156,7 @@ func (a *App) ExportPreviewHTML(html string) (string, error) {
 	filename := fmt.Sprintf("preview-%s.html", time.Now().Format("20060102-150405"))
 	fp := filepath.Join(exportDir, filename)
 	if err := os.WriteFile(fp, []byte(html), 0644); err != nil {
-		return "", fmt.Errorf("failed to write export file: %v")
+		return "", fmt.Errorf("failed to write export file: %v", err)
 	}
 	a.logInfo(fmt.Sprintf("Exported preview HTML: %s", fp))
 	// Build file URL
@@ -721,6 +1183,65 @@ func (a *App) ExportPDF(html string) (string, error) {
 	a.logInfo(fmt.Sprintf("PDF exported: %s", pdfPath))
 	return pdfPath, nil
 }
+
+// ---- Presenter multi-window APIs ----
+// NOTE: Multi-window support requires Wails v3 (currently in development)
+// Uncomment when upgrading to Wails v3:
+
+// OpenPresenter opens or focuses a presenter window for the specified document id.
+// docID should be a content path like "content/xxx.md".
+// func (a *App) OpenPresenter(docID, title string) error {
+// 	if docID == "" {
+// 		return fmt.Errorf("docID is required")
+// 	}
+// 	if a.presenters == nil {
+// 		a.presenters = make(map[string]*Presenter)
+// 	}
+// 	// If already exists, just focus
+// 	if p, ok := a.presenters[docID]; ok && p != nil && p.win != nil {
+// 		runtime.WindowShow(p.win)
+// 		runtime.WindowFocus(p.win)
+// 		return nil
+// 	}
+// 	// Create new window
+// 	opts := &runtime.WindowOptions{
+// 		Title:  fmt.Sprintf("Presenter - %s", title),
+// 		Width:  1280,
+// 		Height: 720,
+// 		Center: true,
+// 		URL:    "index.html#presenter",
+// 	}
+// 	win, wctx, err := runtime.NewWindow(a.ctx, opts)
+// 	if err != nil {
+// 		return fmt.Errorf("failed to create presenter window: %v", err)
+// 	}
+// 	p := &Presenter{win: win, ctx: wctx, docID: docID}
+// 	a.presenters[docID] = p
+// 	// cleanup on close
+// 	runtime.WindowOnClose(wctx, func() {
+// 		delete(a.presenters, docID)
+// 	})
+// 	// notify presenter window of doc id
+// 	runtime.EventsEmit(wctx, "presenter:init", map[string]any{"docId": docID})
+// 	return nil
+// }
+
+// UpdatePresenter pushes latest HTML and slide index to presenter window.
+// func (a *App) UpdatePresenter(docID, html string, index, total int) {
+// 	if a.presenters == nil {
+// 		return
+// 	}
+// 	if p, ok := a.presenters[docID]; ok && p != nil {
+// 		runtime.EventsEmit(p.ctx, "presenter:render", map[string]any{"html": html})
+// 		runtime.EventsEmit(p.ctx, "presenter:slide", map[string]any{"index": index, "total": total})
+// 	}
+// }
+
+// PresenterSlideChanged is invoked from presenter window to inform editor about slide change.
+// func (a *App) PresenterSlideChanged(docID string, index int) {
+// 	// Re-broadcast to main window(s)
+// 	runtime.EventsEmit(a.ctx, "editor:slide", map[string]any{"docId": docID, "index": index})
+// }
 
 // ---- Custom CSS (preview-only) management ----
 
@@ -776,20 +1297,7 @@ type LinkInfo struct {
 
 // extractTitleFromContent extracts title from frontmatter
 func (a *App) extractTitleFromContent(content, defaultTitle string) string {
-	if strings.HasPrefix(content, "---") {
-		if i := strings.Index(content, "\n---"); i > 0 {
-			fm := content[:i]
-			for _, line := range strings.Split(fm, "\n") {
-				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "title:") {
-					title := strings.TrimSpace(strings.TrimPrefix(line, "title:"))
-					title = strings.Trim(title, `"' `)
-					return title
-				}
-			}
-		}
-	}
-	return defaultTitle
+	return fm.ExtractTitle(content, defaultTitle)
 }
 
 // extractLinks extracts various types of links from markdown content

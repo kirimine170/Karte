@@ -32,6 +32,10 @@ export namespace main {
 	    target: string;
 	    kind: string;
 	    weight: number;
+	    targetHash?: string;
+	    sourceHash?: string;
+	    linkVersion?: number;
+	    targetUpdated?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new GraphEdge(source);
@@ -44,6 +48,10 @@ export namespace main {
 	        this.target = source["target"];
 	        this.kind = source["kind"];
 	        this.weight = source["weight"];
+	        this.targetHash = source["targetHash"];
+	        this.sourceHash = source["sourceHash"];
+	        this.linkVersion = source["linkVersion"];
+	        this.targetUpdated = source["targetUpdated"];
 	    }
 	}
 	export class GraphNode {
@@ -54,6 +62,7 @@ export namespace main {
 	    degIn: number;
 	    degOut: number;
 	    tags: string[];
+	    hash?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new GraphNode(source);
@@ -68,6 +77,7 @@ export namespace main {
 	        this.degIn = source["degIn"];
 	        this.degOut = source["degOut"];
 	        this.tags = source["tags"];
+	        this.hash = source["hash"];
 	    }
 	}
 	export class GraphData {
