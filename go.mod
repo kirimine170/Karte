@@ -4,6 +4,7 @@ go 1.23.0
 
 require (
 	github.com/go-git/go-git/v5 v5.13.2
+	github.com/jung-kurt/gofpdf v1.16.2
 	github.com/wailsapp/wails/v2 v2.10.2
 	github.com/yuin/goldmark v1.7.4
 	gopkg.in/yaml.v3 v3.0.1
@@ -25,7 +26,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
-	github.com/jchv/go-winloader v0.0.0-20210711035445-715c2860da7e // indirect
+	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
 	github.com/kevinburke/ssh_config v1.2.0 // indirect
 	github.com/labstack/echo/v4 v4.13.3 // indirect
 	github.com/labstack/gommon v0.4.2 // indirect
