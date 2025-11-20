@@ -1,0 +1,33 @@
+[
+  {
+    "name": "windows",
+    "platform": "windows/amd64",
+    "artifactDir": "dist/windows",
+    "env": {
+      "GOOS": "windows",
+      "GOARCH": "amd64"
+    },
+    "flags": []
+  },
+  {
+    "name": "darwin",
+    "platform": "darwin/universal",
+    "artifactDir": "dist/darwin",
+    "env": {
+      "GOOS": "darwin",
+      "GOARCH": "amd64"
+    },
+    "flags": []
+  },
+  {
+    "name": "linux",
+    "platform": "linux/amd64",
+    "artifactDir": "dist/linux",
+    "env": {
+      "GOOS": "linux",
+      "GOARCH": "amd64"
+    },
+    "flags": []
+  }
+]
+
