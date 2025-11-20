@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -60,9 +61,10 @@ func DecodeToPCM(ctx context.Context, path string, sampleRate int) (int, []float
 	if sampleRate <= 0 {
 		sampleRate = DefaultSampleRate
 	}
-	ffmpegPath, err := exec.LookPath("ffmpeg")
+
+	ffmpegPath, err := findFFmpeg()
 	if err != nil {
-		return 0, nil, fmt.Errorf("ffmpeg not found in PATH: %w", err)
+		return 0, nil, err
 	}
 
 	cmd := exec.CommandContext(ctx, ffmpegPath,
@@ -107,4 +109,219 @@ func DecodeToPCM(ctx context.Context, path string, sampleRate int) (int, []float
 	}
 
 	return sampleRate, samples, nil
+}
+
+// ConvertToPCM16Wav converts the given audio file into a temporary 16-bit mono WAV file.
+// Caller must invoke the returned cleanup function.
+func ConvertToPCM16Wav(ctx context.Context, srcPath string, sampleRate int) (string, func(), error) {
+	if sampleRate <= 0 {
+		sampleRate = DefaultSampleRate
+	}
+
+	ffmpegPath, err := findFFmpeg()
+	if err != nil {
+		return "", nil, err
+	}
+
+	tmpFile, err := os.CreateTemp("", "karte-pcm-*.wav")
+	if err != nil {
+		return "", nil, fmt.Errorf("create temp wav: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+
+	cmd := exec.CommandContext(ctx, ffmpegPath,
+		"-i", srcPath,
+		"-ac", "1",
+		"-ar", fmt.Sprintf("%d", sampleRate),
+		"-f", "wav",
+		"-y",
+		tmpPath,
+	)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		os.Remove(tmpPath)
+		return "", nil, fmt.Errorf("ffmpeg wav convert failed: %w (stderr: %s)", err, stderr.String())
+	}
+
+	cleanup := func() {
+		os.Remove(tmpPath)
+	}
+
+	return tmpPath, cleanup, nil
+}
+
+// StreamWavChunks reads a PCM WAV file and feeds samples chunk by chunk to handler.
+// chunkSamples specifies how many samples per callback; if <=0, a 0.5s chunk is used.
+func StreamWavChunks(wavPath string, chunkSamples int, handler func(sampleRate int, chunk []float32) error) error {
+	file, err := os.Open(wavPath)
+	if err != nil {
+		return fmt.Errorf("open wav: %w", err)
+	}
+	defer file.Close()
+
+	// Parse RIFF header
+	var riffHeader [12]byte
+	if _, err := io.ReadFull(file, riffHeader[:]); err != nil {
+		return fmt.Errorf("read RIFF header: %w", err)
+	}
+	if string(riffHeader[0:4]) != "RIFF" || string(riffHeader[8:12]) != "WAVE" {
+		return fmt.Errorf("not a RIFF/WAVE file")
+	}
+
+	var (
+		sampleRate    uint32
+		numChannels   uint16
+		bitsPerSample uint16
+		dataSize      uint32
+		dataOffset    int64
+	)
+
+	for {
+		var chunkID [4]byte
+		var chunkSize uint32
+		if _, err := io.ReadFull(file, chunkID[:]); err != nil {
+			return fmt.Errorf("read chunk id: %w", err)
+		}
+		if err := binary.Read(file, binary.LittleEndian, &chunkSize); err != nil {
+			return fmt.Errorf("read chunk size: %w", err)
+		}
+		chunkStart, _ := file.Seek(0, io.SeekCurrent)
+
+		switch string(chunkID[:]) {
+		case "fmt ":
+			var audioFormat uint16
+			if err := binary.Read(file, binary.LittleEndian, &audioFormat); err != nil {
+				return fmt.Errorf("read audio format: %w", err)
+			}
+			if err := binary.Read(file, binary.LittleEndian, &numChannels); err != nil {
+				return fmt.Errorf("read channels: %w", err)
+			}
+			if err := binary.Read(file, binary.LittleEndian, &sampleRate); err != nil {
+				return fmt.Errorf("read sample rate: %w", err)
+			}
+			var byteRate uint32
+			if err := binary.Read(file, binary.LittleEndian, &byteRate); err != nil {
+				return fmt.Errorf("read byte rate: %w", err)
+			}
+			var blockAlign uint16
+			if err := binary.Read(file, binary.LittleEndian, &blockAlign); err != nil {
+				return fmt.Errorf("read block align: %w", err)
+			}
+			if err := binary.Read(file, binary.LittleEndian, &bitsPerSample); err != nil {
+				return fmt.Errorf("read bits per sample: %w", err)
+			}
+			if audioFormat != 1 {
+				return fmt.Errorf("unsupported audio format: %d", audioFormat)
+			}
+		case "data":
+			dataSize = chunkSize
+			dataOffset = chunkStart
+		default:
+			// skip unknown chunk
+		}
+
+		if _, err := file.Seek(chunkStart+int64(chunkSize), io.SeekStart); err != nil {
+			return fmt.Errorf("seek next chunk: %w", err)
+		}
+
+		if dataSize > 0 && sampleRate > 0 && bitsPerSample > 0 {
+			break
+		}
+	}
+
+	if dataSize == 0 || sampleRate == 0 || bitsPerSample == 0 {
+		return fmt.Errorf("invalid wav header (missing data/fmt)")
+	}
+
+	if _, err := file.Seek(dataOffset, io.SeekStart); err != nil {
+		return fmt.Errorf("seek data chunk: %w", err)
+	}
+
+	if chunkSamples <= 0 {
+		chunkSamples = int(sampleRate) / 2
+		if chunkSamples <= 0 {
+			chunkSamples = int(sampleRate)
+		}
+	}
+
+	bytesPerSample := int(bitsPerSample / 8)
+	frameSize := bytesPerSample * int(numChannels)
+	rawBuf := make([]byte, chunkSamples*frameSize)
+	floatBuf := make([]float32, chunkSamples)
+
+	reader := io.LimitReader(file, int64(dataSize))
+	for {
+		n, err := reader.Read(rawBuf)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read data chunk: %w", err)
+		}
+		if n == 0 {
+			break
+		}
+
+		sampleCount := n / frameSize
+		if sampleCount == 0 {
+			continue
+		}
+
+		if numChannels == 1 {
+			for i := 0; i < sampleCount; i++ {
+				offset := i * bytesPerSample
+				sample := int16(binary.LittleEndian.Uint16(rawBuf[offset : offset+bytesPerSample]))
+				floatBuf[i] = float32(sample) / 32768.0
+			}
+		} else {
+			step := frameSize
+			for i := 0; i < sampleCount; i++ {
+				var sum float32
+				for ch := 0; ch < int(numChannels); ch++ {
+					offset := i*step + ch*bytesPerSample
+					sample := int16(binary.LittleEndian.Uint16(rawBuf[offset : offset+bytesPerSample]))
+					sum += float32(sample) / 32768.0
+				}
+				floatBuf[i] = sum / float32(numChannels)
+			}
+		}
+
+		if err := handler(int(sampleRate), floatBuf[:sampleCount]); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// findFFmpeg tries to locate ffmpeg in PATH and common install locations.
+func findFFmpeg() (string, error) {
+	// 1) Respect explicit override
+	if custom := os.Getenv("FFMPEG_PATH"); custom != "" {
+		if _, err := os.Stat(custom); err == nil {
+			return custom, nil
+		}
+	}
+
+	// 2) Normal PATH lookup
+	if p, err := exec.LookPath("ffmpeg"); err == nil {
+		return p, nil
+	}
+
+	// 3) Common macOS locations (Homebrew / Intel Homebrew)
+	common := []string{
+		"/opt/homebrew/bin/ffmpeg",
+		"/usr/local/bin/ffmpeg",
+	}
+	for _, c := range common {
+		if _, err := os.Stat(c); err == nil {
+			return c, nil
+		}
+	}
+
+	return "", fmt.Errorf("ffmpeg not found; install it (e.g. 'brew install ffmpeg') or set FFMPEG_PATH")
 }

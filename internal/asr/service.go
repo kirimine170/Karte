@@ -65,10 +65,11 @@ func (s *Service) TranscribeFile(ctx context.Context, audioPath string) (string,
 		return "", errors.New("asr recognizer is not initialized")
 	}
 
-	sampleRate, samples, err := audio.DecodeToPCM(ctx, audioPath, s.cfg.SampleRate)
+	tempWav, cleanup, err := audio.ConvertToPCM16Wav(ctx, audioPath, s.cfg.SampleRate)
 	if err != nil {
-		return "", fmt.Errorf("decode audio: %w", err)
+		return "", fmt.Errorf("prepare pcm audio: %w", err)
 	}
+	defer cleanup()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -79,7 +80,18 @@ func (s *Service) TranscribeFile(ctx context.Context, audioPath string) (string,
 	}
 	defer sherpa.DeleteOfflineStream(stream)
 
-	stream.AcceptWaveform(sampleRate, samples)
+	chunkSize := s.cfg.SampleRate / 2
+	if chunkSize < 4000 {
+		chunkSize = s.cfg.SampleRate
+	}
+	err = audio.StreamWavChunks(tempWav, chunkSize, func(sampleRate int, chunk []float32) error {
+		stream.AcceptWaveform(sampleRate, chunk)
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("stream audio: %w", err)
+	}
+
 	s.recognizer.Decode(stream)
 	result := stream.GetResult()
 
