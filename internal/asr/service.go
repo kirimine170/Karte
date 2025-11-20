@@ -53,7 +53,7 @@ func (s *Service) Close() {
 }
 
 // TranscribeFile decodes a single audio file into plain text.
-func (s *Service) TranscribeFile(ctx context.Context, audioPath string) (string, error) {
+func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress func(line string)) (string, error) {
 	if s == nil {
 		return "", errors.New("asr service is nil")
 	}
@@ -92,8 +92,74 @@ func (s *Service) TranscribeFile(ctx context.Context, audioPath string) (string,
 		return "", fmt.Errorf("stream audio: %w", err)
 	}
 
-	s.recognizer.Decode(stream)
-	result := stream.GetResult()
+	var transcript strings.Builder
+	vad := audio.DefaultSimpleVAD()
+	var segmentStream *sherpa.OfflineStream
+	segmentSamples := 0
+	maxSegmentSamples := s.cfg.SampleRate * 15 // 15秒で強制フラッシュ
 
-	return strings.TrimSpace(result.Text), nil
+	finalizeSegment := func() {
+		if segmentStream == nil {
+			return
+		}
+		defer func() {
+			sherpa.DeleteOfflineStream(segmentStream)
+			segmentStream = nil
+			segmentSamples = 0
+		}()
+
+		s.recognizer.Decode(segmentStream)
+		text := strings.TrimSpace(segmentStream.GetResult().Text)
+		if text != "" {
+			appendLines(&transcript, text, progress)
+		}
+	}
+
+	chunkSamples := s.cfg.SampleRate / 100 // 10ms フレーム
+	if chunkSamples < 160 {
+		chunkSamples = 160
+	}
+
+	if err := audio.StreamWavChunks(tempWav, chunkSamples, func(sampleRate int, chunk []float32) error {
+		isSpeech, flush := vad.Process(chunk)
+		if isSpeech {
+			if segmentStream == nil {
+				segmentStream = sherpa.NewOfflineStream(s.recognizer)
+				if segmentStream == nil {
+					return fmt.Errorf("failed to create offline stream")
+				}
+			}
+			segmentSamples += len(chunk)
+			segmentStream.AcceptWaveform(sampleRate, chunk)
+			if segmentSamples >= maxSegmentSamples {
+				finalizeSegment()
+				vad.Reset()
+			}
+		}
+		if flush {
+			finalizeSegment()
+			vad.Reset()
+		}
+		return nil
+	}); err != nil {
+		return "", fmt.Errorf("stream audio: %w", err)
+	}
+
+	finalizeSegment()
+
+	return strings.TrimSpace(transcript.String()), nil
+}
+
+func appendLines(buf *strings.Builder, portion string, progress func(line string)) {
+	for _, line := range strings.Split(portion, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		buf.WriteString(line)
+		buf.WriteRune('\n')
+		if progress != nil {
+			progress(line)
+		}
+	}
 }

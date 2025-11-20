@@ -39,6 +39,7 @@ type App struct {
 	syncManager *sync.SyncManager
 	vcs         *gitvcs.VCS
 	asrService  *asr.Service
+	asrInitDone chan struct{}
 	// NOTE: Multi-window support requires Wails v3 (currently in development)
 	// Uncomment when upgrading to Wails v3:
 	// presenter windows keyed by document id (e.g., "content/xxx.md")
@@ -167,11 +168,15 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 
-	if err := a.initASRService(); err != nil {
-		runtime.LogError(ctx, fmt.Sprintf("Failed to initialize ASR service: %v", err))
-	} else if a.asrService != nil {
-		a.logInfo("ASR service initialized")
-	}
+	a.asrInitDone = make(chan struct{})
+	go func() {
+		if err := a.initASRService(); err != nil {
+			runtime.LogError(ctx, fmt.Sprintf("Failed to initialize ASR service: %v", err))
+		} else if a.asrService != nil {
+			a.logInfo("ASR service initialized")
+		}
+		close(a.asrInitDone)
+	}()
 
 	a.logInfo(fmt.Sprintf("Karte started. root=%s dataDir=%s exeDir=%s", a.root, a.dataDir, exeDir))
 
@@ -975,7 +980,7 @@ func (a *App) importAudioFromReader(originalName string, src io.Reader) (string,
 }
 
 func (a *App) startTranscriptionJob(absAudioPath, relAudioPath string) {
-	if a.asrService == nil {
+	if ready := a.waitForASRReady(); !ready {
 		a.logInfo("ASR service not configured; skipping transcription")
 		return
 	}
@@ -984,19 +989,9 @@ func (a *App) startTranscriptionJob(absAudioPath, relAudioPath string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer cancel()
 
-		text, err := a.asrService.TranscribeFile(ctx, absAudioPath)
+		transcriptPath, err := a.startStreamingTranscription(ctx, absAudioPath, relAudioPath)
 		if err != nil {
 			a.logError(fmt.Sprintf("ASR failed for %s: %v", relAudioPath, err))
-			runtime.EventsEmit(a.ctx, "audio-transcribed", map[string]interface{}{
-				"audioPath": relAudioPath,
-				"error":     err.Error(),
-			})
-			return
-		}
-
-		transcriptPath, err := a.writeTranscriptDocument(relAudioPath, text)
-		if err != nil {
-			a.logError(fmt.Sprintf("Failed to write transcript for %s: %v", relAudioPath, err))
 			runtime.EventsEmit(a.ctx, "audio-transcribed", map[string]interface{}{
 				"audioPath": relAudioPath,
 				"error":     err.Error(),
@@ -1009,6 +1004,32 @@ func (a *App) startTranscriptionJob(absAudioPath, relAudioPath string) {
 			"transcriptPath": transcriptPath,
 		})
 	}()
+}
+
+func (a *App) startStreamingTranscription(ctx context.Context, absAudioPath, relAudioPath string) (string, error) {
+	transcriptPath, err := a.writeTranscriptDocument(relAudioPath, "")
+	if err != nil {
+		return "", err
+	}
+
+	progressHandler := func(line string) {
+		a.appendTranscriptLine(transcriptPath, line)
+		runtime.EventsEmit(a.ctx, "audio-transcribe-progress", map[string]interface{}{
+			"audioPath":      relAudioPath,
+			"transcriptPath": transcriptPath,
+			"text":           line,
+		})
+	}
+
+	text, err := a.asrService.TranscribeFile(ctx, absAudioPath, progressHandler)
+	if err != nil {
+		return "", err
+	}
+
+	if strings.TrimSpace(text) == "" {
+		a.appendTranscriptLine(transcriptPath, "_（ASRから有効な結果が得られませんでした）_")
+	}
+	return transcriptPath, nil
 }
 
 func (a *App) writeTranscriptDocument(audioRelPath, transcript string) (string, error) {
@@ -1058,11 +1079,6 @@ func (a *App) writeTranscriptDocument(audioRelPath, transcript string) (string, 
 
 func (a *App) composeTranscriptMarkdown(audioRelPath, transcript string) string {
 	now := time.Now().Format(time.RFC3339)
-	transcript = strings.TrimSpace(transcript)
-	if transcript == "" {
-		transcript = "_（ASRから有効な結果が得られませんでした）_"
-	}
-
 	return fmt.Sprintf(`---
 title: %q
 tags:
@@ -1075,7 +1091,23 @@ audio_path: %q
 ## Transcript
 
 %s
-`, fmt.Sprintf("Transcript %s", filepath.Base(audioRelPath)), now, audioRelPath, transcript)
+`, fmt.Sprintf("Transcript %s", filepath.Base(audioRelPath)), now, audioRelPath, strings.TrimSpace(transcript))
+}
+
+func (a *App) appendTranscriptLine(contentRel, line string) {
+	absPath, ok := a.resolveContentPath(contentRel)
+	if !ok {
+		return
+	}
+	f, err := os.OpenFile(absPath, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		a.logError(fmt.Sprintf("Failed to append transcript line: %v", err))
+		return
+	}
+	defer f.Close()
+	if _, err := f.WriteString(line + "\n\n"); err != nil {
+		a.logError(fmt.Sprintf("Failed to write transcript: %v", err))
+	}
 }
 
 func (a *App) initASRService() error {
@@ -1095,6 +1127,21 @@ func (a *App) initASRService() error {
 	}
 	a.asrService = svc
 	return nil
+}
+
+func (a *App) waitForASRReady() bool {
+	if a.asrService != nil {
+		return true
+	}
+	if a.asrInitDone == nil {
+		return false
+	}
+	select {
+	case <-a.asrInitDone:
+		return a.asrService != nil
+	case <-time.After(30 * time.Second):
+		return a.asrService != nil
+	}
 }
 
 func copyFile(src, dst string) error {
