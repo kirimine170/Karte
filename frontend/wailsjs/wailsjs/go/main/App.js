@@ -46,6 +46,14 @@ export function GetGraphData() {
   return window['go']['main']['App']['GetGraphData']();
 }
 
+export function ImportAudioBase64(arg1, arg2) {
+  return window['go']['main']['App']['ImportAudioBase64'](arg1, arg2);
+}
+
+export function ImportAudioFile(arg1) {
+  return window['go']['main']['App']['ImportAudioFile'](arg1);
+}
+
 export function InitProject() {
   return window['go']['main']['App']['InitProject']();
 }

@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
@@ -13,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"karte/internal/asr"
+	"karte/internal/audio"
 	fm "karte/internal/frontmatter"
 	gitvcs "karte/internal/git"
 	"karte/internal/marp"
@@ -33,6 +38,7 @@ type App struct {
 	logFilePath string
 	syncManager *sync.SyncManager
 	vcs         *gitvcs.VCS
+	asrService  *asr.Service
 	// NOTE: Multi-window support requires Wails v3 (currently in development)
 	// Uncomment when upgrading to Wails v3:
 	// presenter windows keyed by document id (e.g., "content/xxx.md")
@@ -161,6 +167,12 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 
+	if err := a.initASRService(); err != nil {
+		runtime.LogError(ctx, fmt.Sprintf("Failed to initialize ASR service: %v", err))
+	} else if a.asrService != nil {
+		a.logInfo("ASR service initialized")
+	}
+
 	a.logInfo(fmt.Sprintf("Karte started. root=%s dataDir=%s exeDir=%s", a.root, a.dataDir, exeDir))
 
 	// Initialize sync manager (disabled for now - will be implemented with git integration)
@@ -170,15 +182,41 @@ func (a *App) startup(ctx context.Context) {
 	// }
 }
 
+// shutdown is invoked by Wails when the app is closing.
+func (a *App) shutdown(ctx context.Context) {
+	if a.asrService != nil {
+		a.asrService.Close()
+		a.asrService = nil
+	}
+}
+
 // initializeDataDirectory creates and initializes the karte_data directory structure
 func (a *App) initializeDataDirectory() error {
-	// Create karte_data directory if it doesn't exist
+	// Ensure base directory exists
 	if err := os.MkdirAll(a.dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %v", err)
 	}
 
+	// Try to overlay template contents (if available)
+	if templatePath := a.findTemplatePath(); templatePath != "" {
+		if err := a.copyTemplateToDataDir(templatePath); err != nil {
+			a.logError(fmt.Sprintf("Failed to overlay template %s: %v", templatePath, err))
+		} else {
+			a.logInfo(fmt.Sprintf("Overlaid karte_data_template from %s", templatePath))
+		}
+	}
+
 	// Create subdirectories
-	subdirs := []string{"content", "data", "themes", "public", ".mdsys"}
+	subdirs := []string{
+		"content",
+		filepath.Join("content", "transcripts"),
+		"data",
+		filepath.Join("data", "audio"),
+		filepath.Join("data", "asr"),
+		"themes",
+		"public",
+		".mdsys",
+	}
 	for _, subdir := range subdirs {
 		dirPath := filepath.Join(a.dataDir, subdir)
 		if err := os.MkdirAll(dirPath, 0755); err != nil {
@@ -204,6 +242,23 @@ func (a *App) initializeDataDirectory() error {
 		filepath.Join(a.dataDir, "content", "README.md"): "# Welcome to Karte\n\nThis is your first document. Start writing!",
 		filepath.Join(a.dataDir, ".mdsys", "index.json"): "{}",
 		filepath.Join(a.dataDir, ".mdsys", "graph.json"): "{}",
+		filepath.Join(a.dataDir, "data", "asr", "config.json"): `{
+  "enabled": false,
+  "sampleRate": 16000,
+  "model": {
+    "tokens": "",
+    "encoder": "",
+    "decoder": "",
+    "joiner": ""
+  },
+  "decoding": {
+    "method": "greedy_search"
+  },
+  "runtime": {
+    "threads": 4,
+    "provider": "cpu"
+  }
+}`,
 	}
 
 	for filePath, content := range defaultFiles {
@@ -214,7 +269,91 @@ func (a *App) initializeDataDirectory() error {
 		}
 	}
 
-	// Initialize Git repository
+	return a.initializeGitRepository()
+}
+
+// findTemplatePath finds the karte_data_template path in .app bundle
+func (a *App) findTemplatePath() string {
+	exePath, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	exeDir := filepath.Dir(exePath)
+
+	// Check if running inside .app bundle
+	if strings.HasSuffix(filepath.ToSlash(exeDir), "/Contents/MacOS") {
+		contentsDir := filepath.Dir(exeDir)       // .../Contents
+		appBundleDir := filepath.Dir(contentsDir) // .../Karte.app
+		templatePath := filepath.Join(appBundleDir, "Contents", "Resources", "karte_data_template")
+		if _, err := os.Stat(templatePath); err == nil {
+			return templatePath
+		}
+	}
+	return ""
+}
+
+// copyTemplateToDataDir overlays karte_data_template onto karte_data.
+// Existing user files are preserved (not overwritten) for user-owned areas.
+func (a *App) copyTemplateToDataDir(templatePath string) error {
+	return filepath.Walk(templatePath, func(srcPath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Calculate relative path from template root
+		relPath, err := filepath.Rel(templatePath, srcPath)
+		if err != nil {
+			return err
+		}
+
+		// Skip root directory
+		if relPath == "." {
+			return nil
+		}
+
+		dstPath := filepath.Join(a.dataDir, relPath)
+
+		if info.IsDir() {
+			return os.MkdirAll(dstPath, info.Mode())
+		}
+
+		if !a.shouldOverwriteTemplateFile(relPath) {
+			return nil
+		}
+
+		// Copy file (overwrite to ensure template updates)
+		srcFile, err := os.Open(srcPath)
+		if err != nil {
+			return err
+		}
+		defer srcFile.Close()
+
+		dstFile, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+		if err != nil {
+			return err
+		}
+		defer dstFile.Close()
+
+		_, err = io.Copy(dstFile, srcFile)
+		return err
+	})
+}
+
+// shouldOverwriteTemplateFile decides whether template file should overwrite user data.
+func (a *App) shouldOverwriteTemplateFile(relPath string) bool {
+	normalized := filepath.ToSlash(relPath)
+	// Preserve user-authored markdown/content/audio if file already exists
+	if strings.HasPrefix(normalized, "content/") || strings.HasPrefix(normalized, "data/audio/") {
+		if _, err := os.Stat(filepath.Join(a.dataDir, relPath)); err == nil {
+			return false
+		}
+	}
+	// Everything else (themes, ASR models, default configs) gets overwritten
+	return true
+}
+
+// initializeGitRepository initializes git repository in karte_data
+func (a *App) initializeGitRepository() error {
 	vcs, err := gitvcs.NewVCS(a.ctx, a.dataDir, a.logInfo)
 	if err != nil {
 		return fmt.Errorf("failed to initialize git repository: %v", err)
@@ -738,6 +877,243 @@ func (a *App) initProject(root string) error {
 	// For now, we'll create basic skeleton files
 	// In a full implementation, you'd copy from embedded skeleton files
 	return nil
+}
+
+// ImportAudioFile copies an audio file into karte_data/data/audio and triggers transcription.
+func (a *App) ImportAudioFile(src string) (string, error) {
+	if src == "" {
+		return "", fmt.Errorf("source path is required")
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return "", fmt.Errorf("stat audio: %w", err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("audio path must be a file")
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		return "", fmt.Errorf("open audio: %w", err)
+	}
+	defer f.Close()
+	return a.importAudioFromReader(info.Name(), f)
+}
+
+// ImportAudioBase64 saves audio content provided as base64 (used when native paths are not available).
+func (a *App) ImportAudioBase64(filename, base64Data string) (string, error) {
+	if filename == "" {
+		return "", fmt.Errorf("filename is required")
+	}
+	if base64Data == "" {
+		return "", fmt.Errorf("audio data is empty")
+	}
+	data, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		return "", fmt.Errorf("decode audio data: %w", err)
+	}
+	return a.importAudioFromReader(filename, bytes.NewReader(data))
+}
+
+func (a *App) importAudioFromReader(originalName string, src io.Reader) (string, error) {
+	if originalName == "" {
+		return "", fmt.Errorf("original name is required")
+	}
+	if !audio.IsSupportedImportExt(originalName) {
+		return "", fmt.Errorf("unsupported audio format: %s", filepath.Ext(originalName))
+	}
+
+	destDir := filepath.Join(a.dataDir, "data", "audio")
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return "", fmt.Errorf("prepare audio dir: %w", err)
+	}
+
+	base := audio.SanitizeFileName(strings.TrimSuffix(originalName, filepath.Ext(originalName)))
+	if base == "" {
+		base = "audio"
+	}
+	ext := strings.ToLower(filepath.Ext(originalName))
+	timestamp := time.Now().Format("20060102-150405")
+	prefix := fmt.Sprintf("%s_%s", timestamp, base)
+	filename := prefix + ext
+	for i := 2; ; i++ {
+		_, err := os.Stat(filepath.Join(destDir, filename))
+		if os.IsNotExist(err) {
+			break
+		}
+		filename = fmt.Sprintf("%s_%02d%s", prefix, i, ext)
+	}
+
+	destPath := filepath.Join(destDir, filename)
+	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return "", fmt.Errorf("create audio file: %w", err)
+	}
+	if _, err := io.Copy(out, src); err != nil {
+		out.Close()
+		return "", fmt.Errorf("write audio file: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return "", fmt.Errorf("close audio file: %w", err)
+	}
+
+	relPath, err := filepath.Rel(a.dataDir, destPath)
+	if err != nil {
+		relPath = destPath
+	}
+	relPath = filepath.ToSlash(relPath)
+
+	payload := map[string]interface{}{
+		"path":          relPath,
+		"original_name": originalName,
+		"saved_name":    filename,
+	}
+	runtime.EventsEmit(a.ctx, "audio-imported", payload)
+	a.logInfo(fmt.Sprintf("Audio imported: %s -> %s", originalName, relPath))
+
+	a.startTranscriptionJob(destPath, relPath)
+	return relPath, nil
+}
+
+func (a *App) startTranscriptionJob(absAudioPath, relAudioPath string) {
+	if a.asrService == nil {
+		a.logInfo("ASR service not configured; skipping transcription")
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+
+		text, err := a.asrService.TranscribeFile(ctx, absAudioPath)
+		if err != nil {
+			a.logError(fmt.Sprintf("ASR failed for %s: %v", relAudioPath, err))
+			runtime.EventsEmit(a.ctx, "audio-transcribed", map[string]interface{}{
+				"audioPath": relAudioPath,
+				"error":     err.Error(),
+			})
+			return
+		}
+
+		transcriptPath, err := a.writeTranscriptDocument(relAudioPath, text)
+		if err != nil {
+			a.logError(fmt.Sprintf("Failed to write transcript for %s: %v", relAudioPath, err))
+			runtime.EventsEmit(a.ctx, "audio-transcribed", map[string]interface{}{
+				"audioPath": relAudioPath,
+				"error":     err.Error(),
+			})
+			return
+		}
+
+		runtime.EventsEmit(a.ctx, "audio-transcribed", map[string]interface{}{
+			"audioPath":      relAudioPath,
+			"transcriptPath": transcriptPath,
+		})
+	}()
+}
+
+func (a *App) writeTranscriptDocument(audioRelPath, transcript string) (string, error) {
+	baseName := audio.SanitizeFileName(strings.TrimSuffix(filepath.Base(audioRelPath), filepath.Ext(audioRelPath)))
+	if baseName == "" {
+		baseName = fmt.Sprintf("audio-%s", time.Now().Format("20060102-150405"))
+	}
+
+	dirRel := filepath.ToSlash(filepath.Join("content", "transcripts"))
+	filename := baseName + ".md"
+	contentRel := filepath.ToSlash(filepath.Join(dirRel, filename))
+
+	makeAbs := func(rel string) (string, error) {
+		abs, ok := a.resolveContentPath(rel)
+		if !ok {
+			return "", fmt.Errorf("invalid transcript path: %s", rel)
+		}
+		return abs, nil
+	}
+
+	absPath, err := makeAbs(contentRel)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+		return "", fmt.Errorf("prepare transcript dir: %w", err)
+	}
+
+	for i := 2; ; i++ {
+		if _, err := os.Stat(absPath); os.IsNotExist(err) {
+			break
+		}
+		filename = fmt.Sprintf("%s-%d.md", baseName, i)
+		contentRel = filepath.ToSlash(filepath.Join(dirRel, filename))
+		absPath, err = makeAbs(contentRel)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	body := a.composeTranscriptMarkdown(audioRelPath, transcript)
+	if err := a.SaveFile(contentRel, body); err != nil {
+		return "", err
+	}
+	return contentRel, nil
+}
+
+func (a *App) composeTranscriptMarkdown(audioRelPath, transcript string) string {
+	now := time.Now().Format(time.RFC3339)
+	transcript = strings.TrimSpace(transcript)
+	if transcript == "" {
+		transcript = "_（ASRから有効な結果が得られませんでした）_"
+	}
+
+	return fmt.Sprintf(`---
+title: %q
+tags:
+  - transcript
+  - audio
+created_at: %s
+audio_path: %q
+---
+
+## Transcript
+
+%s
+`, fmt.Sprintf("Transcript %s", filepath.Base(audioRelPath)), now, audioRelPath, transcript)
+}
+
+func (a *App) initASRService() error {
+	cfgPath := filepath.Join(a.dataDir, "data", "asr", "config.json")
+	cfg, err := asr.LoadConfigFromFile(cfgPath)
+	if err != nil {
+		return err
+	}
+	if cfg == nil || !cfg.Enabled {
+		a.logInfo("ASR disabled (config missing or enabled=false)")
+		return nil
+	}
+	cfg.EnsureModelPathsAbsolute(a.dataDir)
+	svc, err := asr.NewService(cfg)
+	if err != nil {
+		return err
+	}
+	a.asrService = svc
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Sync()
 }
 
 // GetConnectedPeers returns the list of connected peers (disabled for now - will be implemented with git integration)

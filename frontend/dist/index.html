@@ -327,6 +327,46 @@
     background: var(--panel)
   }
 
+  .drop-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(124, 58, 237, 0.12);
+    border: 3px dashed rgba(124, 58, 237, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    z-index: 999;
+  }
+
+  .drop-overlay.visible {
+    opacity: 1;
+    pointer-events: none;
+  }
+
+  .drop-overlay__frame {
+    padding: 32px 48px;
+    background: color-mix(in srgb, var(--main-background) 92%, transparent);
+    border-radius: 16px;
+    border: 1px solid rgba(124, 58, 237, 0.35);
+    text-align: center;
+    color: var(--brand);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12);
+  }
+
+  .drop-overlay__label {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  .drop-overlay__hint {
+    font-size: 13px;
+    color: var(--mute);
+  }
+
   @media (max-width: 1100px) {
     .layout {
       grid-template-columns: 1fr
@@ -393,6 +433,13 @@
       <div class="graph-container" id="graph-container"></div>
     </div>
   </main>
+</div>
+
+<div id="dropOverlay" class="drop-overlay" aria-hidden="true">
+  <div class="drop-overlay__frame">
+    <div class="drop-overlay__label">音声ファイルをドロップ</div>
+    <div class="drop-overlay__hint">対応: WAV / MP3 / M4A</div>
+  </div>
 </div>
 
 <!-- File name input modal -->
@@ -588,4 +635,3 @@
     }
   </style>
 </div>
-

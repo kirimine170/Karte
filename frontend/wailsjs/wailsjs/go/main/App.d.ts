@@ -25,6 +25,10 @@ export function GetFileList():Promise<Array<main.FileItem>>;
 
 export function GetGraphData():Promise<main.GraphData>;
 
+export function ImportAudioBase64(arg1:string,arg2:string):Promise<string>;
+
+export function ImportAudioFile(arg1:string):Promise<string>;
+
 export function InitProject():Promise<void>;
 
 export function LoadFile(arg1:string):Promise<string>;

@@ -1,4 +1,4 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict } from '../wailsjs/wailsjs/go/main/App';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64 } from '../wailsjs/wailsjs/go/main/App';
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
@@ -81,6 +81,16 @@ const mockFunctions = {
     async ResolveConflict(path, strategy) {
         console.log('Mock ResolveConflict called:', path, strategy);
         return true;
+    },
+
+    async ImportAudioFile(path) {
+        console.log('Mock ImportAudioFile called:', path);
+        return `data/audio/mock-${Date.now()}.wav`;
+    },
+
+    async ImportAudioBase64(name, data) {
+        console.log('Mock ImportAudioBase64 called:', name, data.length);
+        return `data/audio/mock-${Date.now()}.wav`;
     }
 };
 
@@ -97,7 +107,9 @@ const api = isBrowser ? mockFunctions : {
     GetCustomCSS,
     SetCustomCSS,
     ClearCustomCSS,
-    ResolveConflict
+    ResolveConflict,
+    ImportAudioFile,
+    ImportAudioBase64
 };
 
 // Global variables
@@ -105,6 +117,7 @@ let currentPath = '';
 let files = [];
 let graphModule = null;
 let lastMarpSlideIndex = 0;
+let statusClearTimer = null;
 
 // DOM elements
 const statusEl = document.getElementById('status');
@@ -120,6 +133,7 @@ const themeSel = document.getElementById('theme');
 const hardwrapChk = document.getElementById('hardwrap');
 const tabs = document.querySelectorAll('.tab');
 const tabContents = document.querySelectorAll('.tab-content');
+const dropOverlay = document.getElementById('dropOverlay');
 
 // Modal elements
 const filenameModal = document.getElementById('filenameModal');
@@ -135,6 +149,8 @@ const saveCustomCssBtn = document.getElementById('saveCustomCssBtn');
 const clearCustomCssBtn = document.getElementById('clearCustomCssBtn');
 const cancelCustomCssBtn = document.getElementById('cancelCustomCssBtn');
 const customCssStatus = document.getElementById('customCssStatus');
+
+const supportedAudioExt = ['.wav', '.mp3', '.m4a'];
 
 // Conflict modal elements
 const conflictModal = document.getElementById('conflictModal');
@@ -196,6 +212,9 @@ async function init() {
                     loadFile(currentPath);
                 }
             });
+
+            EventsOn('audio-imported', handleAudioImportedEvent);
+            EventsOn('audio-transcribed', handleAudioTranscribedEvent);
         } else {
             console.log('Running in browser mode - Wails events disabled');
         }
@@ -682,6 +701,163 @@ function setupEventListeners() {
             switchToTab(tabName);
         });
     });
+
+    setupDragAndDrop();
+}
+
+function setupDragAndDrop() {
+    if (!dropOverlay || isBrowser) {
+        return;
+    }
+
+    let dragDepth = 0;
+
+    const showOverlay = () => dropOverlay.classList.add('visible');
+    const hideOverlay = () => {
+        dragDepth = 0;
+        dropOverlay.classList.remove('visible');
+    };
+
+    const isFileDrag = (event) => {
+        if (!event || !event.dataTransfer) {
+            return false;
+        }
+        const types = Array.from(event.dataTransfer.types || []);
+        return types.includes('Files');
+    };
+
+    window.addEventListener('dragenter', (event) => {
+        if (!isFileDrag(event)) {
+            return;
+        }
+        event.preventDefault();
+        dragDepth += 1;
+        showOverlay();
+    });
+
+    window.addEventListener('dragover', (event) => {
+        if (!isFileDrag(event)) {
+            return;
+        }
+        event.preventDefault();
+    });
+
+    window.addEventListener('dragleave', (event) => {
+        if (!isFileDrag(event)) {
+            return;
+        }
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (dragDepth === 0) {
+            hideOverlay();
+        }
+    });
+
+    window.addEventListener('drop', (event) => {
+        if (!isFileDrag(event)) {
+            return;
+        }
+        event.preventDefault();
+        hideOverlay();
+        handleAudioDrop(event.dataTransfer?.files || []).catch((error) => {
+            console.error('handleAudioDrop failed', error);
+        });
+    });
+}
+
+function isSupportedAudioFile(name = '') {
+    const lower = (name || '').toLowerCase();
+    return supportedAudioExt.some((ext) => lower.endsWith(ext));
+}
+
+async function handleAudioDrop(fileList) {
+    if (!fileList || fileList.length === 0) {
+        return;
+    }
+    if (!api.ImportAudioFile) {
+        console.warn('ImportAudioFile API is unavailable in this environment');
+        return;
+    }
+
+    const files = Array.from(fileList).filter((file) => isSupportedAudioFile(file.name));
+    if (files.length === 0) {
+        setStatusMessage('対応していない音声形式です (wav/mp3/m4a)', 3000);
+        return;
+    }
+
+    for (const file of files) {
+        try {
+            setStatusMessage(`音声を取り込み中: ${file.name}`);
+            if (file.path) {
+                await api.ImportAudioFile(file.path);
+            } else if (api.ImportAudioBase64 && file.arrayBuffer) {
+                const buffer = await file.arrayBuffer();
+                const base64 = arrayBufferToBase64(buffer);
+                await api.ImportAudioBase64(file.name || `audio-${Date.now()}.wav`, base64);
+            } else {
+                console.warn('Cannot access data for dropped file:', file.name);
+                setStatusMessage('音声データにアクセスできませんでした', 4000);
+            }
+        } catch (error) {
+            console.error('ImportAudioFile failed', error);
+            setStatusMessage(`音声取り込みに失敗: ${error?.message || error}`, 4000);
+        }
+    }
+
+    await loadFileList();
+    setStatusMessage('音声ファイルを保存しました。文字起こしを開始します…', 3500);
+}
+
+function arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.subarray(i, i + chunkSize);
+        binary += String.fromCharCode.apply(null, chunk);
+    }
+    return btoa(binary);
+}
+
+function handleAudioImportedEvent(payload) {
+    const label = payload?.original_name || payload?.path || 'audio';
+    console.log('audio-imported', payload);
+    setStatusMessage(`音声ファイルを保存しました: ${label}`, 3000);
+}
+
+function handleAudioTranscribedEvent(payload) {
+    if (!payload) {
+        return;
+    }
+    if (payload.error) {
+        console.warn('audio-transcribed error', payload.error);
+        setStatusMessage(`文字起こしに失敗: ${payload.error}`, 5000);
+        return;
+    }
+    const transcriptPath = payload.transcriptPath;
+    console.log('audio-transcribed', payload);
+    setStatusMessage('文字起こしが完了しました', 3000);
+    loadFileList();
+    if (transcriptPath) {
+        loadFile(transcriptPath);
+        switchToTab('editor');
+    }
+}
+
+function setStatusMessage(message, durationMs = 0) {
+    if (!statusEl) {
+        return;
+    }
+    statusEl.textContent = message || '';
+    if (statusClearTimer) {
+        clearTimeout(statusClearTimer);
+        statusClearTimer = null;
+    }
+    if (durationMs > 0) {
+        statusClearTimer = setTimeout(() => {
+            statusEl.textContent = '';
+            statusClearTimer = null;
+        }, durationMs);
+    }
 }
 // Open external preview in system browser
 async function openExternalPreview() {

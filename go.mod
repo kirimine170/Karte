@@ -5,6 +5,7 @@ go 1.23.0
 require (
 	github.com/go-git/go-git/v5 v5.13.2
 	github.com/jung-kurt/gofpdf v1.16.2
+	github.com/k2-fsa/sherpa-onnx-go-macos v1.12.17
 	github.com/wailsapp/wails/v2 v2.10.2
 	github.com/yuin/goldmark v1.7.4
 	gopkg.in/yaml.v3 v3.0.1
