@@ -1013,14 +1013,19 @@ func (a *App) startStreamingTranscription(ctx context.Context, absAudioPath, rel
 		return "", err
 	}
 
-	progressHandler := func(line string, segmentIndex, totalSegments int) {
-		a.appendTranscriptLine(transcriptPath, line)
+	progressHandler := func(line string, segmentIndex, totalSegments int, timestamp float64) {
+		// Format timestamp as [HH:MM:SS] or [MM:SS]
+		timestampStr := formatTimestamp(timestamp)
+		timestampedLine := fmt.Sprintf("%s %s", timestampStr, line)
+
+		a.appendTranscriptLine(transcriptPath, timestampedLine)
 		runtime.EventsEmit(a.ctx, "audio-transcribe-progress", map[string]interface{}{
 			"audioPath":      relAudioPath,
 			"transcriptPath": transcriptPath,
 			"text":           line,
 			"segmentIndex":   segmentIndex,
 			"totalSegments":  totalSegments,
+			"timestamp":      timestamp,
 		})
 	}
 
@@ -1848,6 +1853,21 @@ func (a *App) createAudioHandler() http.Handler {
 		// For all other paths, use default asset handler
 		defaultHandler.ServeHTTP(w, r)
 	})
+}
+
+// formatTimestamp formats a timestamp in seconds as [HH:MM:SS.mmm] or [MM:SS.mmm]
+// Shows milliseconds (3 decimal places) for more precise timestamps
+func formatTimestamp(seconds float64) string {
+	totalSeconds := int(seconds)
+	hours := totalSeconds / 3600
+	minutes := (totalSeconds % 3600) / 60
+	secs := totalSeconds % 60
+	milliseconds := int((seconds - float64(totalSeconds)) * 1000)
+
+	if hours > 0 {
+		return fmt.Sprintf("[%02d:%02d:%02d.%03d]", hours, minutes, secs, milliseconds)
+	}
+	return fmt.Sprintf("[%02d:%02d.%03d]", minutes, secs, milliseconds)
 }
 
 // LinkInfo represents a link found in markdown content

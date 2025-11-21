@@ -541,7 +541,16 @@ async function updatePreview() {
         // site.RenderMarkdown already returns a complete HTML document,
         // but we need to inject custom CSS and theme variables
         // Custom CSS is always applied to regular markdown, regardless of frontmatter
-        const finalHtml = injectCustomCSS(mdHtml);
+        let finalHtml = injectCustomCSS(mdHtml);
+
+        // Convert timestamps to clickable links if audio is available
+        const audioPath = extractAudioPath(content);
+        if (audioPath) {
+            finalHtml = convertTimestampsToLinks(finalHtml);
+        }
+
+        // Setup timestamp click handlers before setting srcdoc
+        setupTimestampClickHandlers();
         pv.srcdoc = finalHtml;
 
         // Handle audio player
@@ -556,6 +565,92 @@ async function updatePreview() {
             audioPlayerContainer.style.display = 'none';
         }
     }
+}
+
+// Convert timestamps in HTML to clickable links
+function convertTimestampsToLinks(html) {
+    // Match timestamps in format [HH:MM:SS.mmm] or [MM:SS.mmm]
+    // Pattern: [HH:MM:SS.mmm] or [MM:SS.mmm] where H, M, S are digits and mmm is milliseconds (0-999)
+    const timestampRegex = /\[(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.(\d{1,3}))?\]/g;
+
+    return html.replace(timestampRegex, (match, hours, minutes, seconds, milliseconds) => {
+        // Calculate total seconds with milliseconds
+        let totalSeconds = 0;
+        const ms = milliseconds ? parseInt(milliseconds.padEnd(3, '0')) : 0;
+
+        if (seconds !== undefined) {
+            // [HH:MM:SS.mmm] format
+            totalSeconds = parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds) + ms / 1000;
+        } else {
+            // [MM:SS.mmm] format
+            totalSeconds = parseInt(hours) * 60 + parseInt(minutes) + ms / 1000;
+        }
+
+        // Create clickable link with data attribute
+        return `<a href="#" class="timestamp-link" data-timestamp="${totalSeconds}">${match}</a>`;
+    });
+}
+
+// Setup timestamp click handlers in preview iframe
+function setupTimestampClickHandlers() {
+    if (!pv || !audioPlayer) {
+        return;
+    }
+
+    // Store original onload handler if exists
+    const originalOnload = pv.onload;
+
+    // Wait for iframe to load
+    pv.onload = () => {
+        // Call original onload if it exists
+        if (originalOnload) {
+            try {
+                originalOnload();
+            } catch (err) {
+                console.warn('Original onload handler error:', err);
+            }
+        }
+
+        // Setup timestamp click handlers
+        try {
+            const iframeDoc = pv.contentDocument || pv.contentWindow.document;
+            if (!iframeDoc) {
+                // Retry after a short delay
+                setTimeout(() => setupTimestampClickHandlers(), 100);
+                return;
+            }
+
+            const timestampLinks = iframeDoc.querySelectorAll('.timestamp-link');
+
+            timestampLinks.forEach(link => {
+                // Remove existing listeners to avoid duplicates
+                const newLink = link.cloneNode(true);
+                link.parentNode.replaceChild(newLink, link);
+
+                newLink.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const timestamp = parseFloat(newLink.getAttribute('data-timestamp'));
+                    if (!isNaN(timestamp) && audioPlayer) {
+                        audioPlayer.currentTime = timestamp;
+                        // If audio is paused, start playing
+                        if (audioPlayer.paused) {
+                            audioPlayer.play().catch(err => {
+                                console.error('Failed to play audio:', err);
+                            });
+                        }
+                    }
+                });
+
+                // Add hover effect
+                newLink.style.cursor = 'pointer';
+                newLink.style.color = 'var(--accent, #7c3aed)';
+                newLink.style.textDecoration = 'underline';
+            });
+        } catch (err) {
+            // Cross-origin or other error
+            console.warn('Could not access iframe document:', err);
+        }
+    };
 }
 
 // Update audio player based on content

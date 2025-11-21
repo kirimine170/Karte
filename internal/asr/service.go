@@ -113,8 +113,8 @@ func (s *Service) CountSegments(ctx context.Context, audioPath string) (int, err
 }
 
 // TranscribeFile decodes a single audio file into plain text.
-// progress callback receives (line, segmentIndex, totalSegments) where segmentIndex is 1-based.
-func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress func(line string, segmentIndex, totalSegments int)) (string, error) {
+// progress callback receives (line, segmentIndex, totalSegments, timestamp) where segmentIndex is 1-based and timestamp is in seconds.
+func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress func(line string, segmentIndex, totalSegments int, timestamp float64)) (string, error) {
 	if s == nil {
 		return "", errors.New("asr service is nil")
 	}
@@ -160,6 +160,8 @@ func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress
 	maxSegmentSamples := s.cfg.SampleRate * 15 // 15秒で強制フラッシュ
 	segmentIndex := 0
 	totalSegments := 0
+	processedSamples := 0 // Total processed samples for timestamp calculation
+	segmentStartSamples := 0 // Samples at the start of current segment
 
 	// Count segments first to get total count
 	totalSegments, err = s.CountSegments(ctx, audioPath)
@@ -182,9 +184,11 @@ func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress
 		text := strings.TrimSpace(segmentStream.GetResult().Text)
 		if text != "" {
 			segmentIndex++
+			// Calculate timestamp from segment start samples
+			timestamp := float64(segmentStartSamples) / float64(s.cfg.SampleRate)
 			appendLines(&transcript, text, func(line string) {
 				if progress != nil {
-					progress(line, segmentIndex, totalSegments)
+					progress(line, segmentIndex, totalSegments, timestamp)
 				}
 			})
 		}
@@ -197,14 +201,18 @@ func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress
 
 	if err := audio.StreamWavChunks(tempWav, chunkSamples, func(sampleRate int, chunk []float32) error {
 		isSpeech, flush := vad.Process(chunk)
+		chunkSize := len(chunk)
+		
 		if isSpeech {
 			if segmentStream == nil {
+				// New segment starts - record the timestamp
+				segmentStartSamples = processedSamples
 				segmentStream = sherpa.NewOfflineStream(s.recognizer)
 				if segmentStream == nil {
 					return fmt.Errorf("failed to create offline stream")
 				}
 			}
-			segmentSamples += len(chunk)
+			segmentSamples += chunkSize
 			segmentStream.AcceptWaveform(sampleRate, chunk)
 			if segmentSamples >= maxSegmentSamples {
 				finalizeSegment()
@@ -215,6 +223,9 @@ func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress
 			finalizeSegment()
 			vad.Reset()
 		}
+		
+		// Update total processed samples
+		processedSamples += chunkSize
 		return nil
 	}); err != nil {
 		return "", fmt.Errorf("stream audio: %w", err)

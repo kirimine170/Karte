@@ -421,9 +421,12 @@
   }
 
   @keyframes pulse {
-    0%, 100% {
+
+    0%,
+    100% {
       opacity: 1;
     }
+
     50% {
       opacity: 0.5;
     }
@@ -470,6 +473,7 @@
     0% {
       left: -30%;
     }
+
     100% {
       left: 100%;
     }
@@ -479,6 +483,17 @@
     font-size: 12px;
     color: var(--mute);
     white-space: nowrap;
+  }
+
+  .timestamp-link {
+    color: var(--accent);
+    text-decoration: underline;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+
+  .timestamp-link:hover {
+    opacity: 0.7;
   }
 
   @media (max-width: 1100px) {
@@ -517,7 +532,8 @@
     <button class="btn" id="exportPdfBtn">PDFエクスポート</button>
     <button class="btn" id="customCssBtn">Custom CSS</button>
     <span id="customCssStatus" style="margin-left:8px;font-size:12px;color:#6b7280"></span>
-    <div id="asrStatus" class="asr-status" style="margin-left:8px;font-size:12px;display:flex;align-items:center;gap:4px;">
+    <div id="asrStatus" class="asr-status"
+      style="margin-left:8px;font-size:12px;display:flex;align-items:center;gap:4px;">
       <span class="asr-status-indicator"></span>
       <span class="asr-status-text">ASR: 確認中...</span>
     </div>
