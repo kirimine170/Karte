@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -688,7 +689,7 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 	header := ""
 	footer := ""
 	paginate := false
-	aspectRatio := "" // Default will be 16:9
+	aspectRatio := ""      // Default will be 16:9
 	marpTheme := "default" // Default Marp theme
 
 	if frontMatter != nil {
@@ -1155,7 +1156,7 @@ type ASRStatus struct {
 // GetASRStatus returns the current initialization status of the ASR service
 func (a *App) GetASRStatus() ASRStatus {
 	initialized := a.asrService != nil
-	
+
 	initializing := false
 	if a.asrInitDone != nil {
 		select {
@@ -1167,7 +1168,7 @@ func (a *App) GetASRStatus() ASRStatus {
 			initializing = true
 		}
 	}
-	
+
 	return ASRStatus{
 		Initialized:  initialized,
 		Initializing: initializing,
@@ -1744,6 +1745,109 @@ func (a *App) ClearCustomCSS() error {
 	}
 	a.logInfo("Cleared custom CSS")
 	return nil
+}
+
+// GetAudioFileURL returns a URL for the audio file that can be used in HTML audio elements.
+// The audioPath should be relative to dataDir (e.g., "data/audio/xxx.wav").
+// Returns a URL path that will be served by the HTTP handler.
+func (a *App) GetAudioFileURL(audioPath string) (string, error) {
+	if audioPath == "" {
+		return "", fmt.Errorf("audio path is empty")
+	}
+
+	// Resolve to absolute path to verify file exists
+	var absPath string
+	if filepath.IsAbs(audioPath) {
+		absPath = audioPath
+	} else {
+		// Assume relative to dataDir
+		absPath = filepath.Join(a.dataDir, filepath.FromSlash(audioPath))
+	}
+
+	// Check if file exists
+	info, err := os.Stat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("audio file not found: %s", audioPath)
+		}
+		return "", fmt.Errorf("failed to stat audio file: %w", err)
+	}
+
+	// Return URL path that will be handled by the HTTP handler
+	// The handler will serve files from /audio/ path
+	urlPath := "/audio/" + filepath.ToSlash(audioPath)
+
+	// Log file size for debugging
+	a.logInfo(fmt.Sprintf("Audio file URL: %s (size: %d bytes)", urlPath, info.Size()))
+
+	return urlPath, nil
+}
+
+// createAudioHandler creates an HTTP handler that serves audio files.
+// This handler wraps the default asset handler and adds support for /audio/ paths.
+func (a *App) createAudioHandler() http.Handler {
+	// Get default asset handler
+	defaultHandler := http.FileServer(http.FS(assets))
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Handle /audio/ paths
+		if strings.HasPrefix(r.URL.Path, "/audio/") {
+			// Extract audio path from URL
+			audioPath := strings.TrimPrefix(r.URL.Path, "/audio/")
+
+			// Resolve to absolute path
+			var absPath string
+			if filepath.IsAbs(audioPath) {
+				absPath = audioPath
+			} else {
+				// Assume relative to dataDir
+				absPath = filepath.Join(a.dataDir, filepath.FromSlash(audioPath))
+			}
+
+			// Check if file exists
+			info, err := os.Stat(absPath)
+			if err != nil {
+				http.Error(w, "Audio file not found", http.StatusNotFound)
+				return
+			}
+
+			// Determine MIME type from file extension
+			ext := strings.ToLower(filepath.Ext(absPath))
+			var mimeType string
+			switch ext {
+			case ".wav":
+				mimeType = "audio/wav"
+			case ".mp3":
+				mimeType = "audio/mpeg"
+			case ".m4a":
+				mimeType = "audio/mp4"
+			case ".ogg":
+				mimeType = "audio/ogg"
+			default:
+				mimeType = "audio/mpeg" // default fallback
+			}
+
+			// Open file
+			file, err := os.Open(absPath)
+			if err != nil {
+				http.Error(w, "Failed to open audio file", http.StatusInternalServerError)
+				return
+			}
+			defer file.Close()
+
+			// Set headers
+			w.Header().Set("Content-Type", mimeType)
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
+			w.Header().Set("Accept-Ranges", "bytes") // Enable range requests for seeking
+
+			// Serve file
+			http.ServeContent(w, r, filepath.Base(absPath), info.ModTime(), file)
+			return
+		}
+
+		// For all other paths, use default asset handler
+		defaultHandler.ServeHTTP(w, r)
+	})
 }
 
 // LinkInfo represents a link found in markdown content

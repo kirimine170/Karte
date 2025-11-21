@@ -1,4 +1,4 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, GetASRStatus } from '../wailsjs/wailsjs/go/main/App';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, GetASRStatus, GetAudioFileURL } from '../wailsjs/wailsjs/go/main/App';
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
@@ -96,6 +96,11 @@ const mockFunctions = {
     async GetASRStatus() {
         console.log('Mock GetASRStatus called');
         return { initialized: false, initializing: false };
+    },
+
+    async GetAudioFileURL(audioPath) {
+        console.log('Mock GetAudioFileURL called:', audioPath);
+        return `/audio/${audioPath}`;
     }
 };
 
@@ -115,7 +120,8 @@ const api = isBrowser ? mockFunctions : {
     ResolveConflict,
     ImportAudioFile,
     ImportAudioBase64,
-    GetASRStatus
+    GetASRStatus,
+    GetAudioFileURL
 };
 
 // Global variables
@@ -175,6 +181,10 @@ const transcriptionProgressBar = transcriptionProgressEl?.querySelector('.transc
 const transcriptionProgressFill = transcriptionProgressEl?.querySelector('.transcription-progress-fill');
 const transcriptionProgressText = transcriptionProgressEl?.querySelector('.transcription-progress-text');
 
+// Audio player elements
+const audioPlayerContainer = document.getElementById('audioPlayerContainer');
+const audioPlayer = document.getElementById('audioPlayer');
+
 let customCssCache = '';
 let currentConflictInfo = null;
 let asrStatusCheckInterval = null;
@@ -232,7 +242,7 @@ async function init() {
             EventsOn('audio-imported', handleAudioImportedEvent);
             EventsOn('audio-transcribed', handleAudioTranscribedEvent);
             EventsOn('audio-transcribe-progress', handleAudioTranscribeProgress);
-            
+
             // Initialize ASR status check
             updateASRStatus();
             // Check ASR status periodically (every 2 seconds) until initialized
@@ -533,10 +543,57 @@ async function updatePreview() {
         // Custom CSS is always applied to regular markdown, regardless of frontmatter
         const finalHtml = injectCustomCSS(mdHtml);
         pv.srcdoc = finalHtml;
+
+        // Handle audio player
+        await updateAudioPlayer(content);
     } catch (error) {
         console.error('Failed to update preview:', error);
         const errorMsg = error?.message || error?.toString() || 'Unknown error';
         pv.srcdoc = `<p style="color: red; padding: 20px;">Preview failed to load<br><small>${escapeHtml(errorMsg)}</small></p>`;
+
+        // Hide audio player on error
+        if (audioPlayerContainer) {
+            audioPlayerContainer.style.display = 'none';
+        }
+    }
+}
+
+// Update audio player based on content
+async function updateAudioPlayer(content) {
+    if (!audioPlayerContainer || !audioPlayer) {
+        return;
+    }
+
+    try {
+        const audioPath = extractAudioPath(content);
+
+        if (audioPath) {
+            // Get audio file URL (HTTP path served by Wails)
+            const audioURL = await api.GetAudioFileURL(audioPath);
+
+            // Update audio player source
+            if (audioPlayer.src !== audioURL) {
+                audioPlayer.src = audioURL;
+                // Reset player state
+                audioPlayer.load();
+            }
+
+            // Show audio player
+            audioPlayerContainer.style.display = 'flex';
+        } else {
+            // Hide audio player if no audio_path
+            audioPlayerContainer.style.display = 'none';
+            // Clear audio source
+            audioPlayer.src = '';
+        }
+    } catch (error) {
+        console.error('Failed to update audio player:', error);
+        // Hide audio player on error
+        audioPlayerContainer.style.display = 'none';
+        // Show error message in player
+        if (audioPlayer) {
+            audioPlayer.src = '';
+        }
     }
 }
 
@@ -559,6 +616,32 @@ function splitFrontMatter(content) {
     const offsetLines = fmText.split('\n').length;
     const body = content.slice(fmText.length);
     return { body, offsetLines };
+}
+
+// Extract audio_path from markdown frontmatter
+function extractAudioPath(content) {
+    if (!content || !content.startsWith('---')) {
+        return null;
+    }
+
+    const frontMatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
+    const match = content.match(frontMatterRegex);
+    if (!match) {
+        return null;
+    }
+
+    const yamlContent = match[1];
+
+    // Try to extract audio_path field
+    // Support both "audio_path: value" and "audio_path: 'value'" formats
+    const audioPathRegex = /^audio_path:\s*(?:["']?)([^\n"']+)(?:["']?)\s*$/m;
+    const audioPathMatch = yamlContent.match(audioPathRegex);
+
+    if (audioPathMatch && audioPathMatch[1]) {
+        return audioPathMatch[1].trim();
+    }
+
+    return null;
 }
 
 function computeMarpSlideInfo(content, caretLine) {
@@ -878,13 +961,13 @@ async function updateASRStatus() {
     if (!asrStatusEl || !asrStatusIndicator || !asrStatusText) {
         return null;
     }
-    
+
     try {
         const status = await api.GetASRStatus();
         if (!status) {
             return null;
         }
-        
+
         // Update indicator
         asrStatusIndicator.className = 'asr-status-indicator';
         if (status.initializing) {
@@ -897,7 +980,7 @@ async function updateASRStatus() {
             asrStatusIndicator.classList.add('disabled');
             asrStatusText.textContent = 'ASR: 無効';
         }
-        
+
         return status;
     } catch (error) {
         console.error('Failed to get ASR status:', error);
@@ -917,19 +1000,19 @@ function handleAudioTranscribeProgress(payload) {
     if (!payload) {
         return;
     }
-    
+
     const audioPath = payload.audioPath || payload.AudioPath;
     const text = payload.text || payload.Text || '';
     const segmentIndex = payload.segmentIndex || payload.SegmentIndex || 0;
     const totalSegments = payload.totalSegments || payload.TotalSegments || 0;
-    
+
     // Start progress if this is a new transcription
     if (audioPath !== currentTranscriptionAudioPath) {
         currentTranscriptionAudioPath = audioPath;
         currentTranscriptionTotalSegments = totalSegments;
         showTranscriptionProgress(audioPath, totalSegments);
     }
-    
+
     // Update progress bar
     if (transcriptionProgressFill && totalSegments > 0) {
         const progress = Math.min(100, (segmentIndex / totalSegments) * 100);
@@ -939,7 +1022,7 @@ function handleAudioTranscribeProgress(payload) {
         // Fallback to indeterminate if total segments unknown
         transcriptionProgressFill.classList.add('indeterminate');
     }
-    
+
     // Update progress text
     if (transcriptionProgressText) {
         const fileName = audioPath ? audioPath.split('/').pop() : '音声ファイル';
@@ -955,9 +1038,9 @@ function showTranscriptionProgress(audioPath, totalSegments) {
     if (!transcriptionProgressEl || !transcriptionProgressFill) {
         return;
     }
-    
+
     transcriptionProgressEl.style.display = 'flex';
-    
+
     // Reset progress bar
     if (totalSegments > 0) {
         transcriptionProgressFill.style.width = '0%';
@@ -965,7 +1048,7 @@ function showTranscriptionProgress(audioPath, totalSegments) {
     } else {
         transcriptionProgressFill.classList.add('indeterminate');
     }
-    
+
     const fileName = audioPath ? audioPath.split('/').pop() : '音声ファイル';
     if (transcriptionProgressText) {
         if (totalSegments > 0) {
@@ -980,7 +1063,7 @@ function hideTranscriptionProgress() {
     if (!transcriptionProgressEl || !transcriptionProgressFill) {
         return;
     }
-    
+
     transcriptionProgressEl.style.display = 'none';
     transcriptionProgressFill.classList.remove('indeterminate');
     transcriptionProgressFill.style.width = '0%';

@@ -34,6 +34,10 @@ export function GetASRStatus() {
   return window['go']['main']['App']['GetASRStatus']();
 }
 
+export function GetAudioFileURL(arg1) {
+  return window['go']['main']['App']['GetAudioFileURL'](arg1);
+}
+
 export function GetConnectedPeers() {
   return window['go']['main']['App']['GetConnectedPeers']();
 }

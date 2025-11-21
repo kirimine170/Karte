@@ -15,13 +15,17 @@ func main() {
 	// Create an instance of the app structure
 	app := NewApp()
 
+	// Create custom HTTP handler for audio files
+	audioHandler := app.createAudioHandler()
+
 	// Create application with options
 	err := wails.Run(&options.App{
 		Title:  "Karte",
 		Width:  1400,
 		Height: 900,
 		AssetServer: &assetserver.Options{
-			Assets: assets,
+			Assets:  assets,
+			Handler: audioHandler,
 		},
 		BackgroundColour: &options.RGBA{R: 255, G: 255, B: 255, A: 1},
 		OnStartup:        app.startup,

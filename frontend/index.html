@@ -264,6 +264,34 @@
     background: var(--bg)
   }
 
+  .preview-container {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1;
+  }
+
+  .audio-player-container {
+    margin-bottom: var(--gap);
+    padding: 12px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #audioPlayer {
+    width: 100%;
+    max-width: 100%;
+    outline: none;
+  }
+
+  #audioPlayer::-webkit-media-controls-panel {
+    background-color: var(--panel);
+  }
+
   .row {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -517,7 +545,14 @@
     <div class="tab-content active" id="editor-tab">
       <div class="row">
         <textarea id="editor" spellcheck="false"></textarea>
-        <iframe id="preview"></iframe>
+        <div class="preview-container">
+          <div id="audioPlayerContainer" class="audio-player-container" style="display: none;">
+            <audio id="audioPlayer" controls preload="metadata">
+              Your browser does not support the audio element.
+            </audio>
+          </div>
+          <iframe id="preview"></iframe>
+        </div>
       </div>
     </div>
     <div class="tab-content" id="graph-tab">

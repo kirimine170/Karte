@@ -19,6 +19,8 @@ export function ExportPreviewHTML(arg1:string):Promise<string>;
 
 export function GetASRStatus():Promise<main.ASRStatus>;
 
+export function GetAudioFileURL(arg1:string):Promise<string>;
+
 export function GetConnectedPeers():Promise<Array<sync.Peer>>;
 
 export function GetCustomCSS():Promise<string>;
