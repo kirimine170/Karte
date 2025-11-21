@@ -1,4 +1,4 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64 } from '../wailsjs/wailsjs/go/main/App';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, GetASRStatus } from '../wailsjs/wailsjs/go/main/App';
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
@@ -91,6 +91,11 @@ const mockFunctions = {
     async ImportAudioBase64(name, data) {
         console.log('Mock ImportAudioBase64 called:', name, data.length);
         return `data/audio/mock-${Date.now()}.wav`;
+    },
+
+    async GetASRStatus() {
+        console.log('Mock GetASRStatus called');
+        return { initialized: false, initializing: false };
     }
 };
 
@@ -109,7 +114,8 @@ const api = isBrowser ? mockFunctions : {
     ClearCustomCSS,
     ResolveConflict,
     ImportAudioFile,
-    ImportAudioBase64
+    ImportAudioBase64,
+    GetASRStatus
 };
 
 // Global variables
@@ -160,8 +166,18 @@ const diffRemote = document.getElementById('diffRemote');
 const resolveConflictBtn = document.getElementById('resolveConflictBtn');
 const cancelConflictBtn = document.getElementById('cancelConflictBtn');
 
+// ASR status and transcription progress elements
+const asrStatusEl = document.getElementById('asrStatus');
+const asrStatusIndicator = asrStatusEl?.querySelector('.asr-status-indicator');
+const asrStatusText = asrStatusEl?.querySelector('.asr-status-text');
+const transcriptionProgressEl = document.getElementById('transcriptionProgress');
+const transcriptionProgressBar = transcriptionProgressEl?.querySelector('.transcription-progress-bar');
+const transcriptionProgressFill = transcriptionProgressEl?.querySelector('.transcription-progress-fill');
+const transcriptionProgressText = transcriptionProgressEl?.querySelector('.transcription-progress-text');
+
 let customCssCache = '';
 let currentConflictInfo = null;
+let asrStatusCheckInterval = null;
 
 // Initialize the application
 async function init() {
@@ -215,6 +231,18 @@ async function init() {
 
             EventsOn('audio-imported', handleAudioImportedEvent);
             EventsOn('audio-transcribed', handleAudioTranscribedEvent);
+            EventsOn('audio-transcribe-progress', handleAudioTranscribeProgress);
+            
+            // Initialize ASR status check
+            updateASRStatus();
+            // Check ASR status periodically (every 2 seconds) until initialized
+            asrStatusCheckInterval = setInterval(async () => {
+                const status = await updateASRStatus();
+                if (status && status.initialized) {
+                    clearInterval(asrStatusCheckInterval);
+                    asrStatusCheckInterval = null;
+                }
+            }, 2000);
         } else {
             console.log('Running in browser mode - Wails events disabled');
         }
@@ -831,16 +859,108 @@ function handleAudioTranscribedEvent(payload) {
     if (payload.error) {
         console.warn('audio-transcribed error', payload.error);
         setStatusMessage(`文字起こしに失敗: ${payload.error}`, 5000);
+        hideTranscriptionProgress();
         return;
     }
     const transcriptPath = payload.transcriptPath;
     console.log('audio-transcribed', payload);
     setStatusMessage('文字起こしが完了しました', 3000);
+    hideTranscriptionProgress();
     loadFileList();
     if (transcriptPath) {
         loadFile(transcriptPath);
         switchToTab('editor');
     }
+}
+
+// Update ASR status display
+async function updateASRStatus() {
+    if (!asrStatusEl || !asrStatusIndicator || !asrStatusText) {
+        return null;
+    }
+    
+    try {
+        const status = await api.GetASRStatus();
+        if (!status) {
+            return null;
+        }
+        
+        // Update indicator
+        asrStatusIndicator.className = 'asr-status-indicator';
+        if (status.initializing) {
+            asrStatusIndicator.classList.add('initializing');
+            asrStatusText.textContent = 'ASR: 初期化中...';
+        } else if (status.initialized) {
+            asrStatusIndicator.classList.add('ready');
+            asrStatusText.textContent = 'ASR: 準備完了';
+        } else {
+            asrStatusIndicator.classList.add('disabled');
+            asrStatusText.textContent = 'ASR: 無効';
+        }
+        
+        return status;
+    } catch (error) {
+        console.error('Failed to get ASR status:', error);
+        if (asrStatusIndicator && asrStatusText) {
+            asrStatusIndicator.className = 'asr-status-indicator disabled';
+            asrStatusText.textContent = 'ASR: エラー';
+        }
+        return null;
+    }
+}
+
+// Handle transcription progress
+let currentTranscriptionAudioPath = null;
+let transcriptionSegmentCount = 0;
+
+function handleAudioTranscribeProgress(payload) {
+    if (!payload) {
+        return;
+    }
+    
+    const audioPath = payload.audioPath || payload.AudioPath;
+    const text = payload.text || payload.Text || '';
+    
+    // Start progress if this is a new transcription
+    if (audioPath !== currentTranscriptionAudioPath) {
+        currentTranscriptionAudioPath = audioPath;
+        transcriptionSegmentCount = 0;
+        showTranscriptionProgress(audioPath);
+    }
+    
+    // Increment segment count
+    transcriptionSegmentCount++;
+    
+    // Update progress text
+    if (transcriptionProgressText) {
+        const fileName = audioPath ? audioPath.split('/').pop() : '音声ファイル';
+        transcriptionProgressText.textContent = `文字起こし中: ${fileName} (${transcriptionSegmentCount}区間処理済み)`;
+    }
+}
+
+function showTranscriptionProgress(audioPath) {
+    if (!transcriptionProgressEl || !transcriptionProgressFill) {
+        return;
+    }
+    
+    transcriptionProgressEl.style.display = 'flex';
+    transcriptionProgressFill.classList.add('indeterminate');
+    
+    const fileName = audioPath ? audioPath.split('/').pop() : '音声ファイル';
+    if (transcriptionProgressText) {
+        transcriptionProgressText.textContent = `文字起こし中: ${fileName} (0区間処理済み)`;
+    }
+}
+
+function hideTranscriptionProgress() {
+    if (!transcriptionProgressEl || !transcriptionProgressFill) {
+        return;
+    }
+    
+    transcriptionProgressEl.style.display = 'none';
+    transcriptionProgressFill.classList.remove('indeterminate');
+    currentTranscriptionAudioPath = null;
+    transcriptionSegmentCount = 0;
 }
 
 function setStatusMessage(message, durationMs = 0) {

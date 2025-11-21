@@ -30,6 +30,10 @@ export function ExportPreviewHTML(arg1) {
   return window['go']['main']['App']['ExportPreviewHTML'](arg1);
 }
 
+export function GetASRStatus() {
+  return window['go']['main']['App']['GetASRStatus']();
+}
+
 export function GetConnectedPeers() {
   return window['go']['main']['App']['GetConnectedPeers']();
 }

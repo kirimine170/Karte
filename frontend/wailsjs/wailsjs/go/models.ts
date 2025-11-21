@@ -1,5 +1,19 @@
 export namespace main {
 	
+	export class ASRStatus {
+	    initialized: boolean;
+	    initializing: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ASRStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.initialized = source["initialized"];
+	        this.initializing = source["initializing"];
+	    }
+	}
 	export class FileItem {
 	    path: string;
 	    title: string;

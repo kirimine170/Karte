@@ -365,6 +365,94 @@
     color: var(--mute);
   }
 
+  .asr-status {
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: var(--backgroundcolor-unhover);
+  }
+
+  .asr-status-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    background: var(--mute);
+  }
+
+  .asr-status-indicator.initializing {
+    background: #f59e0b;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  .asr-status-indicator.ready {
+    background: #10b981;
+  }
+
+  .asr-status-indicator.disabled {
+    background: var(--mute);
+  }
+
+  @keyframes pulse {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.5;
+    }
+  }
+
+  .transcription-progress {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--main-background);
+    border-top: 1px solid var(--line);
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    z-index: 100;
+    box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
+  }
+
+  .transcription-progress-bar {
+    flex: 1;
+    height: 6px;
+    background: var(--backgroundcolor-unhover);
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .transcription-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    width: 0%;
+    transition: width 0.3s ease;
+    position: relative;
+  }
+
+  .transcription-progress-fill.indeterminate {
+    width: 30%;
+    animation: indeterminate 1.5s ease-in-out infinite;
+  }
+
+  @keyframes indeterminate {
+    0% {
+      left: -30%;
+    }
+    100% {
+      left: 100%;
+    }
+  }
+
+  .transcription-progress-text {
+    font-size: 12px;
+    color: var(--mute);
+    white-space: nowrap;
+  }
+
   @media (max-width: 1100px) {
     .layout {
       grid-template-columns: 1fr
@@ -401,8 +489,18 @@
     <button class="btn" id="exportPdfBtn">PDFエクスポート</button>
     <button class="btn" id="customCssBtn">Custom CSS</button>
     <span id="customCssStatus" style="margin-left:8px;font-size:12px;color:#6b7280"></span>
+    <div id="asrStatus" class="asr-status" style="margin-left:8px;font-size:12px;display:flex;align-items:center;gap:4px;">
+      <span class="asr-status-indicator"></span>
+      <span class="asr-status-text">ASR: 確認中...</span>
+    </div>
   </div>
   <div class="status" id="status"></div>
+  <div id="transcriptionProgress" class="transcription-progress" style="display:none;">
+    <div class="transcription-progress-bar">
+      <div class="transcription-progress-fill"></div>
+    </div>
+    <span class="transcription-progress-text"></span>
+  </div>
 </div>
 <div class="layout">
   <aside class="side">

@@ -1144,6 +1144,34 @@ func (a *App) waitForASRReady() bool {
 	}
 }
 
+// ASRStatus represents the current status of the ASR service
+type ASRStatus struct {
+	Initialized  bool `json:"initialized"`
+	Initializing bool `json:"initializing"`
+}
+
+// GetASRStatus returns the current initialization status of the ASR service
+func (a *App) GetASRStatus() ASRStatus {
+	initialized := a.asrService != nil
+	
+	initializing := false
+	if a.asrInitDone != nil {
+		select {
+		case <-a.asrInitDone:
+			// Initialization is complete (either succeeded or failed)
+			initializing = false
+		default:
+			// Still initializing
+			initializing = true
+		}
+	}
+	
+	return ASRStatus{
+		Initialized:  initialized,
+		Initializing: initializing,
+	}
+}
+
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
