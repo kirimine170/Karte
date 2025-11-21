@@ -911,7 +911,7 @@ async function updateASRStatus() {
 
 // Handle transcription progress
 let currentTranscriptionAudioPath = null;
-let transcriptionSegmentCount = 0;
+let currentTranscriptionTotalSegments = 0;
 
 function handleAudioTranscribeProgress(payload) {
     if (!payload) {
@@ -920,35 +920,59 @@ function handleAudioTranscribeProgress(payload) {
     
     const audioPath = payload.audioPath || payload.AudioPath;
     const text = payload.text || payload.Text || '';
+    const segmentIndex = payload.segmentIndex || payload.SegmentIndex || 0;
+    const totalSegments = payload.totalSegments || payload.TotalSegments || 0;
     
     // Start progress if this is a new transcription
     if (audioPath !== currentTranscriptionAudioPath) {
         currentTranscriptionAudioPath = audioPath;
-        transcriptionSegmentCount = 0;
-        showTranscriptionProgress(audioPath);
+        currentTranscriptionTotalSegments = totalSegments;
+        showTranscriptionProgress(audioPath, totalSegments);
     }
     
-    // Increment segment count
-    transcriptionSegmentCount++;
+    // Update progress bar
+    if (transcriptionProgressFill && totalSegments > 0) {
+        const progress = Math.min(100, (segmentIndex / totalSegments) * 100);
+        transcriptionProgressFill.style.width = `${progress}%`;
+        transcriptionProgressFill.classList.remove('indeterminate');
+    } else if (transcriptionProgressFill && totalSegments === 0) {
+        // Fallback to indeterminate if total segments unknown
+        transcriptionProgressFill.classList.add('indeterminate');
+    }
     
     // Update progress text
     if (transcriptionProgressText) {
         const fileName = audioPath ? audioPath.split('/').pop() : '音声ファイル';
-        transcriptionProgressText.textContent = `文字起こし中: ${fileName} (${transcriptionSegmentCount}区間処理済み)`;
+        if (totalSegments > 0) {
+            transcriptionProgressText.textContent = `文字起こし中: ${fileName} (${segmentIndex}/${totalSegments}区間処理済み)`;
+        } else {
+            transcriptionProgressText.textContent = `文字起こし中: ${fileName} (${segmentIndex}区間処理済み)`;
+        }
     }
 }
 
-function showTranscriptionProgress(audioPath) {
+function showTranscriptionProgress(audioPath, totalSegments) {
     if (!transcriptionProgressEl || !transcriptionProgressFill) {
         return;
     }
     
     transcriptionProgressEl.style.display = 'flex';
-    transcriptionProgressFill.classList.add('indeterminate');
+    
+    // Reset progress bar
+    if (totalSegments > 0) {
+        transcriptionProgressFill.style.width = '0%';
+        transcriptionProgressFill.classList.remove('indeterminate');
+    } else {
+        transcriptionProgressFill.classList.add('indeterminate');
+    }
     
     const fileName = audioPath ? audioPath.split('/').pop() : '音声ファイル';
     if (transcriptionProgressText) {
-        transcriptionProgressText.textContent = `文字起こし中: ${fileName} (0区間処理済み)`;
+        if (totalSegments > 0) {
+            transcriptionProgressText.textContent = `文字起こし中: ${fileName} (0/${totalSegments}区間処理済み)`;
+        } else {
+            transcriptionProgressText.textContent = `文字起こし中: ${fileName} (0区間処理済み)`;
+        }
     }
 }
 
@@ -959,8 +983,9 @@ function hideTranscriptionProgress() {
     
     transcriptionProgressEl.style.display = 'none';
     transcriptionProgressFill.classList.remove('indeterminate');
+    transcriptionProgressFill.style.width = '0%';
     currentTranscriptionAudioPath = null;
-    transcriptionSegmentCount = 0;
+    currentTranscriptionTotalSegments = 0;
 }
 
 function setStatusMessage(message, durationMs = 0) {

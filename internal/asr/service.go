@@ -52,8 +52,69 @@ func (s *Service) Close() {
 	}
 }
 
+// CountSegments counts the number of speech segments in an audio file using VAD.
+// This is used to estimate progress during transcription.
+func (s *Service) CountSegments(ctx context.Context, audioPath string) (int, error) {
+	if s == nil {
+		return 0, errors.New("asr service is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	tempWav, cleanup, err := audio.ConvertToPCM16Wav(ctx, audioPath, s.cfg.SampleRate)
+	if err != nil {
+		return 0, fmt.Errorf("prepare pcm audio: %w", err)
+	}
+	defer cleanup()
+
+	chunkSamples := s.cfg.SampleRate / 100 // 10ms フレーム
+	if chunkSamples < 160 {
+		chunkSamples = 160
+	}
+
+	segmentCount := 0
+	vad := audio.DefaultSimpleVAD()
+	inSegment := false
+	maxSegmentSamples := s.cfg.SampleRate * 15 // 15秒で強制フラッシュ
+	currentSegmentSamples := 0
+
+	if err := audio.StreamWavChunks(tempWav, chunkSamples, func(sampleRate int, chunk []float32) error {
+		isSpeech, flush := vad.Process(chunk)
+		if isSpeech {
+			if !inSegment {
+				inSegment = true
+				segmentCount++
+			}
+			currentSegmentSamples += len(chunk)
+			if currentSegmentSamples >= maxSegmentSamples {
+				// Force segment end
+				inSegment = false
+				currentSegmentSamples = 0
+				vad.Reset()
+			}
+		}
+		if flush {
+			inSegment = false
+			currentSegmentSamples = 0
+			vad.Reset()
+		}
+		return nil
+	}); err != nil {
+		return 0, fmt.Errorf("stream audio: %w", err)
+	}
+
+	// Count final segment if still in one
+	if inSegment {
+		segmentCount++
+	}
+
+	return segmentCount, nil
+}
+
 // TranscribeFile decodes a single audio file into plain text.
-func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress func(line string)) (string, error) {
+// progress callback receives (line, segmentIndex, totalSegments) where segmentIndex is 1-based.
+func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress func(line string, segmentIndex, totalSegments int)) (string, error) {
 	if s == nil {
 		return "", errors.New("asr service is nil")
 	}
@@ -97,6 +158,15 @@ func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress
 	var segmentStream *sherpa.OfflineStream
 	segmentSamples := 0
 	maxSegmentSamples := s.cfg.SampleRate * 15 // 15秒で強制フラッシュ
+	segmentIndex := 0
+	totalSegments := 0
+
+	// Count segments first to get total count
+	totalSegments, err = s.CountSegments(ctx, audioPath)
+	if err != nil {
+		// If counting fails, continue without progress info
+		totalSegments = 0
+	}
 
 	finalizeSegment := func() {
 		if segmentStream == nil {
@@ -111,7 +181,12 @@ func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress
 		s.recognizer.Decode(segmentStream)
 		text := strings.TrimSpace(segmentStream.GetResult().Text)
 		if text != "" {
-			appendLines(&transcript, text, progress)
+			segmentIndex++
+			appendLines(&transcript, text, func(line string) {
+				if progress != nil {
+					progress(line, segmentIndex, totalSegments)
+				}
+			})
 		}
 	}
 

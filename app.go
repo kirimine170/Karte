@@ -1012,12 +1012,14 @@ func (a *App) startStreamingTranscription(ctx context.Context, absAudioPath, rel
 		return "", err
 	}
 
-	progressHandler := func(line string) {
+	progressHandler := func(line string, segmentIndex, totalSegments int) {
 		a.appendTranscriptLine(transcriptPath, line)
 		runtime.EventsEmit(a.ctx, "audio-transcribe-progress", map[string]interface{}{
 			"audioPath":      relAudioPath,
 			"transcriptPath": transcriptPath,
 			"text":           line,
+			"segmentIndex":   segmentIndex,
+			"totalSegments":  totalSegments,
 		})
 	}
 
