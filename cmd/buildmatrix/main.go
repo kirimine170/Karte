@@ -142,6 +142,19 @@ func runPrep(ctx context.Context) error {
 		return err
 	}
 
+	// package-lock.jsonが存在する場合はnpm ciを使用（厳密にpackage-lock.jsonを守る）
+	// 存在しない場合はnpm installを使用
+	packageLockPath := filepath.Join("frontend", "package-lock.json")
+	if _, err := os.Stat(packageLockPath); err == nil {
+		fmt.Println("==> Running npm ci (frontend) - using package-lock.json")
+		if err := runCommand(ctx, "frontend", nil, "npm", "ci"); err != nil {
+			// npm ciが失敗した場合（例: package-lock.jsonが古い）、npm installにフォールバック
+			fmt.Println("==> npm ci failed, falling back to npm install")
+			return runCommand(ctx, "frontend", nil, "npm", "install")
+		}
+		return nil
+	}
+
 	fmt.Println("==> Running npm install (frontend)")
 	return runCommand(ctx, "frontend", nil, "npm", "install")
 }

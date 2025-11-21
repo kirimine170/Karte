@@ -20,6 +20,26 @@
     "flags": []
   },
   {
+    "name": "darwin-arm64",
+    "platform": "darwin/arm64",
+    "artifactDir": "dist/darwin-arm64",
+    "env": {
+      "GOOS": "darwin",
+      "GOARCH": "arm64"
+    },
+    "flags": []
+  },
+  {
+    "name": "darwin-amd64",
+    "platform": "darwin/amd64",
+    "artifactDir": "dist/darwin-amd64",
+    "env": {
+      "GOOS": "darwin",
+      "GOARCH": "amd64"
+    },
+    "flags": []
+  },
+  {
     "name": "linux",
     "platform": "linux/amd64",
     "artifactDir": "dist/linux",
