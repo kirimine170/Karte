@@ -37,3 +37,6 @@ Thumbs.db
 *.log
 
 sandbox/
+
+dist/
+build/
