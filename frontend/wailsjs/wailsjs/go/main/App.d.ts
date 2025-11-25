@@ -35,7 +35,11 @@ export function ImportAudioFile(arg1:string):Promise<string>;
 
 export function InitProject():Promise<void>;
 
+export function IsRecording():Promise<boolean>;
+
 export function LoadFile(arg1:string):Promise<string>;
+
+export function LogJS(arg1:string,arg2:string):Promise<void>;
 
 export function PreviewMarkdown(arg1:string):Promise<string>;
 
@@ -44,3 +48,7 @@ export function ResolveConflict(arg1:string,arg2:string):Promise<void>;
 export function SaveFile(arg1:string,arg2:string):Promise<void>;
 
 export function SetCustomCSS(arg1:string):Promise<void>;
+
+export function StartRecording():Promise<void>;
+
+export function StopRecording():Promise<string>;

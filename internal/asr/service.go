@@ -160,7 +160,7 @@ func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress
 	maxSegmentSamples := s.cfg.SampleRate * 15 // 15秒で強制フラッシュ
 	segmentIndex := 0
 	totalSegments := 0
-	processedSamples := 0 // Total processed samples for timestamp calculation
+	processedSamples := 0    // Total processed samples for timestamp calculation
 	segmentStartSamples := 0 // Samples at the start of current segment
 
 	// Count segments first to get total count
@@ -202,7 +202,7 @@ func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress
 	if err := audio.StreamWavChunks(tempWav, chunkSamples, func(sampleRate int, chunk []float32) error {
 		isSpeech, flush := vad.Process(chunk)
 		chunkSize := len(chunk)
-		
+
 		if isSpeech {
 			if segmentStream == nil {
 				// New segment starts - record the timestamp
@@ -223,7 +223,7 @@ func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress
 			finalizeSegment()
 			vad.Reset()
 		}
-		
+
 		// Update total processed samples
 		processedSamples += chunkSize
 		return nil
@@ -234,6 +234,43 @@ func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress
 	finalizeSegment()
 
 	return strings.TrimSpace(transcript.String()), nil
+}
+
+// ProcessSamples processes audio samples in chunks and returns transcribed text.
+// This is used for real-time transcription from live audio input.
+// samples: audio samples to process (float32, mono, at cfg.SampleRate)
+// Returns: transcribed text and any error
+func (s *Service) ProcessSamples(samples []float32) (string, error) {
+	if s == nil {
+		return "", errors.New("asr service is nil")
+	}
+	if s.recognizer == nil {
+		return "", errors.New("asr recognizer is not initialized")
+	}
+	if len(samples) == 0 {
+		return "", nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stream := sherpa.NewOfflineStream(s.recognizer)
+	if stream == nil {
+		return "", fmt.Errorf("failed to allocate offline stream")
+	}
+	defer sherpa.DeleteOfflineStream(stream)
+
+	// Feed samples to stream
+	stream.AcceptWaveform(s.cfg.SampleRate, samples)
+
+	// Decode
+	s.recognizer.Decode(stream)
+
+	// Get result
+	result := stream.GetResult()
+	text := strings.TrimSpace(result.Text)
+
+	return text, nil
 }
 
 func appendLines(buf *strings.Builder, portion string, progress func(line string)) {

@@ -12,6 +12,27 @@ echo "=========================================="
 echo "Building Karte application..."
 echo "=========================================="
 
+# Clean Go build cache to ensure fresh embed
+echo "Cleaning Go build cache..."
+cd "$PROJECT_ROOT"
+go clean -cache
+
+# Clean and build frontend first to ensure dist/ is up to date
+cd "$PROJECT_ROOT/frontend"
+echo "Cleaning frontend dist directory..."
+rm -rf dist
+echo "Building frontend..."
+if ! npm run build; then
+    echo "Error: Frontend build failed"
+    exit 1
+fi
+
+# Verify recording button is in dist/index.html
+if ! grep -q "recordingBtn" dist/index.html; then
+    echo "Warning: recordingBtn not found in dist/index.html"
+    echo "This may indicate a build issue."
+fi
+
 # Run wails build
 cd "$PROJECT_ROOT"
 if ! command -v wails &> /dev/null; then
@@ -20,7 +41,18 @@ if ! command -v wails &> /dev/null; then
     exit 1
 fi
 
-wails build -platform darwin/universal -o karte-macos-universal
+wails build -platform darwin/arm64 -o karte-macos-arm64
+
+# Verify recording button is still in dist/index.html after Wails build
+echo ""
+echo "Verifying recording button after Wails build..."
+if ! grep -q "recordingBtn" "$PROJECT_ROOT/frontend/dist/index.html"; then
+    echo "ERROR: recordingBtn not found in dist/index.html after Wails build!"
+    echo "This indicates Wails may have overwritten the frontend build."
+    exit 1
+else
+    echo "✓ recordingBtn confirmed in dist/index.html after Wails build"
+fi
 
 echo ""
 echo "=========================================="
@@ -36,7 +68,7 @@ if [ -d "$BUILD_BIN/Karte.app" ]; then
     TEMPLATE_DIR="$BUILD_BIN/karte_data_template"
     echo "Detected build output in $BUILD_BIN"
 else
-    LATEST_DIST=$(find "$BUILD_DIST" -maxdepth 1 -type d -name "Karte-*-macos-universal" | sort -r | head -1)
+    LATEST_DIST=$(find "$BUILD_DIST" -maxdepth 1 -type d -name "Karte-*-macos-arm64" | sort -r | head -1)
     if [ -n "$LATEST_DIST" ] && [ -d "$LATEST_DIST/Karte.app" ]; then
         APP_BUNDLE="$LATEST_DIST/Karte.app"
         TEMPLATE_DIR="$LATEST_DIST/karte_data_template"

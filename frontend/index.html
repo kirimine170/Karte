@@ -190,11 +190,15 @@
   }
 
   .tabs {
+    position: relative;
+    z-index: 100;
     display: flex;
+    align-items: center;
     gap: 4px;
     margin-bottom: var(--gap);
     border-bottom: 1px solid var(--line);
     flex-shrink: 0;
+    width: 100%;
   }
 
   .tab {
@@ -215,6 +219,142 @@
   .tab.active {
     color: var(--ink);
     border-bottom-color: var(--accent);
+  }
+
+  .recording-btn {
+    margin-left: auto;
+    padding: 8px 16px;
+    background: var(--accent);
+    border: none;
+    border-radius: 6px;
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s;
+    font-size: 14px;
+    font-weight: 500;
+    flex-shrink: 0;
+    white-space: nowrap;
+    position: relative;
+    z-index: 100;
+  }
+
+  .recording-btn:hover {
+    background: var(--loading-color);
+    opacity: 0.9;
+  }
+
+  .recording-btn.recording {
+    background: #dc3545;
+    color: white;
+    animation: pulse-recording 1.5s ease-in-out infinite;
+  }
+
+  .recording-btn.recording:hover {
+    background: #c82333;
+  }
+
+  .recording-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: 10px;
+    padding: 6px 12px;
+    background-color: rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    position: relative;
+    z-index: 100;
+  }
+
+  .mic-level-container {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .mic-level-bar {
+    width: 80px;
+    height: 6px;
+    background-color: rgba(255, 255, 255, 0.2);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .mic-level-fill {
+    height: 100%;
+    width: 0%;
+    background-color: #4caf50;
+    transition: width 0.1s ease, background-color 0.1s ease;
+  }
+
+  .mic-level-label {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.9);
+    font-weight: 500;
+  }
+
+  .realtime-transcript {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.85);
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+    overflow: hidden;
+    border-radius: 4px;
+  }
+
+  .realtime-transcript-header {
+    font-size: 16px;
+    font-weight: bold;
+    margin-bottom: 10px;
+    color: rgba(255, 255, 255, 0.9);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    padding-bottom: 10px;
+  }
+
+  .realtime-transcript-content {
+    flex: 1;
+    overflow-y: auto;
+    font-size: 14px;
+    line-height: 1.6;
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .transcript-partial {
+    color: rgba(255, 255, 255, 0.6);
+    font-style: italic;
+    margin-bottom: 8px;
+  }
+
+  .transcript-final {
+    color: rgba(255, 255, 255, 0.9);
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .recording-icon {
+    font-size: 16px;
+  }
+
+  @keyframes pulse-recording {
+
+    0%,
+    100% {
+      opacity: 1;
+    }
+
+    50% {
+      opacity: 0.7;
+    }
   }
 
   .tab-content {
@@ -557,6 +697,18 @@
     <div class="tabs">
       <button class="tab active" data-tab="editor">エディター</button>
       <button class="tab" data-tab="graph">グラフ</button>
+      <button id="recordingBtn" class="recording-btn" title="録音開始/停止">
+        <span class="recording-icon">🎤</span>
+        <span class="recording-label">録音</span>
+      </button>
+      <div id="recordingIndicator" class="recording-indicator" style="display: none;">
+        <div class="mic-level-container">
+          <div class="mic-level-bar">
+            <div id="micLevelFill" class="mic-level-fill"></div>
+          </div>
+          <span class="mic-level-label">マイク</span>
+        </div>
+      </div>
     </div>
     <div class="tab-content active" id="editor-tab">
       <div class="row">
@@ -566,6 +718,10 @@
             <audio id="audioPlayer" controls preload="metadata">
               Your browser does not support the audio element.
             </audio>
+          </div>
+          <div id="realtimeTranscript" class="realtime-transcript" style="display: none;">
+            <div class="realtime-transcript-header">リアルタイム文字起こし</div>
+            <div id="realtimeTranscriptContent" class="realtime-transcript-content"></div>
           </div>
           <iframe id="preview"></iframe>
         </div>
