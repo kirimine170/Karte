@@ -18,56 +18,82 @@ type RealtimeService struct {
 	sampleRate int
 }
 
+// LogFunc is a function type for logging (can be nil)
+type LogFunc func(format string, args ...interface{})
+
 // NewRealtimeService creates a new real-time ASR service
+// logFunc is optional - if provided, logs will be written via this function
+// If nil, logs will only go to fmt.Printf (stdout)
 func NewRealtimeService(cfg *Config) (*RealtimeService, error) {
-	fmt.Printf("[RealtimeASR] Creating new real-time ASR service...\n")
+	return NewRealtimeServiceWithLogger(cfg, nil)
+}
+
+// NewRealtimeServiceWithLogger creates a new real-time ASR service with custom logger
+func NewRealtimeServiceWithLogger(cfg *Config, logFunc LogFunc) (*RealtimeService, error) {
+	log := func(format string, args ...interface{}) {
+		msg := fmt.Sprintf("[RealtimeASR] "+format, args...)
+		fmt.Printf(msg + "\n")
+		if logFunc != nil {
+			logFunc(format, args...)
+		}
+	}
+
+	log("Creating new real-time ASR service...")
 	if cfg == nil {
-		fmt.Printf("[RealtimeASR] ERROR: nil config\n")
+		log("ERROR: nil config")
 		return nil, errors.New("nil config")
 	}
+	log("Config is not nil, checking enabled flag...")
 	if !cfg.Enabled {
-		fmt.Printf("[RealtimeASR] ERROR: ASR disabled in config\n")
+		log("ERROR: ASR disabled in config")
 		return nil, errors.New("asr disabled in config")
 	}
+	log("ASR is enabled, validating config...")
 	if err := cfg.Validate(); err != nil {
-		fmt.Printf("[RealtimeASR] ERROR: Config validation failed: %v\n", err)
+		log("ERROR: Config validation failed: %v", err)
 		return nil, err
 	}
+	log("Config validation passed")
 
 	// Verify model files exist
-	fmt.Printf("[RealtimeASR] Verifying model files exist...\n")
+	log("Verifying model files exist...")
 	if err := verifyModelFiles(cfg); err != nil {
-		fmt.Printf("[RealtimeASR] ERROR: Model file verification failed: %v\n", err)
+		log("ERROR: Model file verification failed: %v", err)
 		return nil, fmt.Errorf("model file verification failed: %w", err)
 	}
-	fmt.Printf("[RealtimeASR] Model files verified\n")
+	log("Model files verified")
 
-	fmt.Printf("[RealtimeASR] Building online recognizer config...\n")
+	log("Building online recognizer config...")
 	onlineCfg := cfg.onlineRecognizerConfig()
 	if onlineCfg == nil {
-		fmt.Printf("[RealtimeASR] ERROR: Failed to build online recognizer config\n")
+		log("ERROR: Failed to build online recognizer config")
 		return nil, fmt.Errorf("failed to build online recognizer config")
 	}
-	fmt.Printf("[RealtimeASR] Online recognizer config built\n")
+	log("Online recognizer config built successfully")
+	log("Config details: SampleRate=%d, DecodingMethod=%s, MaxActivePaths=%d",
+		onlineCfg.FeatConfig.SampleRate, onlineCfg.DecodingMethod, onlineCfg.MaxActivePaths)
 
-	fmt.Printf("[RealtimeASR] Initializing online recognizer (this may take a moment)...\n")
+	log("About to call sherpa.NewOnlineRecognizer (this may take a moment and may crash)...")
 	rec := sherpa.NewOnlineRecognizer(onlineCfg)
 	if rec == nil {
-		fmt.Printf("[RealtimeASR] ERROR: Failed to initialize online recognizer\n")
+		log("ERROR: Failed to initialize online recognizer (returned nil)")
 		return nil, fmt.Errorf("failed to initialize online recognizer")
 	}
-	fmt.Printf("[RealtimeASR] Online recognizer initialized\n")
+	log("Online recognizer initialized successfully")
 
-	fmt.Printf("[RealtimeASR] Allocating online stream...\n")
+	log("About to call sherpa.NewOnlineStream...")
 	stream := sherpa.NewOnlineStream(rec)
 	if stream == nil {
-		fmt.Printf("[RealtimeASR] ERROR: Failed to allocate online stream\n")
-		sherpa.DeleteOnlineRecognizer(rec)
+		log("ERROR: Failed to allocate online stream (returned nil)")
+		if rec != nil {
+			log("Cleaning up recognizer...")
+			sherpa.DeleteOnlineRecognizer(rec)
+		}
 		return nil, fmt.Errorf("failed to allocate online stream")
 	}
-	fmt.Printf("[RealtimeASR] Online stream allocated (sampleRate=%d)\n", cfg.SampleRate)
+	log("Online stream allocated successfully (sampleRate=%d)", cfg.SampleRate)
 
-	fmt.Printf("[RealtimeASR] Real-time ASR service created successfully\n")
+	log("Real-time ASR service created successfully")
 	return &RealtimeService{
 		cfg:        cfg,
 		recognizer: rec,
@@ -84,7 +110,7 @@ func verifyModelFiles(cfg *Config) error {
 	if _, err := os.Stat(cfg.Model.Tokens); err != nil {
 		return fmt.Errorf("tokens file not found: %s (%w)", cfg.Model.Tokens, err)
 	}
-	
+
 	if cfg.Model.ZipformerCTC != "" {
 		if _, err := os.Stat(cfg.Model.ZipformerCTC); err != nil {
 			return fmt.Errorf("zipformerCTC model file not found: %s (%w)", cfg.Model.ZipformerCTC, err)
@@ -96,14 +122,14 @@ func verifyModelFiles(cfg *Config) error {
 		if _, err := os.Stat(cfg.Model.Encoder); err != nil {
 			return fmt.Errorf("encoder file not found: %s (%w)", cfg.Model.Encoder, err)
 		}
-		
+
 		if cfg.Model.Decoder == "" {
 			return fmt.Errorf("decoder file path is empty")
 		}
 		if _, err := os.Stat(cfg.Model.Decoder); err != nil {
 			return fmt.Errorf("decoder file not found: %s (%w)", cfg.Model.Decoder, err)
 		}
-		
+
 		if cfg.Model.Joiner == "" {
 			return fmt.Errorf("joiner file path is empty")
 		}
@@ -111,7 +137,7 @@ func verifyModelFiles(cfg *Config) error {
 			return fmt.Errorf("joiner file not found: %s (%w)", cfg.Model.Joiner, err)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -217,40 +243,50 @@ func (s *RealtimeService) Reset() {
 
 // onlineRecognizerConfig builds OnlineRecognizerConfig from Config
 func (c *Config) onlineRecognizerConfig() *sherpa.OnlineRecognizerConfig {
+	fmt.Printf("[RealtimeASR] onlineRecognizerConfig: Building config with Tokens=%s, Encoder=%s, Decoder=%s, Joiner=%s\n",
+		c.Model.Tokens, c.Model.Encoder, c.Model.Decoder, c.Model.Joiner)
+
 	modelCfg := sherpa.OnlineModelConfig{
 		Tokens:     c.Model.Tokens,
 		NumThreads: c.Runtime.Threads,
 		Provider:   c.Runtime.Provider,
 	}
+	fmt.Printf("[RealtimeASR] onlineRecognizerConfig: Model config created (Threads=%d, Provider=%s)\n",
+		c.Runtime.Threads, c.Runtime.Provider)
 
 	if c.Model.ZipformerCTC != "" {
 		// CTC model
+		fmt.Printf("[RealtimeASR] onlineRecognizerConfig: Using Zipformer2Ctc model\n")
 		modelCfg.Zipformer2Ctc = sherpa.OnlineZipformer2CtcModelConfig{
 			Model: c.Model.ZipformerCTC,
 		}
 	} else {
 		// Transducer model
+		fmt.Printf("[RealtimeASR] onlineRecognizerConfig: Using Transducer model\n")
 		modelCfg.Transducer = sherpa.OnlineTransducerModelConfig{
 			Encoder: c.Model.Encoder,
 			Decoder: c.Model.Decoder,
 			Joiner:  c.Model.Joiner,
 		}
 		modelCfg.ModelType = "" // Let sherpa-onnx auto-detect
+		fmt.Printf("[RealtimeASR] onlineRecognizerConfig: Transducer config set (ModelType=auto-detect)\n")
 	}
 
-	return &sherpa.OnlineRecognizerConfig{
+	fmt.Printf("[RealtimeASR] onlineRecognizerConfig: Creating OnlineRecognizerConfig...\n")
+	cfg := &sherpa.OnlineRecognizerConfig{
 		FeatConfig: sherpa.FeatureConfig{
 			SampleRate: c.SampleRate,
 			FeatureDim: 80,
 		},
-		ModelConfig:              modelCfg,
-		DecodingMethod:           c.Decoding.Method,
-		MaxActivePaths:           4,
+		ModelConfig:             modelCfg,
+		DecodingMethod:          c.Decoding.Method,
+		MaxActivePaths:          4,
 		EnableEndpoint:          1,
-		Rule1MinTrailingSilence:  0.8, // 0.8 seconds of silence triggers endpoint
-		Rule2MinTrailingSilence:  1.2, // 1.2 seconds of silence triggers endpoint
+		Rule1MinTrailingSilence: 0.8, // 0.8 seconds of silence triggers endpoint
+		Rule2MinTrailingSilence: 1.2, // 1.2 seconds of silence triggers endpoint
 		Rule3MinUtteranceLength: 0.5, // Minimum utterance length
-		BlankPenalty:             0.0,
+		BlankPenalty:            0.0,
 	}
+	fmt.Printf("[RealtimeASR] onlineRecognizerConfig: Config created successfully\n")
+	return cfg
 }
-

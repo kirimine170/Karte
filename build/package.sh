@@ -107,14 +107,17 @@ else
   "enabled": false,
   "sampleRate": 16000,
   "model": {
-    "tokens": "sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01/tokens.txt",
-    "encoder": "sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01/encoder-epoch-99-avg-1.onnx",
-    "decoder": "sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01/decoder-epoch-99-avg-1.onnx",
-    "joiner": "sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01/joiner-epoch-99-avg-1.onnx"
+    "tokens": "sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10/tokens.txt",
+    "encoder": "sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10/encoder-epoch-75-avg-11-chunk-16-left-128.int8.onnx",
+    "decoder": "sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10/decoder-epoch-75-avg-11-chunk-16-left-128.onnx",
+    "joiner": "sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10/joiner-epoch-75-avg-11-chunk-16-left-128.int8.onnx"
   },
   "decoding": {
-    "method": "greedy_search",
-    "maxActivePaths": 4
+    "method": "greedy_search"
+  },
+  "runtime": {
+    "threads": 4,
+    "provider": "cpu"
   }
 }
 EOF

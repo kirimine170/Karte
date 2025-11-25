@@ -34,14 +34,15 @@ import (
 
 // App struct
 type App struct {
-	ctx         context.Context
-	root        string
-	dataDir     string
-	logFilePath string
-	syncManager *syncpkg.SyncManager
-	vcs         *gitvcs.VCS
-	asrService  *asr.Service
-	asrInitDone chan struct{}
+	ctx             context.Context
+	root            string
+	dataDir         string
+	logFilePath     string
+	syncManager     *syncpkg.SyncManager
+	vcs             *gitvcs.VCS
+	asrService      *asr.Service
+	realtimeService *asr.RealtimeService // For real-time ASR with partial text support
+	asrInitDone     chan struct{}
 	// Recording fields
 	recorder                *audio.Recorder
 	recordingMu             sync.Mutex
@@ -387,6 +388,12 @@ func (a *App) shouldOverwriteTemplateFile(relPath string) bool {
 	normalized := filepath.ToSlash(relPath)
 	// Preserve user-authored markdown/content/audio if file already exists
 	if strings.HasPrefix(normalized, "content/") || strings.HasPrefix(normalized, "data/audio/") {
+		if _, err := os.Stat(filepath.Join(a.dataDir, relPath)); err == nil {
+			return false
+		}
+	}
+	// Preserve user-configured ASR config.json if it already exists
+	if normalized == "data/asr/config.json" {
 		if _, err := os.Stat(filepath.Join(a.dataDir, relPath)); err == nil {
 			return false
 		}
@@ -1139,6 +1146,75 @@ audio_path: %q
 `, fmt.Sprintf("Transcript %s", filepath.Base(audioRelPath)), now, audioRelPath, strings.TrimSpace(transcript))
 }
 
+// appendTranscriptPartial updates the partial text marker in the transcript file
+func (a *App) appendTranscriptPartial(contentRel, partialText string) {
+	absPath, ok := a.resolveContentPath(contentRel)
+	if !ok {
+		a.logError(fmt.Sprintf("Failed to resolve transcript path: %s", contentRel))
+		return
+	}
+
+	// Read existing content
+	content, err := os.ReadFile(absPath)
+	if err != nil {
+		a.logError(fmt.Sprintf("Failed to read transcript file: %v", err))
+		return
+	}
+
+	contentStr := string(content)
+	partialMarkerStart := "<!-- ASR_PARTIAL -->"
+	partialMarkerEnd := "<!-- /ASR_PARTIAL -->"
+
+	// Find the "## Transcript" section
+	transcriptHeader := "## Transcript"
+	headerIndex := strings.Index(contentStr, transcriptHeader)
+
+	if headerIndex == -1 {
+		// If "## Transcript" not found, create it with partial text
+		contentStr += "\n\n" + transcriptHeader + "\n\n" + partialMarkerStart + partialText + partialMarkerEnd + "\n"
+	} else {
+		// Find existing partial marker
+		afterHeader := contentStr[headerIndex+len(transcriptHeader):]
+		partialStartIndex := strings.Index(afterHeader, partialMarkerStart)
+		partialEndIndex := strings.Index(afterHeader, partialMarkerEnd)
+
+		if partialStartIndex != -1 && partialEndIndex != -1 && partialEndIndex > partialStartIndex {
+			// Replace existing partial text
+			beforePartial := contentStr[:headerIndex+len(transcriptHeader)+partialStartIndex+len(partialMarkerStart)]
+			afterPartial := contentStr[headerIndex+len(transcriptHeader)+partialEndIndex+len(partialMarkerEnd):]
+			contentStr = beforePartial + partialText + partialMarkerEnd + afterPartial
+		} else {
+			// Add new partial text marker at the end of Transcript section
+			// Find the end of the section (next ## header or end of file)
+			nextHeaderMatch := strings.Index(afterHeader, "\n## ")
+			sectionEnd := len(afterHeader)
+			if nextHeaderMatch != -1 {
+				sectionEnd = nextHeaderMatch
+			}
+			sectionContent := strings.TrimRight(afterHeader[:sectionEnd], "\n")
+			newSectionContent := sectionContent
+			if sectionContent != "" {
+				newSectionContent += "\n\n"
+			}
+			newSectionContent += partialMarkerStart + partialText + partialMarkerEnd + "\n"
+			contentStr = contentStr[:headerIndex+len(transcriptHeader)] + "\n" + newSectionContent + afterHeader[sectionEnd:]
+		}
+	}
+
+	// Write back to file
+	if err := os.WriteFile(absPath, []byte(contentStr), 0644); err != nil {
+		a.logError(fmt.Sprintf("Failed to write transcript: %v", err))
+		return
+	}
+
+	// Sync to ensure data is written immediately
+	f, err := os.OpenFile(absPath, os.O_RDONLY, 0644)
+	if err == nil {
+		f.Sync()
+		f.Close()
+	}
+}
+
 func (a *App) appendTranscriptLine(contentRel, line string) {
 	absPath, ok := a.resolveContentPath(contentRel)
 	if !ok {
@@ -1154,6 +1230,8 @@ func (a *App) appendTranscriptLine(contentRel, line string) {
 	}
 
 	contentStr := string(content)
+	partialMarkerStart := "<!-- ASR_PARTIAL -->"
+	partialMarkerEnd := "<!-- /ASR_PARTIAL -->"
 
 	// Find the "## Transcript" section
 	transcriptHeader := "## Transcript"
@@ -1163,9 +1241,21 @@ func (a *App) appendTranscriptLine(contentRel, line string) {
 		// If "## Transcript" not found, append at the end
 		contentStr += "\n\n" + transcriptHeader + "\n\n" + line + "\n\n"
 	} else {
-		// Always append at the end of the file to maintain chronological order
-		// This ensures new transcript segments are added in the correct time order
-		contentStr += "\n\n" + line + "\n\n"
+		// Check if there's a partial text marker to replace
+		afterHeader := contentStr[headerIndex+len(transcriptHeader):]
+		partialStartIndex := strings.Index(afterHeader, partialMarkerStart)
+		partialEndIndex := strings.Index(afterHeader, partialMarkerEnd)
+
+		if partialStartIndex != -1 && partialEndIndex != -1 && partialEndIndex > partialStartIndex {
+			// Replace partial marker with final text
+			beforePartial := contentStr[:headerIndex+len(transcriptHeader)+partialStartIndex]
+			afterPartial := contentStr[headerIndex+len(transcriptHeader)+partialEndIndex+len(partialMarkerEnd):]
+			contentStr = beforePartial + line + "\n" + afterPartial
+		} else {
+			// Always append at the end of the file to maintain chronological order
+			// This ensures new transcript segments are added in the correct time order
+			contentStr += "\n\n" + line + "\n\n"
+		}
 	}
 
 	// Write back to file
@@ -2124,13 +2214,102 @@ func (a *App) StartRecording() error {
 		a.logError("[Recording] ASR service not ready")
 		return fmt.Errorf("ASR service not ready")
 	}
-	a.logInfo("[Recording] ASR service is ready (using existing Service)")
+	a.logInfo("[Recording] ASR service is ready")
+
+	// Initialize RealtimeService for partial text support
+	// Check if model is suitable for online recognition (streaming model)
+	a.logInfo("[Recording] Initializing RealtimeService for partial text...")
+	cfgPath := filepath.Join(a.dataDir, "data", "asr", "config.json")
+	a.logInfo(fmt.Sprintf("[Recording] Loading ASR config from: %s", cfgPath))
+	cfg, err := asr.LoadConfigFromFile(cfgPath)
+	if err != nil {
+		a.logError(fmt.Sprintf("[Recording] Failed to load ASR config: %v", err))
+		return fmt.Errorf("failed to load ASR config: %w", err)
+	}
+	if cfg == nil {
+		a.logError("[Recording] ASR config is nil")
+		return fmt.Errorf("ASR config is nil")
+	}
+	a.logInfo(fmt.Sprintf("[Recording] ASR config loaded: enabled=%v, sampleRate=%d", cfg.Enabled, cfg.SampleRate))
+	if !cfg.Enabled {
+		a.logError("[Recording] ASR config not enabled")
+		return fmt.Errorf("ASR not enabled")
+	}
+	a.logInfo("[Recording] Making model paths absolute...")
+	cfg.EnsureModelPathsAbsolute(a.dataDir)
+	a.logInfo(fmt.Sprintf("[Recording] Model paths: encoder=%s, decoder=%s, joiner=%s, tokens=%s",
+		cfg.Model.Encoder, cfg.Model.Decoder, cfg.Model.Joiner, cfg.Model.Tokens))
+
+	// Check if model is suitable for online recognition
+	// Streaming models typically have "chunk", "left", "right", or "streaming" in the filename
+	isStreamingModel := strings.Contains(cfg.Model.Encoder, "chunk") ||
+		strings.Contains(cfg.Model.Encoder, "left") ||
+		strings.Contains(cfg.Model.Encoder, "right") ||
+		strings.Contains(cfg.Model.Encoder, "streaming") ||
+		strings.Contains(cfg.Model.Decoder, "chunk") ||
+		strings.Contains(cfg.Model.Decoder, "left") ||
+		strings.Contains(cfg.Model.Decoder, "right") ||
+		strings.Contains(cfg.Model.Decoder, "streaming")
+
+	if !isStreamingModel {
+		a.logInfo("[Recording] Model appears to be offline-only (no streaming indicators in filename). Skipping RealtimeService initialization.")
+		a.logInfo("[Recording] Partial text will not be available, but recording will continue with offline ASR.")
+		// Continue without RealtimeService - we'll use offline ASR only
+		a.realtimeService = nil
+	} else {
+		a.logInfo("[Recording] Model appears to be streaming-capable. Initializing RealtimeService...")
+		a.logInfo("[Recording] Calling asr.NewRealtimeService...")
+
+		// Create a logger function that writes to app.log
+		logFunc := func(format string, args ...interface{}) {
+			msg := fmt.Sprintf(format, args...)
+			a.logInfo(fmt.Sprintf("[Recording] [RealtimeASR] %s", msg))
+		}
+
+		// Call NewRealtimeService directly with panic recovery
+		var realtimeService *asr.RealtimeService
+		var serviceErr error
+
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					errMsg := fmt.Sprintf("panic in NewRealtimeService: %v", r)
+					a.logError(fmt.Sprintf("[Recording] %s", errMsg))
+					serviceErr = fmt.Errorf(errMsg)
+				}
+			}()
+
+			a.logInfo("[Recording] Entering NewRealtimeService (this may take a moment)...")
+			realtimeService, serviceErr = asr.NewRealtimeServiceWithLogger(cfg, logFunc)
+			a.logInfo(fmt.Sprintf("[Recording] NewRealtimeService returned: service=%v, err=%v",
+				realtimeService != nil, serviceErr))
+		}()
+
+		if serviceErr != nil {
+			a.logError(fmt.Sprintf("[Recording] Failed to initialize RealtimeService: %v", serviceErr))
+			a.logInfo("[Recording] Continuing without RealtimeService - will use offline ASR only")
+			// Don't fail - continue without RealtimeService
+			a.realtimeService = nil
+		} else if realtimeService == nil {
+			a.logError("[Recording] NewRealtimeService returned nil (no error)")
+			a.logInfo("[Recording] Continuing without RealtimeService - will use offline ASR only")
+			a.realtimeService = nil
+		} else {
+			a.realtimeService = realtimeService
+			a.logInfo("[Recording] RealtimeService initialized successfully")
+		}
+	}
 
 	// Create recorder
 	a.logInfo("[Recording] Creating audio recorder...")
 	recorder, err := audio.NewRecorder()
 	if err != nil {
 		a.logError(fmt.Sprintf("[Recording] Failed to create recorder: %v", err))
+		// Clean up RealtimeService if recorder creation fails
+		if a.realtimeService != nil {
+			a.realtimeService.Close()
+			a.realtimeService = nil
+		}
 		return fmt.Errorf("failed to create recorder: %w", err)
 	}
 	a.logInfo("[Recording] Audio recorder created successfully")
@@ -2249,7 +2428,9 @@ func (a *App) StartRecording() error {
 		a.processRecordingSamples(&segmentIndex)
 	}()
 
-	runtime.EventsEmit(a.ctx, "recording-started", map[string]interface{}{})
+	runtime.EventsEmit(a.ctx, "recording-started", map[string]interface{}{
+		"transcriptPath": contentRel,
+	})
 	a.logInfo("[Recording] Recording started successfully")
 
 	return nil
@@ -2373,7 +2554,74 @@ func (a *App) processRecordingSamples(segmentIndex *int) {
 				continue
 			}
 
-			// Process in chunks
+			// Process with RealtimeService for partial text (if available)
+			if a.realtimeService != nil {
+				// Process audio chunks with RealtimeService
+				for i := 0; i < len(newSamples); i += chunkSize {
+					end := i + chunkSize
+					if end > len(newSamples) {
+						end = len(newSamples)
+					}
+					chunk := newSamples[i:end]
+
+					// Process with RealtimeService to get partial/final text
+					partialText, finalText, isFinal := a.realtimeService.ProcessAudio(chunk)
+
+					// Emit partial text event if text changed and write to file
+					if partialText != "" {
+						// Get current timestamp
+						currentSampleIndex := processedSamples + i
+						timestamp := float64(currentSampleIndex) / float64(audio.RecordingSampleRate)
+						var transcriptPath string
+						func() {
+							a.recordingMu.Lock()
+							defer a.recordingMu.Unlock()
+							transcriptPath = a.recordingTranscriptPath
+						}()
+						runtime.EventsEmit(a.ctx, "recording-transcript-partial", map[string]interface{}{
+							"text":           partialText,
+							"timestamp":      timestamp,
+							"transcriptPath": transcriptPath,
+						})
+
+						// Write partial text to transcript file
+						if transcriptPath != "" {
+							a.appendTranscriptPartial(transcriptPath, partialText)
+						}
+					}
+
+					// Emit final text event if endpoint reached
+					if isFinal && finalText != "" {
+						currentSampleIndex := processedSamples + i
+						timestamp := float64(currentSampleIndex) / float64(audio.RecordingSampleRate)
+						*segmentIndex++
+						var transcriptPath string
+						func() {
+							a.recordingMu.Lock()
+							defer a.recordingMu.Unlock()
+							transcriptPath = a.recordingTranscriptPath
+						}()
+						runtime.EventsEmit(a.ctx, "recording-transcript-final", map[string]interface{}{
+							"text":           finalText,
+							"segmentIndex":   *segmentIndex,
+							"timestamp":      timestamp,
+							"transcriptPath": transcriptPath,
+						})
+						a.logInfo(fmt.Sprintf("[Recording] Final transcript segment %d: %s (timestamp: %.2f)", *segmentIndex, finalText, timestamp))
+
+						// Append to transcript file
+						if transcriptPath != "" {
+							minutes := int(timestamp) / 60
+							seconds := int(timestamp) % 60
+							timestampedLine := fmt.Sprintf("**%02d:%02d** %s", minutes, seconds, finalText)
+							a.appendTranscriptLine(transcriptPath, timestampedLine)
+							a.logInfo(fmt.Sprintf("[Recording] Appended transcript segment %d to file", *segmentIndex))
+						}
+					}
+				}
+			}
+
+			// Process in chunks (for VAD and segment detection - keep existing logic)
 			for i := 0; i < len(newSamples); i += chunkSize {
 				// Check stop signal periodically during processing
 				select {
@@ -2527,24 +2775,23 @@ func (a *App) finalizeRecordingSegment(segmentIndex *int, startSampleIndex int, 
 		if strings.TrimSpace(text) != "" {
 			*segmentIndex++
 			timestamp := float64(startSampleIndex) / float64(audio.RecordingSampleRate)
-			a.logInfo(fmt.Sprintf("[Recording] Final transcript segment %d: %s (timestamp: %.2f)", *segmentIndex, text, timestamp))
-
-			// Emit event for UI
-			runtime.EventsEmit(a.ctx, "recording-transcript-final", map[string]interface{}{
-				"text":         text,
-				"segmentIndex": *segmentIndex,
-				"timestamp":    timestamp,
-			})
-
-			// Append to transcript file immediately (with flush)
-			// Get transcript path (safe to read without lock as it's only set at start)
 			var transcriptPath string
 			func() {
 				a.recordingMu.Lock()
 				defer a.recordingMu.Unlock()
 				transcriptPath = a.recordingTranscriptPath
 			}()
+			a.logInfo(fmt.Sprintf("[Recording] Final transcript segment %d: %s (timestamp: %.2f)", *segmentIndex, text, timestamp))
 
+			// Emit event for UI
+			runtime.EventsEmit(a.ctx, "recording-transcript-final", map[string]interface{}{
+				"text":           text,
+				"segmentIndex":   *segmentIndex,
+				"timestamp":      timestamp,
+				"transcriptPath": transcriptPath,
+			})
+
+			// Append to transcript file immediately (with flush)
 			if transcriptPath != "" {
 				// Format timestamp as MM:SS
 				minutes := int(timestamp) / 60
@@ -2587,6 +2834,50 @@ func (a *App) StopRecording() (string, error) {
 			a.logError(fmt.Sprintf("[Recording] Failed to stop recorder: %v", err))
 		} else {
 			a.logInfo("[Recording] Audio recorder stopped successfully")
+		}
+	}
+
+	// Flush RealtimeService before stopping processing
+	if a.realtimeService != nil {
+		a.logInfo("[Recording] Flushing RealtimeService...")
+		finalText := a.realtimeService.Flush()
+		if finalText != "" {
+			// Get current timestamp
+			var currentSamples int
+			func() {
+				a.recordingMu.Lock()
+				defer a.recordingMu.Unlock()
+				currentSamples = len(a.recordingSamples)
+			}()
+			timestamp := float64(currentSamples) / float64(audio.RecordingSampleRate)
+			var segmentIndex int
+			func() {
+				a.recordingMu.Lock()
+				defer a.recordingMu.Unlock()
+				// Get last segment index (we'll increment it)
+				segmentIndex = 0 // We'll need to track this differently
+			}()
+			var transcriptPath string
+			func() {
+				a.recordingMu.Lock()
+				defer a.recordingMu.Unlock()
+				transcriptPath = a.recordingTranscriptPath
+			}()
+			runtime.EventsEmit(a.ctx, "recording-transcript-final", map[string]interface{}{
+				"text":           finalText,
+				"segmentIndex":   segmentIndex,
+				"timestamp":      timestamp,
+				"transcriptPath": transcriptPath,
+			})
+			a.logInfo(fmt.Sprintf("[Recording] Flushed final transcript: %s", finalText))
+
+			// Append to transcript file
+			if transcriptPath != "" {
+				minutes := int(timestamp) / 60
+				seconds := int(timestamp) % 60
+				timestampedLine := fmt.Sprintf("**%02d:%02d** %s", minutes, seconds, finalText)
+				a.appendTranscriptLine(transcriptPath, timestampedLine)
+			}
 		}
 	}
 
@@ -2740,6 +3031,18 @@ func (a *App) cleanupRecording() {
 		recorder.Close()
 		a.logInfo("[Recording] Audio recorder closed")
 	}
+
+	// Close RealtimeService if it exists
+	func() {
+		a.recordingMu.Lock()
+		defer a.recordingMu.Unlock()
+		if a.realtimeService != nil {
+			a.logInfo("[Recording] Closing RealtimeService...")
+			a.realtimeService.Close()
+			a.realtimeService = nil
+			a.logInfo("[Recording] RealtimeService closed")
+		}
+	}()
 
 	a.logInfo("[Recording] Cleanup completed")
 }

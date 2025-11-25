@@ -181,6 +181,7 @@ function jsLog(level, ...args) {
 
 // Global variables
 let currentPath = '';
+let recordingTranscriptPath = null;
 let files = [];
 let graphModule = null;
 let lastMarpSlideIndex = 0;
@@ -1029,6 +1030,18 @@ function setupRecording() {
     }
 
     let isRecording = false;
+    let recordingPreviewTimeout = null;
+
+    function scheduleRecordingPreviewUpdate() {
+        if (recordingPreviewTimeout) {
+            clearTimeout(recordingPreviewTimeout);
+        }
+        recordingPreviewTimeout = setTimeout(() => {
+            updatePreview().catch((error) => {
+                console.error('Failed to update preview for recording changes:', error);
+            });
+        }, 150);
+    }
 
     // Update recording button state
     async function updateRecordingState() {
@@ -1103,7 +1116,9 @@ function setupRecording() {
             }
         });
 
-        EventsOn('recording-started', () => {
+        EventsOn('recording-started', async (payload) => {
+            // Switch to editor tab when recording starts
+            switchToTab('editor');
             isRecording = true;
             recordingBtn.classList.add('recording');
             const label = recordingBtn.querySelector('.recording-label');
@@ -1113,15 +1128,27 @@ function setupRecording() {
             if (recordingIndicator) {
                 recordingIndicator.style.display = 'flex';
             }
-            if (realtimeTranscript) {
-                realtimeTranscript.style.display = 'block';
-                transcriptSegments = [];
-                realtimeTranscriptContent.textContent = '';
-            }
+            // Overlay is now hidden - transcription is written directly to editor
+            // if (realtimeTranscript) {
+            //     realtimeTranscript.style.display = 'block';
+            //     transcriptSegments = [];
+            //     realtimeTranscriptContent.textContent = '';
+            // }
             setStatusMessage('録音中...', 0);
+
+            recordingTranscriptPath = payload && payload.transcriptPath ? payload.transcriptPath : null;
+            if (recordingTranscriptPath) {
+                try {
+                    await loadFile(recordingTranscriptPath);
+                    setStatusMessage('録音用ファイルを開きました', 2000);
+                } catch (error) {
+                    console.error('Failed to open recording transcript file:', error);
+                    setStatusMessage('録音用ファイルの読み込みに失敗しました', 5000);
+                }
+            }
         });
 
-        EventsOn('recording-stopped', (payload) => {
+        EventsOn('recording-stopped', async (payload) => {
             isRecording = false;
             recordingBtn.classList.remove('recording');
             const label = recordingBtn.querySelector('.recording-label');
@@ -1134,23 +1161,30 @@ function setupRecording() {
             if (micLevelFill) {
                 micLevelFill.style.width = '0%';
             }
-            if (payload && payload.transcriptPath) {
+            recordingTranscriptPath = payload && payload.transcriptPath ? payload.transcriptPath : recordingTranscriptPath;
+
+            if (recordingTranscriptPath) {
                 setStatusMessage('録音と文字起こしが完了しました', 3000);
                 loadFileList();
-                // Optionally load the transcript file
-                if (payload.transcriptPath) {
-                    loadFile(payload.transcriptPath);
+                try {
+                    await loadFile(recordingTranscriptPath);
                     switchToTab('editor');
+                    setStatusMessage('録音ファイルを開きました', 3000);
+                } catch (error) {
+                    console.error('Failed to open transcript file:', error);
+                    setStatusMessage('録音ファイルの読み込みに失敗しました', 3000);
                 }
             } else {
                 setStatusMessage('録音を停止しました', 3000);
             }
-            // Hide realtime transcript after a delay
-            if (realtimeTranscript) {
-                setTimeout(() => {
-                    realtimeTranscript.style.display = 'none';
-                }, 5000);
-            }
+            // Overlay is now hidden - transcription is written directly to editor
+            // if (realtimeTranscript) {
+            //     setTimeout(() => {
+            //         realtimeTranscript.style.display = 'none';
+            //     }, 5000);
+            // }
+            // Reset transcript tracking after stop
+            recordingTranscriptPath = null;
         });
 
         EventsOn('recording-input-level', (payload) => {
@@ -1174,60 +1208,148 @@ function setupRecording() {
 
         EventsOn('recording-transcript-partial', (payload) => {
             if (payload && payload.text) {
-                // Show partial transcript in realtime display
-                if (realtimeTranscriptContent) {
-                    const lastSegment = transcriptSegments[transcriptSegments.length - 1];
-                    if (lastSegment && !lastSegment.final) {
-                        // Update last partial segment
-                        lastSegment.text = payload.text;
-                    } else {
-                        // Add new partial segment
-                        transcriptSegments.push({
-                            text: payload.text,
-                            final: false
-                        });
-                    }
-                    updateRealtimeTranscriptDisplay();
-                }
-                // Also show in status bar
+                // Show partial text in status bar
                 setStatusMessage(`録音中: ${payload.text}`, 0);
+                if (recordingTranscriptPath && currentPath === recordingTranscriptPath) {
+                    updateEditorWithPartialText(payload.text);
+                }
             }
         });
 
         EventsOn('recording-transcript-final', (payload) => {
             if (payload && payload.text) {
-                // Mark last segment as final or add new final segment
-                const lastSegment = transcriptSegments[transcriptSegments.length - 1];
-                if (lastSegment && !lastSegment.final) {
-                    lastSegment.text = payload.text;
-                    lastSegment.final = true;
-                } else {
-                    transcriptSegments.push({
-                        text: payload.text,
-                        final: true
-                    });
-                }
-                updateRealtimeTranscriptDisplay();
                 // Show final transcript in status bar
                 setStatusMessage(`確定: ${payload.text}`, 2000);
+                if (recordingTranscriptPath && currentPath === recordingTranscriptPath) {
+                    updateEditorWithFinalText(payload.text, payload.timestamp || 0, payload.segmentIndex || 0);
+                }
             }
         });
 
-        function updateRealtimeTranscriptDisplay() {
-            if (!realtimeTranscriptContent) return;
-            const html = transcriptSegments.map((seg, idx) => {
-                const className = seg.final ? 'transcript-final' : 'transcript-partial';
-                return `<div class="${className}">${escapeHtml(seg.text)}</div>`;
-            }).join('');
-            realtimeTranscriptContent.innerHTML = html;
-            // Auto-scroll to bottom
-            realtimeTranscriptContent.scrollTop = realtimeTranscriptContent.scrollHeight;
+        function updateEditorWithPartialText(text) {
+            if (!ta || !recordingTranscriptPath || currentPath !== recordingTranscriptPath) {
+                return;
+            }
+
+            const content = ta.value;
+            const partialMarkerStart = '<!-- ASR_PARTIAL -->';
+            const partialMarkerEnd = '<!-- /ASR_PARTIAL -->';
+
+            // Find ## Transcript section
+            const transcriptHeaderRegex = /^##\s+Transcript\s*$/m;
+            const match = content.match(transcriptHeaderRegex);
+            if (!match) {
+                const newContent = content + '\n\n## Transcript\n\n' + partialMarkerStart + text + partialMarkerEnd + '\n';
+                const cursorPos = ta.selectionStart;
+                ta.value = newContent;
+                scheduleRecordingPreviewUpdate();
+                if (cursorPos <= content.length) {
+                    ta.setSelectionRange(cursorPos, cursorPos);
+                }
+                return;
+            }
+
+            const headerIndex = match.index;
+            const afterHeader = content.substring(headerIndex + match[0].length);
+
+            const partialStartIndex = afterHeader.indexOf(partialMarkerStart);
+            const partialEndIndex = afterHeader.indexOf(partialMarkerEnd);
+
+            let newContent;
+            const cursorPos = ta.selectionStart;
+
+            if (partialStartIndex !== -1 && partialEndIndex !== -1 && partialEndIndex > partialStartIndex) {
+                const beforePartial = content.substring(0, headerIndex + match[0].length + partialStartIndex + partialMarkerStart.length);
+                const afterPartial = content.substring(headerIndex + match[0].length + partialEndIndex);
+                newContent = beforePartial + text + partialMarkerEnd + afterPartial;
+            } else {
+                const nextHeaderMatch = afterHeader.match(/^##\s+/m);
+                const sectionEnd = nextHeaderMatch ? nextHeaderMatch.index : afterHeader.length;
+                const sectionContent = afterHeader.substring(0, sectionEnd);
+                const trimmedSection = sectionContent.trimEnd();
+                const newSectionContent = trimmedSection + (trimmedSection ? '\n\n' : '') + partialMarkerStart + text + partialMarkerEnd + '\n';
+                newContent = content.substring(0, headerIndex + match[0].length) + '\n' + newSectionContent + afterHeader.substring(sectionEnd);
+            }
+
+            ta.value = newContent;
+            scheduleRecordingPreviewUpdate();
+
+            const transcriptStart = headerIndex;
+            const transcriptEnd = newContent.indexOf('\n## ', transcriptStart + 1);
+            const actualTranscriptEnd = transcriptEnd !== -1 ? transcriptEnd : newContent.length;
+            if (cursorPos < transcriptStart || cursorPos > actualTranscriptEnd) {
+                ta.setSelectionRange(cursorPos, cursorPos);
+            }
         }
 
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
+        function updateEditorWithFinalText(text, timestamp, segmentIndex) {
+            if (!ta || !recordingTranscriptPath || currentPath !== recordingTranscriptPath) {
+                return;
+            }
+
+            const content = ta.value;
+            const partialMarkerStart = '<!-- ASR_PARTIAL -->';
+            const partialMarkerEnd = '<!-- /ASR_PARTIAL -->';
+
+            const minutes = Math.floor(timestamp / 60);
+            const seconds = Math.floor(timestamp % 60);
+            const timestampStr = `**${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}**`;
+            const finalLine = timestampStr + ' ' + text;
+
+            const transcriptHeaderRegex = /^##\s+Transcript\s*$/m;
+            const match = content.match(transcriptHeaderRegex);
+            if (!match) {
+                const newContent = content + '\n\n## Transcript\n\n' + finalLine + '\n';
+                const cursorPos = ta.selectionStart;
+                ta.value = newContent;
+                scheduleRecordingPreviewUpdate();
+                if (cursorPos <= content.length) {
+                    ta.setSelectionRange(cursorPos, cursorPos);
+                }
+                return;
+            }
+
+            const headerIndex = match.index;
+            const afterHeader = content.substring(headerIndex + match[0].length);
+
+            const partialStartIndex = afterHeader.indexOf(partialMarkerStart);
+            const partialEndIndex = afterHeader.indexOf(partialMarkerEnd);
+
+            let newContent;
+            const cursorPos = ta.selectionStart;
+
+            if (partialStartIndex !== -1 && partialEndIndex !== -1 && partialEndIndex > partialStartIndex) {
+                const beforePartial = content.substring(0, headerIndex + match[0].length + partialStartIndex);
+                const afterPartial = content.substring(headerIndex + match[0].length + partialEndIndex + partialMarkerEnd.length);
+                newContent = beforePartial + finalLine + '\n' + afterPartial;
+            } else {
+                const nextHeaderMatch = afterHeader.match(/^##\s+/m);
+                const sectionEnd = nextHeaderMatch ? nextHeaderMatch.index : afterHeader.length;
+                const sectionContent = afterHeader.substring(0, sectionEnd);
+                const trimmedSection = sectionContent.trimEnd();
+                const newSectionContent = trimmedSection + (trimmedSection ? '\n\n' : '') + finalLine + '\n';
+                newContent = content.substring(0, headerIndex + match[0].length) + '\n' + newSectionContent + afterHeader.substring(sectionEnd);
+            }
+
+            const conflictRegex = new RegExp(`^\\*\\*${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}\\*\\*\\s+.*$`, 'm');
+            const existingMatch = newContent.match(conflictRegex);
+            if (existingMatch && existingMatch[0] !== finalLine) {
+                const conflictLine = existingMatch[0];
+                const conflictIndex = existingMatch.index;
+                const beforeConflict = newContent.substring(0, conflictIndex + conflictLine.length);
+                const afterConflict = newContent.substring(conflictIndex + conflictLine.length);
+                newContent = beforeConflict + '\n' + finalLine + afterConflict;
+            }
+
+            ta.value = newContent;
+            scheduleRecordingPreviewUpdate();
+
+            const transcriptStart = headerIndex;
+            const transcriptEnd = newContent.indexOf('\n## ', transcriptStart + 1);
+            const actualTranscriptEnd = transcriptEnd !== -1 ? transcriptEnd : newContent.length;
+            if (cursorPos < transcriptStart || cursorPos > actualTranscriptEnd) {
+                ta.setSelectionRange(cursorPos, cursorPos);
+            }
         }
     }
 
