@@ -1,4 +1,4 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict } from '../wailsjs/wailsjs/go/main/App';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, GetASRStatus, GetAudioFileURL, StartRecording, StopRecording, IsRecording, LogJS } from '../wailsjs/wailsjs/go/main/App';
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
@@ -81,6 +81,45 @@ const mockFunctions = {
     async ResolveConflict(path, strategy) {
         console.log('Mock ResolveConflict called:', path, strategy);
         return true;
+    },
+
+    async ImportAudioFile(path) {
+        console.log('Mock ImportAudioFile called:', path);
+        return `data/audio/mock-${Date.now()}.wav`;
+    },
+
+    async ImportAudioBase64(name, data) {
+        console.log('Mock ImportAudioBase64 called:', name, data.length);
+        return `data/audio/mock-${Date.now()}.wav`;
+    },
+
+    async GetASRStatus() {
+        console.log('Mock GetASRStatus called');
+        return { initialized: false, initializing: false };
+    },
+
+    async GetAudioFileURL(audioPath) {
+        console.log('Mock GetAudioFileURL called:', audioPath);
+        return `/audio/${audioPath}`;
+    },
+
+    async StartRecording() {
+        console.log('Mock StartRecording called');
+        return true;
+    },
+
+    async StopRecording() {
+        console.log('Mock StopRecording called');
+        return 'data/audio/mock-recording.m4a';
+    },
+
+    async IsRecording() {
+        console.log('Mock IsRecording called');
+        return false;
+    },
+
+    async LogJS(level, msg) {
+        console.log(`[Mock LogJS] ${level}: ${msg}`);
     }
 };
 
@@ -97,14 +136,56 @@ const api = isBrowser ? mockFunctions : {
     GetCustomCSS,
     SetCustomCSS,
     ClearCustomCSS,
-    ResolveConflict
+    ResolveConflict,
+    ImportAudioFile,
+    ImportAudioBase64,
+    GetASRStatus,
+    GetAudioFileURL,
+    StartRecording,
+    StopRecording,
+    IsRecording,
+    LogJS
 };
+
+// Logging helper function that writes to app.log via Go backend
+function jsLog(level, ...args) {
+    const msg = args.map(arg => {
+        if (typeof arg === 'object') {
+            try {
+                return JSON.stringify(arg);
+            } catch (e) {
+                return String(arg);
+            }
+        }
+        return String(arg);
+    }).join(' ');
+
+    // Also log to browser console for immediate feedback
+    if (level === 'ERROR' || level === 'ERR') {
+        console.error(...args);
+    } else if (level === 'WARN' || level === 'WARNING') {
+        console.warn(...args);
+    } else if (level === 'DEBUG') {
+        console.debug(...args);
+    } else {
+        console.log(...args);
+    }
+
+    // Send to Go backend to write to app.log
+    if (api.LogJS) {
+        api.LogJS(level, msg).catch(err => {
+            console.error('Failed to log to app.log:', err);
+        });
+    }
+}
 
 // Global variables
 let currentPath = '';
+let recordingTranscriptPath = null;
 let files = [];
 let graphModule = null;
 let lastMarpSlideIndex = 0;
+let statusClearTimer = null;
 
 // DOM elements
 const statusEl = document.getElementById('status');
@@ -120,6 +201,8 @@ const themeSel = document.getElementById('theme');
 const hardwrapChk = document.getElementById('hardwrap');
 const tabs = document.querySelectorAll('.tab');
 const tabContents = document.querySelectorAll('.tab-content');
+const dropOverlay = document.getElementById('dropOverlay');
+const recordingBtn = document.getElementById('recordingBtn');
 
 // Modal elements
 const filenameModal = document.getElementById('filenameModal');
@@ -136,6 +219,8 @@ const clearCustomCssBtn = document.getElementById('clearCustomCssBtn');
 const cancelCustomCssBtn = document.getElementById('cancelCustomCssBtn');
 const customCssStatus = document.getElementById('customCssStatus');
 
+const supportedAudioExt = ['.wav', '.mp3', '.m4a'];
+
 // Conflict modal elements
 const conflictModal = document.getElementById('conflictModal');
 const conflictFilePath = document.getElementById('conflictFilePath');
@@ -144,8 +229,22 @@ const diffRemote = document.getElementById('diffRemote');
 const resolveConflictBtn = document.getElementById('resolveConflictBtn');
 const cancelConflictBtn = document.getElementById('cancelConflictBtn');
 
+// ASR status and transcription progress elements
+const asrStatusEl = document.getElementById('asrStatus');
+const asrStatusIndicator = asrStatusEl?.querySelector('.asr-status-indicator');
+const asrStatusText = asrStatusEl?.querySelector('.asr-status-text');
+const transcriptionProgressEl = document.getElementById('transcriptionProgress');
+const transcriptionProgressBar = transcriptionProgressEl?.querySelector('.transcription-progress-bar');
+const transcriptionProgressFill = transcriptionProgressEl?.querySelector('.transcription-progress-fill');
+const transcriptionProgressText = transcriptionProgressEl?.querySelector('.transcription-progress-text');
+
+// Audio player elements
+const audioPlayerContainer = document.getElementById('audioPlayerContainer');
+const audioPlayer = document.getElementById('audioPlayer');
+
 let customCssCache = '';
 let currentConflictInfo = null;
+let asrStatusCheckInterval = null;
 
 // Initialize the application
 async function init() {
@@ -196,6 +295,21 @@ async function init() {
                     loadFile(currentPath);
                 }
             });
+
+            EventsOn('audio-imported', handleAudioImportedEvent);
+            EventsOn('audio-transcribed', handleAudioTranscribedEvent);
+            EventsOn('audio-transcribe-progress', handleAudioTranscribeProgress);
+
+            // Initialize ASR status check
+            updateASRStatus();
+            // Check ASR status periodically (every 2 seconds) until initialized
+            asrStatusCheckInterval = setInterval(async () => {
+                const status = await updateASRStatus();
+                if (status && status.initialized) {
+                    clearInterval(asrStatusCheckInterval);
+                    asrStatusCheckInterval = null;
+                }
+            }, 2000);
         } else {
             console.log('Running in browser mode - Wails events disabled');
         }
@@ -387,6 +501,9 @@ async function loadFile(path) {
         // Update preview
         await updatePreview();
 
+        // Also update audio player directly (in case updatePreview didn't call it)
+        await updateAudioPlayer(content);
+
         statusEl.textContent = 'Loaded';
         console.log('File loaded successfully');
     } catch (error) {
@@ -477,6 +594,9 @@ async function updatePreview() {
             };
 
             pv.srcdoc = mdHtml;
+
+            // Handle audio player even for Marp presentations
+            await updateAudioPlayer(content);
             return;
         }
 
@@ -484,12 +604,169 @@ async function updatePreview() {
         // site.RenderMarkdown already returns a complete HTML document,
         // but we need to inject custom CSS and theme variables
         // Custom CSS is always applied to regular markdown, regardless of frontmatter
-        const finalHtml = injectCustomCSS(mdHtml);
+        let finalHtml = injectCustomCSS(mdHtml);
+
+        // Convert timestamps to clickable links if audio is available
+        const audioPath = extractAudioPath(content);
+        if (audioPath) {
+            finalHtml = convertTimestampsToLinks(finalHtml);
+        }
+
+        // Setup timestamp click handlers before setting srcdoc
+        setupTimestampClickHandlers();
         pv.srcdoc = finalHtml;
+
+        // Handle audio player
+        await updateAudioPlayer(content);
     } catch (error) {
         console.error('Failed to update preview:', error);
         const errorMsg = error?.message || error?.toString() || 'Unknown error';
         pv.srcdoc = `<p style="color: red; padding: 20px;">Preview failed to load<br><small>${escapeHtml(errorMsg)}</small></p>`;
+
+        // Hide audio player on error
+        if (audioPlayerContainer) {
+            audioPlayerContainer.style.display = 'none';
+        }
+    }
+}
+
+// Convert timestamps in HTML to clickable links
+function convertTimestampsToLinks(html) {
+    // Match timestamps in format [HH:MM:SS.mmm] or [MM:SS.mmm]
+    // Pattern: [HH:MM:SS.mmm] or [MM:SS.mmm] where H, M, S are digits and mmm is milliseconds (0-999)
+    const timestampRegex = /\[(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.(\d{1,3}))?\]/g;
+
+    return html.replace(timestampRegex, (match, hours, minutes, seconds, milliseconds) => {
+        // Calculate total seconds with milliseconds
+        let totalSeconds = 0;
+        const ms = milliseconds ? parseInt(milliseconds.padEnd(3, '0')) : 0;
+
+        if (seconds !== undefined) {
+            // [HH:MM:SS.mmm] format
+            totalSeconds = parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds) + ms / 1000;
+        } else {
+            // [MM:SS.mmm] format
+            totalSeconds = parseInt(hours) * 60 + parseInt(minutes) + ms / 1000;
+        }
+
+        // Create clickable link with data attribute
+        return `<a href="#" class="timestamp-link" data-timestamp="${totalSeconds}">${match}</a>`;
+    });
+}
+
+// Setup timestamp click handlers in preview iframe
+function setupTimestampClickHandlers() {
+    if (!pv || !audioPlayer) {
+        return;
+    }
+
+    // Store original onload handler if exists
+    const originalOnload = pv.onload;
+
+    // Wait for iframe to load
+    pv.onload = () => {
+        // Call original onload if it exists
+        if (originalOnload) {
+            try {
+                originalOnload();
+            } catch (err) {
+                console.warn('Original onload handler error:', err);
+            }
+        }
+
+        // Setup timestamp click handlers
+        try {
+            const iframeDoc = pv.contentDocument || pv.contentWindow.document;
+            if (!iframeDoc) {
+                // Retry after a short delay
+                setTimeout(() => setupTimestampClickHandlers(), 100);
+                return;
+            }
+
+            const timestampLinks = iframeDoc.querySelectorAll('.timestamp-link');
+
+            timestampLinks.forEach(link => {
+                // Remove existing listeners to avoid duplicates
+                const newLink = link.cloneNode(true);
+                link.parentNode.replaceChild(newLink, link);
+
+                newLink.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const timestamp = parseFloat(newLink.getAttribute('data-timestamp'));
+                    if (!isNaN(timestamp) && audioPlayer) {
+                        audioPlayer.currentTime = timestamp;
+                        // If audio is paused, start playing
+                        if (audioPlayer.paused) {
+                            audioPlayer.play().catch(err => {
+                                console.error('Failed to play audio:', err);
+                            });
+                        }
+                    }
+                });
+
+                // Add hover effect
+                newLink.style.cursor = 'pointer';
+                newLink.style.color = 'var(--accent, #7c3aed)';
+                newLink.style.textDecoration = 'underline';
+            });
+        } catch (err) {
+            // Cross-origin or other error
+            console.warn('Could not access iframe document:', err);
+        }
+    };
+}
+
+// Update audio player based on content
+async function updateAudioPlayer(content) {
+    jsLog('DEBUG', 'updateAudioPlayer: called with content length:', content ? content.length : 0);
+
+    if (!audioPlayerContainer || !audioPlayer) {
+        jsLog('ERROR', 'updateAudioPlayer: audioPlayerContainer or audioPlayer not found', {
+            audioPlayerContainer: !!audioPlayerContainer,
+            audioPlayer: !!audioPlayer
+        });
+        return;
+    }
+
+    try {
+        const audioPath = extractAudioPath(content);
+        jsLog('DEBUG', 'updateAudioPlayer: extracted audioPath:', audioPath);
+
+        if (audioPath) {
+            jsLog('INFO', 'updateAudioPlayer: calling GetAudioFileURL with:', audioPath);
+            // Get audio file URL (HTTP path served by Wails)
+            const audioURL = await api.GetAudioFileURL(audioPath);
+            jsLog('INFO', 'updateAudioPlayer: got audioURL:', audioURL);
+
+            // Update audio player source
+            if (audioPlayer.src !== audioURL) {
+                jsLog('INFO', 'updateAudioPlayer: updating audio src from', audioPlayer.src, 'to', audioURL);
+                audioPlayer.src = audioURL;
+                // Reset player state
+                audioPlayer.load();
+            } else {
+                jsLog('DEBUG', 'updateAudioPlayer: audio src already set to', audioURL);
+            }
+
+            // Show audio player
+            jsLog('INFO', 'updateAudioPlayer: showing audio player container');
+            audioPlayerContainer.style.display = 'flex';
+            jsLog('INFO', 'updateAudioPlayer: audio player shown, display:', audioPlayerContainer.style.display);
+        } else {
+            jsLog('DEBUG', 'updateAudioPlayer: no audio_path found, hiding player');
+            // Hide audio player if no audio_path
+            audioPlayerContainer.style.display = 'none';
+            // Clear audio source
+            audioPlayer.src = '';
+        }
+    } catch (error) {
+        jsLog('ERROR', 'Failed to update audio player:', error, 'Error stack:', error.stack);
+        // Hide audio player on error
+        audioPlayerContainer.style.display = 'none';
+        // Show error message in player
+        if (audioPlayer) {
+            audioPlayer.src = '';
+        }
     }
 }
 
@@ -512,6 +789,65 @@ function splitFrontMatter(content) {
     const offsetLines = fmText.split('\n').length;
     const body = content.slice(fmText.length);
     return { body, offsetLines };
+}
+
+// Extract audio_path from markdown frontmatter
+function extractAudioPath(content) {
+    jsLog('DEBUG', 'extractAudioPath: called with content length:', content ? content.length : 0);
+
+    if (!content || !content.startsWith('---')) {
+        jsLog('DEBUG', 'extractAudioPath: content does not start with ---');
+        return null;
+    }
+
+    const frontMatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
+    const match = content.match(frontMatterRegex);
+    if (!match) {
+        jsLog('DEBUG', 'extractAudioPath: no frontmatter found');
+        return null;
+    }
+
+    const yamlContent = match[1];
+    jsLog('DEBUG', 'extractAudioPath: yamlContent:', yamlContent);
+
+    // Try to extract audio_path field
+    // Support both "audio_path: value" and "audio_path: 'value'" and "audio_path: \"value\"" formats
+    // Match: audio_path: "value" or audio_path: 'value' or audio_path: value
+    // First try the simple regex that matches any audio_path line
+    const simpleRegex = /^audio_path:\s*(.+?)\s*$/m;
+    const simpleMatch = yamlContent.match(simpleRegex);
+    jsLog('DEBUG', 'extractAudioPath: simpleMatch:', simpleMatch);
+
+    if (simpleMatch && simpleMatch[1]) {
+        let path = simpleMatch[1].trim();
+        jsLog('DEBUG', 'extractAudioPath: extracted path (before quote removal):', path);
+        // Remove quotes if present
+        if ((path.startsWith('"') && path.endsWith('"')) || (path.startsWith("'") && path.endsWith("'"))) {
+            path = path.slice(1, -1);
+            jsLog('DEBUG', 'extractAudioPath: removed quotes, path:', path);
+        }
+        if (path) {
+            jsLog('INFO', 'extractAudioPath: found audioPath (simple regex):', path);
+            return path;
+        }
+    }
+
+    // Fallback: try more specific regex
+    const audioPathRegex = /^audio_path:\s*(?:"([^"]*)"|'([^']*)'|([^\n\r]+?))\s*$/m;
+    const audioPathMatch = yamlContent.match(audioPathRegex);
+    jsLog('DEBUG', 'extractAudioPath: audioPathMatch:', audioPathMatch);
+
+    if (audioPathMatch) {
+        // Return the first non-empty capture group (double-quoted, single-quoted, or unquoted)
+        const audioPath = (audioPathMatch[1] || audioPathMatch[2] || audioPathMatch[3] || '').trim();
+        if (audioPath) {
+            jsLog('INFO', 'extractAudioPath: found audioPath (specific regex):', audioPath);
+            return audioPath;
+        }
+    }
+
+    jsLog('DEBUG', 'extractAudioPath: no audio_path found in frontmatter');
+    return null;
 }
 
 function computeMarpSlideInfo(content, caretLine) {
@@ -682,6 +1018,615 @@ function setupEventListeners() {
             switchToTab(tabName);
         });
     });
+
+    setupDragAndDrop();
+    setupRecording();
+}
+
+// Setup recording functionality
+function setupRecording() {
+    if (!recordingBtn) {
+        return;
+    }
+
+    let isRecording = false;
+    let recordingPreviewTimeout = null;
+
+    function scheduleRecordingPreviewUpdate() {
+        if (recordingPreviewTimeout) {
+            clearTimeout(recordingPreviewTimeout);
+        }
+        recordingPreviewTimeout = setTimeout(() => {
+            updatePreview().catch((error) => {
+                console.error('Failed to update preview for recording changes:', error);
+            });
+        }, 150);
+    }
+
+    // Update recording button state
+    async function updateRecordingState() {
+        try {
+            if (!isBrowser && api.IsRecording) {
+                isRecording = await api.IsRecording();
+                recordingBtn.classList.toggle('recording', isRecording);
+                const label = recordingBtn.querySelector('.recording-label');
+                if (label) {
+                    label.textContent = isRecording ? '停止' : '録音';
+                }
+            }
+        } catch (error) {
+            console.error('Failed to check recording state:', error);
+        }
+    }
+
+    // Recording button click handler
+    recordingBtn.addEventListener('click', async () => {
+        try {
+            if (isRecording) {
+                // Stop recording
+                setStatusMessage('録音を停止中...', 0);
+                const audioPath = await api.StopRecording();
+                setStatusMessage('録音を停止しました', 3000);
+                isRecording = false;
+                recordingBtn.classList.remove('recording');
+                const label = recordingBtn.querySelector('.recording-label');
+                if (label) {
+                    label.textContent = '録音';
+                }
+                // Reload file list to show new recording
+                await loadFileList();
+            } else {
+                // Start recording
+                setStatusMessage('録音を開始中...', 0);
+                await api.StartRecording();
+                setStatusMessage('録音中...', 0);
+                isRecording = true;
+                recordingBtn.classList.add('recording');
+                const label = recordingBtn.querySelector('.recording-label');
+                if (label) {
+                    label.textContent = '停止';
+                }
+            }
+        } catch (error) {
+            console.error('Recording error:', error);
+            setStatusMessage(`録音エラー: ${error?.message || error}`, 5000);
+            isRecording = false;
+            recordingBtn.classList.remove('recording');
+            const label = recordingBtn.querySelector('.recording-label');
+            if (label) {
+                label.textContent = '録音';
+            }
+        }
+    });
+
+    // Listen to recording events
+    if (!isBrowser) {
+        const recordingIndicator = document.getElementById('recordingIndicator');
+        const micLevelFill = document.getElementById('micLevelFill');
+        const realtimeTranscript = document.getElementById('realtimeTranscript');
+        const realtimeTranscriptContent = document.getElementById('realtimeTranscriptContent');
+        let transcriptSegments = [];
+
+        EventsOn('recording-error', (payload) => {
+            if (payload && payload.error) {
+                setStatusMessage(payload.error, 10000);
+                if (payload.details) {
+                    console.error('Recording error details:', payload.details);
+                }
+            }
+        });
+
+        EventsOn('recording-started', async (payload) => {
+            // Switch to editor tab when recording starts
+            switchToTab('editor');
+            isRecording = true;
+            recordingBtn.classList.add('recording');
+            const label = recordingBtn.querySelector('.recording-label');
+            if (label) {
+                label.textContent = '停止';
+            }
+            if (recordingIndicator) {
+                recordingIndicator.style.display = 'flex';
+            }
+            // Overlay is now hidden - transcription is written directly to editor
+            // if (realtimeTranscript) {
+            //     realtimeTranscript.style.display = 'block';
+            //     transcriptSegments = [];
+            //     realtimeTranscriptContent.textContent = '';
+            // }
+            setStatusMessage('録音中...', 0);
+
+            recordingTranscriptPath = payload && payload.transcriptPath ? payload.transcriptPath : null;
+            if (recordingTranscriptPath) {
+                try {
+                    await loadFile(recordingTranscriptPath);
+                    setStatusMessage('録音用ファイルを開きました', 2000);
+                } catch (error) {
+                    console.error('Failed to open recording transcript file:', error);
+                    setStatusMessage('録音用ファイルの読み込みに失敗しました', 5000);
+                }
+            }
+        });
+
+        EventsOn('recording-stopped', async (payload) => {
+            isRecording = false;
+            recordingBtn.classList.remove('recording');
+            const label = recordingBtn.querySelector('.recording-label');
+            if (label) {
+                label.textContent = '録音';
+            }
+            if (recordingIndicator) {
+                recordingIndicator.style.display = 'none';
+            }
+            if (micLevelFill) {
+                micLevelFill.style.width = '0%';
+            }
+            recordingTranscriptPath = payload && payload.transcriptPath ? payload.transcriptPath : recordingTranscriptPath;
+
+            if (recordingTranscriptPath) {
+                setStatusMessage('録音と文字起こしが完了しました', 3000);
+                loadFileList();
+                try {
+                    await loadFile(recordingTranscriptPath);
+                    switchToTab('editor');
+                    setStatusMessage('録音ファイルを開きました', 3000);
+                } catch (error) {
+                    console.error('Failed to open transcript file:', error);
+                    setStatusMessage('録音ファイルの読み込みに失敗しました', 3000);
+                }
+            } else {
+                setStatusMessage('録音を停止しました', 3000);
+            }
+            // Overlay is now hidden - transcription is written directly to editor
+            // if (realtimeTranscript) {
+            //     setTimeout(() => {
+            //         realtimeTranscript.style.display = 'none';
+            //     }, 5000);
+            // }
+            // Reset transcript tracking after stop
+            recordingTranscriptPath = null;
+        });
+
+        EventsOn('recording-input-level', (payload) => {
+            if (payload && micLevelFill) {
+                // RMS level is typically 0-0.1 for normal speech
+                // Scale to 0-100% for display (multiply by 2000 for better sensitivity)
+                const rawLevel = payload.level || 0;
+                const level = Math.min(100, Math.sqrt(rawLevel) * 200); // Use sqrt for better visual response
+                micLevelFill.style.width = `${level}%`;
+
+                // Color based on level (green -> yellow -> red)
+                if (level < 20) {
+                    micLevelFill.style.backgroundColor = '#4caf50'; // Green
+                } else if (level < 60) {
+                    micLevelFill.style.backgroundColor = '#ff9800'; // Orange
+                } else {
+                    micLevelFill.style.backgroundColor = '#f44336'; // Red
+                }
+            }
+        });
+
+        EventsOn('recording-transcript-partial', (payload) => {
+            if (payload && payload.text) {
+                // Show partial text in status bar
+                setStatusMessage(`録音中: ${payload.text}`, 0);
+                if (recordingTranscriptPath && currentPath === recordingTranscriptPath) {
+                    updateEditorWithPartialText(payload.text);
+                }
+            }
+        });
+
+        EventsOn('recording-transcript-final', (payload) => {
+            if (payload && payload.text) {
+                // Show final transcript in status bar
+                setStatusMessage(`確定: ${payload.text}`, 2000);
+                if (recordingTranscriptPath && currentPath === recordingTranscriptPath) {
+                    updateEditorWithFinalText(payload.text, payload.timestamp || 0, payload.segmentIndex || 0);
+                }
+            }
+        });
+
+        function updateEditorWithPartialText(text) {
+            if (!ta || !recordingTranscriptPath || currentPath !== recordingTranscriptPath) {
+                return;
+            }
+
+            const content = ta.value;
+            const partialMarkerStart = '<!-- ASR_PARTIAL -->';
+            const partialMarkerEnd = '<!-- /ASR_PARTIAL -->';
+
+            // Find ## Transcript section
+            const transcriptHeaderRegex = /^##\s+Transcript\s*$/m;
+            const match = content.match(transcriptHeaderRegex);
+            if (!match) {
+                const newContent = content + '\n\n## Transcript\n\n' + partialMarkerStart + text + partialMarkerEnd + '\n';
+                const cursorPos = ta.selectionStart;
+                ta.value = newContent;
+                scheduleRecordingPreviewUpdate();
+                if (cursorPos <= content.length) {
+                    ta.setSelectionRange(cursorPos, cursorPos);
+                }
+                return;
+            }
+
+            const headerIndex = match.index;
+            const afterHeader = content.substring(headerIndex + match[0].length);
+
+            const partialStartIndex = afterHeader.indexOf(partialMarkerStart);
+            const partialEndIndex = afterHeader.indexOf(partialMarkerEnd);
+
+            let newContent;
+            const cursorPos = ta.selectionStart;
+
+            if (partialStartIndex !== -1 && partialEndIndex !== -1 && partialEndIndex > partialStartIndex) {
+                const beforePartial = content.substring(0, headerIndex + match[0].length + partialStartIndex + partialMarkerStart.length);
+                const afterPartial = content.substring(headerIndex + match[0].length + partialEndIndex);
+                newContent = beforePartial + text + partialMarkerEnd + afterPartial;
+            } else {
+                const nextHeaderMatch = afterHeader.match(/^##\s+/m);
+                const sectionEnd = nextHeaderMatch ? nextHeaderMatch.index : afterHeader.length;
+                const sectionContent = afterHeader.substring(0, sectionEnd);
+                const trimmedSection = sectionContent.trimEnd();
+                const newSectionContent = trimmedSection + (trimmedSection ? '\n\n' : '') + partialMarkerStart + text + partialMarkerEnd + '\n';
+                newContent = content.substring(0, headerIndex + match[0].length) + '\n' + newSectionContent + afterHeader.substring(sectionEnd);
+            }
+
+            ta.value = newContent;
+            scheduleRecordingPreviewUpdate();
+
+            const transcriptStart = headerIndex;
+            const transcriptEnd = newContent.indexOf('\n## ', transcriptStart + 1);
+            const actualTranscriptEnd = transcriptEnd !== -1 ? transcriptEnd : newContent.length;
+            if (cursorPos < transcriptStart || cursorPos > actualTranscriptEnd) {
+                ta.setSelectionRange(cursorPos, cursorPos);
+            }
+        }
+
+        function updateEditorWithFinalText(text, timestamp, segmentIndex) {
+            if (!ta || !recordingTranscriptPath || currentPath !== recordingTranscriptPath) {
+                return;
+            }
+
+            const content = ta.value;
+            const partialMarkerStart = '<!-- ASR_PARTIAL -->';
+            const partialMarkerEnd = '<!-- /ASR_PARTIAL -->';
+
+            const minutes = Math.floor(timestamp / 60);
+            const seconds = Math.floor(timestamp % 60);
+            const timestampStr = `**${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}**`;
+            const finalLine = timestampStr + ' ' + text;
+
+            const transcriptHeaderRegex = /^##\s+Transcript\s*$/m;
+            const match = content.match(transcriptHeaderRegex);
+            if (!match) {
+                const newContent = content + '\n\n## Transcript\n\n' + finalLine + '\n';
+                const cursorPos = ta.selectionStart;
+                ta.value = newContent;
+                scheduleRecordingPreviewUpdate();
+                if (cursorPos <= content.length) {
+                    ta.setSelectionRange(cursorPos, cursorPos);
+                }
+                return;
+            }
+
+            const headerIndex = match.index;
+            const afterHeader = content.substring(headerIndex + match[0].length);
+
+            const partialStartIndex = afterHeader.indexOf(partialMarkerStart);
+            const partialEndIndex = afterHeader.indexOf(partialMarkerEnd);
+
+            let newContent;
+            const cursorPos = ta.selectionStart;
+
+            if (partialStartIndex !== -1 && partialEndIndex !== -1 && partialEndIndex > partialStartIndex) {
+                const beforePartial = content.substring(0, headerIndex + match[0].length + partialStartIndex);
+                const afterPartial = content.substring(headerIndex + match[0].length + partialEndIndex + partialMarkerEnd.length);
+                newContent = beforePartial + finalLine + '\n' + afterPartial;
+            } else {
+                const nextHeaderMatch = afterHeader.match(/^##\s+/m);
+                const sectionEnd = nextHeaderMatch ? nextHeaderMatch.index : afterHeader.length;
+                const sectionContent = afterHeader.substring(0, sectionEnd);
+                const trimmedSection = sectionContent.trimEnd();
+                const newSectionContent = trimmedSection + (trimmedSection ? '\n\n' : '') + finalLine + '\n';
+                newContent = content.substring(0, headerIndex + match[0].length) + '\n' + newSectionContent + afterHeader.substring(sectionEnd);
+            }
+
+            const conflictRegex = new RegExp(`^\\*\\*${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}\\*\\*\\s+.*$`, 'm');
+            const existingMatch = newContent.match(conflictRegex);
+            if (existingMatch && existingMatch[0] !== finalLine) {
+                const conflictLine = existingMatch[0];
+                const conflictIndex = existingMatch.index;
+                const beforeConflict = newContent.substring(0, conflictIndex + conflictLine.length);
+                const afterConflict = newContent.substring(conflictIndex + conflictLine.length);
+                newContent = beforeConflict + '\n' + finalLine + afterConflict;
+            }
+
+            ta.value = newContent;
+            scheduleRecordingPreviewUpdate();
+
+            const transcriptStart = headerIndex;
+            const transcriptEnd = newContent.indexOf('\n## ', transcriptStart + 1);
+            const actualTranscriptEnd = transcriptEnd !== -1 ? transcriptEnd : newContent.length;
+            if (cursorPos < transcriptStart || cursorPos > actualTranscriptEnd) {
+                ta.setSelectionRange(cursorPos, cursorPos);
+            }
+        }
+    }
+
+    // Initial state check
+    updateRecordingState();
+}
+
+function setupDragAndDrop() {
+    if (!dropOverlay || isBrowser) {
+        return;
+    }
+
+    let dragDepth = 0;
+
+    const showOverlay = () => dropOverlay.classList.add('visible');
+    const hideOverlay = () => {
+        dragDepth = 0;
+        dropOverlay.classList.remove('visible');
+    };
+
+    const isFileDrag = (event) => {
+        if (!event || !event.dataTransfer) {
+            return false;
+        }
+        const types = Array.from(event.dataTransfer.types || []);
+        return types.includes('Files');
+    };
+
+    window.addEventListener('dragenter', (event) => {
+        if (!isFileDrag(event)) {
+            return;
+        }
+        event.preventDefault();
+        dragDepth += 1;
+        showOverlay();
+    });
+
+    window.addEventListener('dragover', (event) => {
+        if (!isFileDrag(event)) {
+            return;
+        }
+        event.preventDefault();
+    });
+
+    window.addEventListener('dragleave', (event) => {
+        if (!isFileDrag(event)) {
+            return;
+        }
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (dragDepth === 0) {
+            hideOverlay();
+        }
+    });
+
+    window.addEventListener('drop', (event) => {
+        if (!isFileDrag(event)) {
+            return;
+        }
+        event.preventDefault();
+        hideOverlay();
+        handleAudioDrop(event.dataTransfer?.files || []).catch((error) => {
+            console.error('handleAudioDrop failed', error);
+        });
+    });
+}
+
+function isSupportedAudioFile(name = '') {
+    const lower = (name || '').toLowerCase();
+    return supportedAudioExt.some((ext) => lower.endsWith(ext));
+}
+
+async function handleAudioDrop(fileList) {
+    if (!fileList || fileList.length === 0) {
+        return;
+    }
+    if (!api.ImportAudioFile) {
+        console.warn('ImportAudioFile API is unavailable in this environment');
+        return;
+    }
+
+    const files = Array.from(fileList).filter((file) => isSupportedAudioFile(file.name));
+    if (files.length === 0) {
+        setStatusMessage('対応していない音声形式です (wav/mp3/m4a)', 3000);
+        return;
+    }
+
+    for (const file of files) {
+        try {
+            setStatusMessage(`音声を取り込み中: ${file.name}`);
+            if (file.path) {
+                await api.ImportAudioFile(file.path);
+            } else if (api.ImportAudioBase64 && file.arrayBuffer) {
+                const buffer = await file.arrayBuffer();
+                const base64 = arrayBufferToBase64(buffer);
+                await api.ImportAudioBase64(file.name || `audio-${Date.now()}.wav`, base64);
+            } else {
+                console.warn('Cannot access data for dropped file:', file.name);
+                setStatusMessage('音声データにアクセスできませんでした', 4000);
+            }
+        } catch (error) {
+            console.error('ImportAudioFile failed', error);
+            setStatusMessage(`音声取り込みに失敗: ${error?.message || error}`, 4000);
+        }
+    }
+
+    await loadFileList();
+    setStatusMessage('音声ファイルを保存しました。文字起こしを開始します…', 3500);
+}
+
+function arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.subarray(i, i + chunkSize);
+        binary += String.fromCharCode.apply(null, chunk);
+    }
+    return btoa(binary);
+}
+
+function handleAudioImportedEvent(payload) {
+    const label = payload?.original_name || payload?.path || 'audio';
+    console.log('audio-imported', payload);
+    setStatusMessage(`音声ファイルを保存しました: ${label}`, 3000);
+}
+
+function handleAudioTranscribedEvent(payload) {
+    if (!payload) {
+        return;
+    }
+    if (payload.error) {
+        console.warn('audio-transcribed error', payload.error);
+        setStatusMessage(`文字起こしに失敗: ${payload.error}`, 5000);
+        hideTranscriptionProgress();
+        return;
+    }
+    const transcriptPath = payload.transcriptPath;
+    console.log('audio-transcribed', payload);
+    setStatusMessage('文字起こしが完了しました', 3000);
+    hideTranscriptionProgress();
+    loadFileList();
+    if (transcriptPath) {
+        loadFile(transcriptPath);
+        switchToTab('editor');
+    }
+}
+
+// Update ASR status display
+async function updateASRStatus() {
+    if (!asrStatusEl || !asrStatusIndicator || !asrStatusText) {
+        return null;
+    }
+
+    try {
+        const status = await api.GetASRStatus();
+        if (!status) {
+            return null;
+        }
+
+        // Update indicator
+        asrStatusIndicator.className = 'asr-status-indicator';
+        if (status.initializing) {
+            asrStatusIndicator.classList.add('initializing');
+            asrStatusText.textContent = 'ASR: 初期化中...';
+        } else if (status.initialized) {
+            asrStatusIndicator.classList.add('ready');
+            asrStatusText.textContent = 'ASR: 準備完了';
+        } else {
+            asrStatusIndicator.classList.add('disabled');
+            asrStatusText.textContent = 'ASR: 無効';
+        }
+
+        return status;
+    } catch (error) {
+        console.error('Failed to get ASR status:', error);
+        if (asrStatusIndicator && asrStatusText) {
+            asrStatusIndicator.className = 'asr-status-indicator disabled';
+            asrStatusText.textContent = 'ASR: エラー';
+        }
+        return null;
+    }
+}
+
+// Handle transcription progress
+let currentTranscriptionAudioPath = null;
+let currentTranscriptionTotalSegments = 0;
+
+function handleAudioTranscribeProgress(payload) {
+    if (!payload) {
+        return;
+    }
+
+    const audioPath = payload.audioPath || payload.AudioPath;
+    const text = payload.text || payload.Text || '';
+    const segmentIndex = payload.segmentIndex || payload.SegmentIndex || 0;
+    const totalSegments = payload.totalSegments || payload.TotalSegments || 0;
+
+    // Start progress if this is a new transcription
+    if (audioPath !== currentTranscriptionAudioPath) {
+        currentTranscriptionAudioPath = audioPath;
+        currentTranscriptionTotalSegments = totalSegments;
+        showTranscriptionProgress(audioPath, totalSegments);
+    }
+
+    // Update progress bar
+    if (transcriptionProgressFill && totalSegments > 0) {
+        const progress = Math.min(100, (segmentIndex / totalSegments) * 100);
+        transcriptionProgressFill.style.width = `${progress}%`;
+        transcriptionProgressFill.classList.remove('indeterminate');
+    } else if (transcriptionProgressFill && totalSegments === 0) {
+        // Fallback to indeterminate if total segments unknown
+        transcriptionProgressFill.classList.add('indeterminate');
+    }
+
+    // Update progress text
+    if (transcriptionProgressText) {
+        const fileName = audioPath ? audioPath.split('/').pop() : '音声ファイル';
+        if (totalSegments > 0) {
+            transcriptionProgressText.textContent = `文字起こし中: ${fileName} (${segmentIndex}/${totalSegments}区間処理済み)`;
+        } else {
+            transcriptionProgressText.textContent = `文字起こし中: ${fileName} (${segmentIndex}区間処理済み)`;
+        }
+    }
+}
+
+function showTranscriptionProgress(audioPath, totalSegments) {
+    if (!transcriptionProgressEl || !transcriptionProgressFill) {
+        return;
+    }
+
+    transcriptionProgressEl.style.display = 'flex';
+
+    // Reset progress bar
+    if (totalSegments > 0) {
+        transcriptionProgressFill.style.width = '0%';
+        transcriptionProgressFill.classList.remove('indeterminate');
+    } else {
+        transcriptionProgressFill.classList.add('indeterminate');
+    }
+
+    const fileName = audioPath ? audioPath.split('/').pop() : '音声ファイル';
+    if (transcriptionProgressText) {
+        if (totalSegments > 0) {
+            transcriptionProgressText.textContent = `文字起こし中: ${fileName} (0/${totalSegments}区間処理済み)`;
+        } else {
+            transcriptionProgressText.textContent = `文字起こし中: ${fileName} (0区間処理済み)`;
+        }
+    }
+}
+
+function hideTranscriptionProgress() {
+    if (!transcriptionProgressEl || !transcriptionProgressFill) {
+        return;
+    }
+
+    transcriptionProgressEl.style.display = 'none';
+    transcriptionProgressFill.classList.remove('indeterminate');
+    transcriptionProgressFill.style.width = '0%';
+    currentTranscriptionAudioPath = null;
+    currentTranscriptionTotalSegments = 0;
+}
+
+function setStatusMessage(message, durationMs = 0) {
+    if (!statusEl) {
+        return;
+    }
+    statusEl.textContent = message || '';
+    if (statusClearTimer) {
+        clearTimeout(statusClearTimer);
+        statusClearTimer = null;
+    }
+    if (durationMs > 0) {
+        statusClearTimer = setTimeout(() => {
+            statusEl.textContent = '';
+            statusClearTimer = null;
+        }, durationMs);
+    }
 }
 // Open external preview in system browser
 async function openExternalPreview() {

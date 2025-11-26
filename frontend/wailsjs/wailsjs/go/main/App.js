@@ -30,6 +30,14 @@ export function ExportPreviewHTML(arg1) {
   return window['go']['main']['App']['ExportPreviewHTML'](arg1);
 }
 
+export function GetASRStatus() {
+  return window['go']['main']['App']['GetASRStatus']();
+}
+
+export function GetAudioFileURL(arg1) {
+  return window['go']['main']['App']['GetAudioFileURL'](arg1);
+}
+
 export function GetConnectedPeers() {
   return window['go']['main']['App']['GetConnectedPeers']();
 }
@@ -46,12 +54,28 @@ export function GetGraphData() {
   return window['go']['main']['App']['GetGraphData']();
 }
 
+export function ImportAudioBase64(arg1, arg2) {
+  return window['go']['main']['App']['ImportAudioBase64'](arg1, arg2);
+}
+
+export function ImportAudioFile(arg1) {
+  return window['go']['main']['App']['ImportAudioFile'](arg1);
+}
+
 export function InitProject() {
   return window['go']['main']['App']['InitProject']();
 }
 
+export function IsRecording() {
+  return window['go']['main']['App']['IsRecording']();
+}
+
 export function LoadFile(arg1) {
   return window['go']['main']['App']['LoadFile'](arg1);
+}
+
+export function LogJS(arg1, arg2) {
+  return window['go']['main']['App']['LogJS'](arg1, arg2);
 }
 
 export function PreviewMarkdown(arg1) {
@@ -68,4 +92,12 @@ export function SaveFile(arg1, arg2) {
 
 export function SetCustomCSS(arg1) {
   return window['go']['main']['App']['SetCustomCSS'](arg1);
+}
+
+export function StartRecording() {
+  return window['go']['main']['App']['StartRecording']();
+}
+
+export function StopRecording() {
+  return window['go']['main']['App']['StopRecording']();
 }

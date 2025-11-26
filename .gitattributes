@@ -1,0 +1,2 @@
+*.onnx filter=lfs diff=lfs merge=lfs -text
+templates/karte_data_template/data/asr/**/*.onnx filter=lfs diff=lfs merge=lfs -text

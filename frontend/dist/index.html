@@ -1,5 +1,5 @@
 <!doctype html>
-<script type="module" crossorigin src="/assets/index.c66b879c.js"></script>
+<script type="module" crossorigin src="/assets/index.f095fdf9.js"></script>
 
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
@@ -192,11 +192,15 @@
   }
 
   .tabs {
+    position: relative;
+    z-index: 100;
     display: flex;
+    align-items: center;
     gap: 4px;
     margin-bottom: var(--gap);
     border-bottom: 1px solid var(--line);
     flex-shrink: 0;
+    width: 100%;
   }
 
   .tab {
@@ -217,6 +221,144 @@
   .tab.active {
     color: var(--ink);
     border-bottom-color: var(--accent);
+  }
+
+  .recording-btn {
+    margin-left: auto;
+    padding: 8px 16px;
+    background: var(--accent);
+    border: none;
+    border-radius: 6px;
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s;
+    font-size: 14px;
+    font-weight: 500;
+    flex-shrink: 0;
+    white-space: nowrap;
+    position: relative;
+    z-index: 100;
+  }
+
+  .recording-btn:hover {
+    background: var(--loading-color);
+    opacity: 0.9;
+  }
+
+  .recording-btn.recording {
+    background: #dc3545;
+    color: white;
+    animation: pulse-recording 1.5s ease-in-out infinite;
+  }
+
+  .recording-btn.recording:hover {
+    background: #c82333;
+  }
+
+  .recording-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: 10px;
+    padding: 6px 12px;
+    background-color: rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    position: relative;
+    z-index: 100;
+  }
+
+  .mic-level-container {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .mic-level-bar {
+    width: 80px;
+    height: 6px;
+    background-color: rgba(255, 255, 255, 0.2);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .mic-level-fill {
+    height: 100%;
+    width: 0%;
+    background-color: #4caf50;
+    transition: width 0.1s ease, background-color 0.1s ease;
+  }
+
+  .mic-level-label {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.9);
+    font-weight: 500;
+  }
+
+  .realtime-transcript {
+    display: none !important;
+    /* Hide overlay - transcription is now written directly to editor */
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.85);
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+    overflow: hidden;
+    border-radius: 4px;
+  }
+
+  .realtime-transcript-header {
+    font-size: 16px;
+    font-weight: bold;
+    margin-bottom: 10px;
+    color: rgba(255, 255, 255, 0.9);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    padding-bottom: 10px;
+  }
+
+  .realtime-transcript-content {
+    flex: 1;
+    overflow-y: auto;
+    font-size: 14px;
+    line-height: 1.6;
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .transcript-partial {
+    color: rgba(255, 255, 255, 0.6);
+    font-style: italic;
+    margin-bottom: 8px;
+  }
+
+  .transcript-final {
+    color: rgba(255, 255, 255, 0.9);
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .recording-icon {
+    font-size: 16px;
+  }
+
+  @keyframes pulse-recording {
+
+    0%,
+    100% {
+      opacity: 1;
+    }
+
+    50% {
+      opacity: 0.7;
+    }
   }
 
   .tab-content {
@@ -264,6 +406,34 @@
     border: 1px solid var(--line);
     border-radius: var(--radius);
     background: var(--bg)
+  }
+
+  .preview-container {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1;
+  }
+
+  .audio-player-container {
+    margin-bottom: var(--gap);
+    padding: 12px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #audioPlayer {
+    width: 100%;
+    max-width: 100%;
+    outline: none;
+  }
+
+  #audioPlayer::-webkit-media-controls-panel {
+    background-color: var(--panel);
   }
 
   .row {
@@ -327,6 +497,149 @@
     background: var(--panel)
   }
 
+  .drop-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(124, 58, 237, 0.12);
+    border: 3px dashed rgba(124, 58, 237, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    z-index: 999;
+  }
+
+  .drop-overlay.visible {
+    opacity: 1;
+    pointer-events: none;
+  }
+
+  .drop-overlay__frame {
+    padding: 32px 48px;
+    background: color-mix(in srgb, var(--main-background) 92%, transparent);
+    border-radius: 16px;
+    border: 1px solid rgba(124, 58, 237, 0.35);
+    text-align: center;
+    color: var(--brand);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12);
+  }
+
+  .drop-overlay__label {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  .drop-overlay__hint {
+    font-size: 13px;
+    color: var(--mute);
+  }
+
+  .asr-status {
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: var(--backgroundcolor-unhover);
+  }
+
+  .asr-status-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    background: var(--mute);
+  }
+
+  .asr-status-indicator.initializing {
+    background: #f59e0b;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  .asr-status-indicator.ready {
+    background: #10b981;
+  }
+
+  .asr-status-indicator.disabled {
+    background: var(--mute);
+  }
+
+  @keyframes pulse {
+
+    0%,
+    100% {
+      opacity: 1;
+    }
+
+    50% {
+      opacity: 0.5;
+    }
+  }
+
+  .transcription-progress {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--main-background);
+    border-top: 1px solid var(--line);
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    z-index: 100;
+    box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
+  }
+
+  .transcription-progress-bar {
+    flex: 1;
+    height: 6px;
+    background: var(--backgroundcolor-unhover);
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .transcription-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    width: 0%;
+    transition: width 0.3s ease;
+    position: relative;
+  }
+
+  .transcription-progress-fill.indeterminate {
+    width: 30%;
+    animation: indeterminate 1.5s ease-in-out infinite;
+  }
+
+  @keyframes indeterminate {
+    0% {
+      left: -30%;
+    }
+
+    100% {
+      left: 100%;
+    }
+  }
+
+  .transcription-progress-text {
+    font-size: 12px;
+    color: var(--mute);
+    white-space: nowrap;
+  }
+
+  .timestamp-link {
+    color: var(--accent);
+    text-decoration: underline;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+
+  .timestamp-link:hover {
+    opacity: 0.7;
+  }
+
   @media (max-width: 1100px) {
     .layout {
       grid-template-columns: 1fr
@@ -363,8 +676,19 @@
     <button class="btn" id="exportPdfBtn">PDFエクスポート</button>
     <button class="btn" id="customCssBtn">Custom CSS</button>
     <span id="customCssStatus" style="margin-left:8px;font-size:12px;color:#6b7280"></span>
+    <div id="asrStatus" class="asr-status"
+      style="margin-left:8px;font-size:12px;display:flex;align-items:center;gap:4px;">
+      <span class="asr-status-indicator"></span>
+      <span class="asr-status-text">ASR: 確認中...</span>
+    </div>
   </div>
   <div class="status" id="status"></div>
+  <div id="transcriptionProgress" class="transcription-progress" style="display:none;">
+    <div class="transcription-progress-bar">
+      <div class="transcription-progress-fill"></div>
+    </div>
+    <span class="transcription-progress-text"></span>
+  </div>
 </div>
 <div class="layout">
   <aside class="side">
@@ -377,11 +701,34 @@
     <div class="tabs">
       <button class="tab active" data-tab="editor">エディター</button>
       <button class="tab" data-tab="graph">グラフ</button>
+      <button id="recordingBtn" class="recording-btn" title="録音開始/停止">
+        <span class="recording-icon">🎤</span>
+        <span class="recording-label">録音</span>
+      </button>
+      <div id="recordingIndicator" class="recording-indicator" style="display: none;">
+        <div class="mic-level-container">
+          <div class="mic-level-bar">
+            <div id="micLevelFill" class="mic-level-fill"></div>
+          </div>
+          <span class="mic-level-label">マイク</span>
+        </div>
+      </div>
     </div>
     <div class="tab-content active" id="editor-tab">
       <div class="row">
         <textarea id="editor" spellcheck="false"></textarea>
-        <iframe id="preview"></iframe>
+        <div class="preview-container">
+          <div id="audioPlayerContainer" class="audio-player-container" style="display: none;">
+            <audio id="audioPlayer" controls preload="metadata">
+              Your browser does not support the audio element.
+            </audio>
+          </div>
+          <div id="realtimeTranscript" class="realtime-transcript" style="display: none;">
+            <div class="realtime-transcript-header">リアルタイム文字起こし</div>
+            <div id="realtimeTranscriptContent" class="realtime-transcript-content"></div>
+          </div>
+          <iframe id="preview"></iframe>
+        </div>
       </div>
     </div>
     <div class="tab-content" id="graph-tab">
@@ -393,6 +740,13 @@
       <div class="graph-container" id="graph-container"></div>
     </div>
   </main>
+</div>
+
+<div id="dropOverlay" class="drop-overlay" aria-hidden="true">
+  <div class="drop-overlay__frame">
+    <div class="drop-overlay__label">音声ファイルをドロップ</div>
+    <div class="drop-overlay__hint">対応: WAV / MP3 / M4A</div>
+  </div>
 </div>
 
 <!-- File name input modal -->

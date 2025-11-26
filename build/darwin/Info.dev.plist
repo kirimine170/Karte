@@ -21,6 +21,8 @@
         <string>10.13.0</string>
         <key>NSHighResolutionCapable</key>
         <string>true</string>
+        <key>NSMicrophoneUsageDescription</key>
+        <string>Karteは音声録音とリアルタイム文字起こしのためにマイクへのアクセスが必要です。</string>
         <key>NSHumanReadableCopyright</key>
         <string>{{.Info.Copyright}}</string>
         {{if .Info.FileAssociations}}

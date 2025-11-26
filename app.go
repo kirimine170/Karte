@@ -1,24 +1,31 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"karte/internal/asr"
+	"karte/internal/audio"
 	fm "karte/internal/frontmatter"
 	gitvcs "karte/internal/git"
 	"karte/internal/marp"
 	pdfexport "karte/internal/pdf"
 	"karte/internal/site"
-	"karte/internal/sync"
+	syncpkg "karte/internal/sync"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -27,12 +34,25 @@ import (
 
 // App struct
 type App struct {
-	ctx         context.Context
-	root        string
-	dataDir     string
-	logFilePath string
-	syncManager *sync.SyncManager
-	vcs         *gitvcs.VCS
+	ctx             context.Context
+	root            string
+	dataDir         string
+	logFilePath     string
+	syncManager     *syncpkg.SyncManager
+	vcs             *gitvcs.VCS
+	asrService      *asr.Service
+	realtimeService *asr.RealtimeService // For real-time ASR with partial text support
+	asrInitDone     chan struct{}
+	// Recording fields
+	recorder                *audio.Recorder
+	recordingMu             sync.Mutex
+	isRecording             bool
+	recordingSamples        []float32 // Buffer for recording samples
+	recordingVAD            *audio.SimpleVAD
+	recordingSegment        *recordingSegment
+	recordingWg             sync.WaitGroup // WaitGroup for recording processing goroutine
+	recordingStopCh         chan struct{}  // Channel to stop recording processing
+	recordingTranscriptPath string         // Path to transcript file (created at start)
 	// NOTE: Multi-window support requires Wails v3 (currently in development)
 	// Uncomment when upgrading to Wails v3:
 	// presenter windows keyed by document id (e.g., "content/xxx.md")
@@ -58,6 +78,28 @@ func (a *App) logInfo(msg string) {
 func (a *App) logError(msg string) {
 	runtime.LogError(a.ctx, msg)
 	a.appendLog("ERROR", msg)
+}
+
+// LogJS logs a message from JavaScript to the app log file
+// This allows JavaScript code to write logs that appear in app.log
+func (a *App) LogJS(level, msg string) {
+	// Prepend [JS] prefix to distinguish from Go logs
+	formattedMsg := fmt.Sprintf("[JS] %s", msg)
+	switch strings.ToUpper(level) {
+	case "ERROR", "ERR":
+		runtime.LogError(a.ctx, formattedMsg)
+		a.appendLog("ERROR", formattedMsg)
+	case "WARN", "WARNING":
+		runtime.LogWarning(a.ctx, formattedMsg)
+		a.appendLog("WARN", formattedMsg)
+	case "DEBUG":
+		runtime.LogDebug(a.ctx, formattedMsg)
+		a.appendLog("DEBUG", formattedMsg)
+	default:
+		// Default to INFO
+		runtime.LogInfo(a.ctx, formattedMsg)
+		a.appendLog("INFO", formattedMsg)
+	}
 }
 
 func (a *App) appendLog(level, msg string) {
@@ -161,24 +203,64 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 
+	a.asrInitDone = make(chan struct{})
+	go func() {
+		if err := a.initASRService(); err != nil {
+			runtime.LogError(ctx, fmt.Sprintf("Failed to initialize ASR service: %v", err))
+		} else if a.asrService != nil {
+			a.logInfo("ASR service initialized")
+		}
+		close(a.asrInitDone)
+	}()
+
 	a.logInfo(fmt.Sprintf("Karte started. root=%s dataDir=%s exeDir=%s", a.root, a.dataDir, exeDir))
 
 	// Initialize sync manager (disabled for now - will be implemented with git integration)
-	// a.syncManager = sync.NewSyncManager(ctx, a.root)
+	// a.syncManager = syncpkg.NewSyncManager(ctx, a.root)
 	// if err := a.syncManager.Start(); err != nil {
 	// 	runtime.LogError(ctx, fmt.Sprintf("Failed to start sync manager: %v", err))
 	// }
 }
 
+// shutdown is invoked by Wails when the app is closing.
+func (a *App) shutdown(ctx context.Context) {
+	if a.asrService != nil {
+		a.asrService.Close()
+		a.asrService = nil
+	}
+	// Cleanup recording if active
+	if a.isRecording {
+		a.cleanupRecording()
+	}
+}
+
 // initializeDataDirectory creates and initializes the karte_data directory structure
 func (a *App) initializeDataDirectory() error {
-	// Create karte_data directory if it doesn't exist
+	// Ensure base directory exists
 	if err := os.MkdirAll(a.dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %v", err)
 	}
 
+	// Try to overlay template contents (if available)
+	if templatePath := a.findTemplatePath(); templatePath != "" {
+		if err := a.copyTemplateToDataDir(templatePath); err != nil {
+			a.logError(fmt.Sprintf("Failed to overlay template %s: %v", templatePath, err))
+		} else {
+			a.logInfo(fmt.Sprintf("Overlaid karte_data_template from %s", templatePath))
+		}
+	}
+
 	// Create subdirectories
-	subdirs := []string{"content", "data", "themes", "public", ".mdsys"}
+	subdirs := []string{
+		"content",
+		filepath.Join("content", "transcripts"),
+		"data",
+		filepath.Join("data", "audio"),
+		filepath.Join("data", "asr"),
+		"themes",
+		"public",
+		".mdsys",
+	}
 	for _, subdir := range subdirs {
 		dirPath := filepath.Join(a.dataDir, subdir)
 		if err := os.MkdirAll(dirPath, 0755); err != nil {
@@ -204,6 +286,23 @@ func (a *App) initializeDataDirectory() error {
 		filepath.Join(a.dataDir, "content", "README.md"): "# Welcome to Karte\n\nThis is your first document. Start writing!",
 		filepath.Join(a.dataDir, ".mdsys", "index.json"): "{}",
 		filepath.Join(a.dataDir, ".mdsys", "graph.json"): "{}",
+		filepath.Join(a.dataDir, "data", "asr", "config.json"): `{
+  "enabled": false,
+  "sampleRate": 16000,
+  "model": {
+    "tokens": "",
+    "encoder": "",
+    "decoder": "",
+    "joiner": ""
+  },
+  "decoding": {
+    "method": "greedy_search"
+  },
+  "runtime": {
+    "threads": 4,
+    "provider": "cpu"
+  }
+}`,
 	}
 
 	for filePath, content := range defaultFiles {
@@ -214,7 +313,97 @@ func (a *App) initializeDataDirectory() error {
 		}
 	}
 
-	// Initialize Git repository
+	return a.initializeGitRepository()
+}
+
+// findTemplatePath finds the karte_data_template path in .app bundle
+func (a *App) findTemplatePath() string {
+	exePath, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	exeDir := filepath.Dir(exePath)
+
+	// Check if running inside .app bundle
+	if strings.HasSuffix(filepath.ToSlash(exeDir), "/Contents/MacOS") {
+		contentsDir := filepath.Dir(exeDir)       // .../Contents
+		appBundleDir := filepath.Dir(contentsDir) // .../Karte.app
+		templatePath := filepath.Join(appBundleDir, "Contents", "Resources", "karte_data_template")
+		if _, err := os.Stat(templatePath); err == nil {
+			return templatePath
+		}
+	}
+	return ""
+}
+
+// copyTemplateToDataDir overlays karte_data_template onto karte_data.
+// Existing user files are preserved (not overwritten) for user-owned areas.
+func (a *App) copyTemplateToDataDir(templatePath string) error {
+	return filepath.Walk(templatePath, func(srcPath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Calculate relative path from template root
+		relPath, err := filepath.Rel(templatePath, srcPath)
+		if err != nil {
+			return err
+		}
+
+		// Skip root directory
+		if relPath == "." {
+			return nil
+		}
+
+		dstPath := filepath.Join(a.dataDir, relPath)
+
+		if info.IsDir() {
+			return os.MkdirAll(dstPath, info.Mode())
+		}
+
+		if !a.shouldOverwriteTemplateFile(relPath) {
+			return nil
+		}
+
+		// Copy file (overwrite to ensure template updates)
+		srcFile, err := os.Open(srcPath)
+		if err != nil {
+			return err
+		}
+		defer srcFile.Close()
+
+		dstFile, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+		if err != nil {
+			return err
+		}
+		defer dstFile.Close()
+
+		_, err = io.Copy(dstFile, srcFile)
+		return err
+	})
+}
+
+// shouldOverwriteTemplateFile decides whether template file should overwrite user data.
+func (a *App) shouldOverwriteTemplateFile(relPath string) bool {
+	normalized := filepath.ToSlash(relPath)
+	// Preserve user-authored markdown/content/audio if file already exists
+	if strings.HasPrefix(normalized, "content/") || strings.HasPrefix(normalized, "data/audio/") {
+		if _, err := os.Stat(filepath.Join(a.dataDir, relPath)); err == nil {
+			return false
+		}
+	}
+	// Preserve user-configured ASR config.json if it already exists
+	if normalized == "data/asr/config.json" {
+		if _, err := os.Stat(filepath.Join(a.dataDir, relPath)); err == nil {
+			return false
+		}
+	}
+	// Everything else (themes, ASR models, default configs) gets overwritten
+	return true
+}
+
+// initializeGitRepository initializes git repository in karte_data
+func (a *App) initializeGitRepository() error {
 	vcs, err := gitvcs.NewVCS(a.ctx, a.dataDir, a.logInfo)
 	if err != nil {
 		return fmt.Errorf("failed to initialize git repository: %v", err)
@@ -544,7 +733,7 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 	header := ""
 	footer := ""
 	paginate := false
-	aspectRatio := "" // Default will be 16:9
+	aspectRatio := ""      // Default will be 16:9
 	marpTheme := "default" // Default Marp theme
 
 	if frontMatter != nil {
@@ -740,10 +929,488 @@ func (a *App) initProject(root string) error {
 	return nil
 }
 
+// ImportAudioFile copies an audio file into karte_data/data/audio and triggers transcription.
+func (a *App) ImportAudioFile(src string) (string, error) {
+	if src == "" {
+		return "", fmt.Errorf("source path is required")
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return "", fmt.Errorf("stat audio: %w", err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("audio path must be a file")
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		return "", fmt.Errorf("open audio: %w", err)
+	}
+	defer f.Close()
+	return a.importAudioFromReader(info.Name(), f)
+}
+
+// ImportAudioBase64 saves audio content provided as base64 (used when native paths are not available).
+func (a *App) ImportAudioBase64(filename, base64Data string) (string, error) {
+	if filename == "" {
+		return "", fmt.Errorf("filename is required")
+	}
+	if base64Data == "" {
+		return "", fmt.Errorf("audio data is empty")
+	}
+	data, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		return "", fmt.Errorf("decode audio data: %w", err)
+	}
+	return a.importAudioFromReader(filename, bytes.NewReader(data))
+}
+
+func (a *App) importAudioFromReader(originalName string, src io.Reader) (string, error) {
+	if originalName == "" {
+		return "", fmt.Errorf("original name is required")
+	}
+	if !audio.IsSupportedImportExt(originalName) {
+		return "", fmt.Errorf("unsupported audio format: %s", filepath.Ext(originalName))
+	}
+
+	destDir := filepath.Join(a.dataDir, "data", "audio")
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return "", fmt.Errorf("prepare audio dir: %w", err)
+	}
+
+	base := audio.SanitizeFileName(strings.TrimSuffix(originalName, filepath.Ext(originalName)))
+	if base == "" {
+		base = "audio"
+	}
+	ext := strings.ToLower(filepath.Ext(originalName))
+	timestamp := time.Now().Format("20060102-150405")
+	prefix := fmt.Sprintf("%s_%s", timestamp, base)
+	filename := prefix + ext
+	for i := 2; ; i++ {
+		_, err := os.Stat(filepath.Join(destDir, filename))
+		if os.IsNotExist(err) {
+			break
+		}
+		filename = fmt.Sprintf("%s_%02d%s", prefix, i, ext)
+	}
+
+	destPath := filepath.Join(destDir, filename)
+	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return "", fmt.Errorf("create audio file: %w", err)
+	}
+	if _, err := io.Copy(out, src); err != nil {
+		out.Close()
+		return "", fmt.Errorf("write audio file: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return "", fmt.Errorf("close audio file: %w", err)
+	}
+
+	relPath, err := filepath.Rel(a.dataDir, destPath)
+	if err != nil {
+		relPath = destPath
+	}
+	relPath = filepath.ToSlash(relPath)
+
+	payload := map[string]interface{}{
+		"path":          relPath,
+		"original_name": originalName,
+		"saved_name":    filename,
+	}
+	runtime.EventsEmit(a.ctx, "audio-imported", payload)
+	a.logInfo(fmt.Sprintf("Audio imported: %s -> %s", originalName, relPath))
+
+	a.startTranscriptionJob(destPath, relPath)
+	return relPath, nil
+}
+
+func (a *App) startTranscriptionJob(absAudioPath, relAudioPath string) {
+	if ready := a.waitForASRReady(); !ready {
+		a.logInfo("ASR service not configured; skipping transcription")
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+
+		transcriptPath, err := a.startStreamingTranscription(ctx, absAudioPath, relAudioPath)
+		if err != nil {
+			a.logError(fmt.Sprintf("ASR failed for %s: %v", relAudioPath, err))
+			runtime.EventsEmit(a.ctx, "audio-transcribed", map[string]interface{}{
+				"audioPath": relAudioPath,
+				"error":     err.Error(),
+			})
+			return
+		}
+
+		runtime.EventsEmit(a.ctx, "audio-transcribed", map[string]interface{}{
+			"audioPath":      relAudioPath,
+			"transcriptPath": transcriptPath,
+		})
+	}()
+}
+
+func (a *App) startStreamingTranscription(ctx context.Context, absAudioPath, relAudioPath string) (string, error) {
+	transcriptPath, err := a.writeTranscriptDocument(relAudioPath, "")
+	if err != nil {
+		return "", err
+	}
+
+	progressHandler := func(line string, segmentIndex, totalSegments int, timestamp float64) {
+		// Format timestamp as [HH:MM:SS] or [MM:SS]
+		timestampStr := formatTimestamp(timestamp)
+		timestampedLine := fmt.Sprintf("%s %s", timestampStr, line)
+
+		a.appendTranscriptLine(transcriptPath, timestampedLine)
+		runtime.EventsEmit(a.ctx, "audio-transcribe-progress", map[string]interface{}{
+			"audioPath":      relAudioPath,
+			"transcriptPath": transcriptPath,
+			"text":           line,
+			"segmentIndex":   segmentIndex,
+			"totalSegments":  totalSegments,
+			"timestamp":      timestamp,
+		})
+	}
+
+	text, err := a.asrService.TranscribeFile(ctx, absAudioPath, progressHandler)
+	if err != nil {
+		return "", err
+	}
+
+	if strings.TrimSpace(text) == "" {
+		a.appendTranscriptLine(transcriptPath, "_（ASRから有効な結果が得られませんでした）_")
+	}
+	return transcriptPath, nil
+}
+
+func (a *App) writeTranscriptDocument(audioRelPath, transcript string) (string, error) {
+	baseName := audio.SanitizeFileName(strings.TrimSuffix(filepath.Base(audioRelPath), filepath.Ext(audioRelPath)))
+	if baseName == "" {
+		baseName = fmt.Sprintf("audio-%s", time.Now().Format("20060102-150405"))
+	}
+
+	dirRel := filepath.ToSlash(filepath.Join("content", "transcripts"))
+	filename := baseName + ".md"
+	contentRel := filepath.ToSlash(filepath.Join(dirRel, filename))
+
+	makeAbs := func(rel string) (string, error) {
+		abs, ok := a.resolveContentPath(rel)
+		if !ok {
+			return "", fmt.Errorf("invalid transcript path: %s", rel)
+		}
+		return abs, nil
+	}
+
+	absPath, err := makeAbs(contentRel)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+		return "", fmt.Errorf("prepare transcript dir: %w", err)
+	}
+
+	for i := 2; ; i++ {
+		if _, err := os.Stat(absPath); os.IsNotExist(err) {
+			break
+		}
+		filename = fmt.Sprintf("%s-%d.md", baseName, i)
+		contentRel = filepath.ToSlash(filepath.Join(dirRel, filename))
+		absPath, err = makeAbs(contentRel)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	body := a.composeTranscriptMarkdown(audioRelPath, transcript)
+	if err := a.SaveFile(contentRel, body); err != nil {
+		return "", err
+	}
+	return contentRel, nil
+}
+
+func (a *App) composeTranscriptMarkdown(audioRelPath, transcript string) string {
+	now := time.Now().Format(time.RFC3339)
+	return fmt.Sprintf(`---
+title: %q
+tags:
+  - transcript
+  - audio
+created_at: %s
+audio_path: %q
+---
+
+## Transcript
+
+%s
+`, fmt.Sprintf("Transcript %s", filepath.Base(audioRelPath)), now, audioRelPath, strings.TrimSpace(transcript))
+}
+
+// appendTranscriptPartial updates the partial text marker in the transcript file
+func (a *App) appendTranscriptPartial(contentRel, partialText string) {
+	absPath, ok := a.resolveContentPath(contentRel)
+	if !ok {
+		a.logError(fmt.Sprintf("Failed to resolve transcript path: %s", contentRel))
+		return
+	}
+
+	// Read existing content
+	content, err := os.ReadFile(absPath)
+	if err != nil {
+		a.logError(fmt.Sprintf("Failed to read transcript file: %v", err))
+		return
+	}
+
+	contentStr := string(content)
+	partialMarkerStart := "<!-- ASR_PARTIAL -->"
+	partialMarkerEnd := "<!-- /ASR_PARTIAL -->"
+
+	// Find the "## Transcript" section
+	transcriptHeader := "## Transcript"
+	headerIndex := strings.Index(contentStr, transcriptHeader)
+
+	if headerIndex == -1 {
+		// If "## Transcript" not found, create it with partial text
+		contentStr += "\n\n" + transcriptHeader + "\n\n" + partialMarkerStart + partialText + partialMarkerEnd + "\n"
+	} else {
+		// Find existing partial marker
+		afterHeader := contentStr[headerIndex+len(transcriptHeader):]
+		partialStartIndex := strings.Index(afterHeader, partialMarkerStart)
+		partialEndIndex := strings.Index(afterHeader, partialMarkerEnd)
+
+		if partialStartIndex != -1 && partialEndIndex != -1 && partialEndIndex > partialStartIndex {
+			// Replace existing partial text
+			beforePartial := contentStr[:headerIndex+len(transcriptHeader)+partialStartIndex+len(partialMarkerStart)]
+			afterPartial := contentStr[headerIndex+len(transcriptHeader)+partialEndIndex+len(partialMarkerEnd):]
+			contentStr = beforePartial + partialText + partialMarkerEnd + afterPartial
+		} else {
+			// Add new partial text marker at the end of Transcript section
+			// Find the end of the section (next ## header or end of file)
+			nextHeaderMatch := strings.Index(afterHeader, "\n## ")
+			sectionEnd := len(afterHeader)
+			if nextHeaderMatch != -1 {
+				sectionEnd = nextHeaderMatch
+			}
+			sectionContent := strings.TrimRight(afterHeader[:sectionEnd], "\n")
+			newSectionContent := sectionContent
+			if sectionContent != "" {
+				newSectionContent += "\n\n"
+			}
+			newSectionContent += partialMarkerStart + partialText + partialMarkerEnd + "\n"
+			contentStr = contentStr[:headerIndex+len(transcriptHeader)] + "\n" + newSectionContent + afterHeader[sectionEnd:]
+		}
+	}
+
+	// Write back to file
+	if err := os.WriteFile(absPath, []byte(contentStr), 0644); err != nil {
+		a.logError(fmt.Sprintf("Failed to write transcript: %v", err))
+		return
+	}
+
+	// Sync to ensure data is written immediately
+	f, err := os.OpenFile(absPath, os.O_RDONLY, 0644)
+	if err == nil {
+		f.Sync()
+		f.Close()
+	}
+}
+
+func (a *App) appendTranscriptLine(contentRel, line string) {
+	absPath, ok := a.resolveContentPath(contentRel)
+	if !ok {
+		a.logError(fmt.Sprintf("Failed to resolve transcript path: %s", contentRel))
+		return
+	}
+
+	// Read existing content
+	content, err := os.ReadFile(absPath)
+	if err != nil {
+		a.logError(fmt.Sprintf("Failed to read transcript file: %v", err))
+		return
+	}
+
+	contentStr := string(content)
+	partialMarkerStart := "<!-- ASR_PARTIAL -->"
+	partialMarkerEnd := "<!-- /ASR_PARTIAL -->"
+
+	// Find the "## Transcript" section
+	transcriptHeader := "## Transcript"
+	headerIndex := strings.Index(contentStr, transcriptHeader)
+
+	if headerIndex == -1 {
+		// If "## Transcript" not found, append at the end
+		contentStr += "\n\n" + transcriptHeader + "\n\n" + line + "\n\n"
+	} else {
+		// Check if there's a partial text marker to replace
+		afterHeader := contentStr[headerIndex+len(transcriptHeader):]
+		partialStartIndex := strings.Index(afterHeader, partialMarkerStart)
+		partialEndIndex := strings.Index(afterHeader, partialMarkerEnd)
+
+		if partialStartIndex != -1 && partialEndIndex != -1 && partialEndIndex > partialStartIndex {
+			// Replace partial marker with final text
+			beforePartial := contentStr[:headerIndex+len(transcriptHeader)+partialStartIndex]
+			afterPartial := contentStr[headerIndex+len(transcriptHeader)+partialEndIndex+len(partialMarkerEnd):]
+			contentStr = beforePartial + line + "\n" + afterPartial
+		} else {
+			// Always append at the end of the file to maintain chronological order
+			// This ensures new transcript segments are added in the correct time order
+			contentStr += "\n\n" + line + "\n\n"
+		}
+	}
+
+	// Write back to file
+	if err := os.WriteFile(absPath, []byte(contentStr), 0644); err != nil {
+		a.logError(fmt.Sprintf("Failed to write transcript: %v", err))
+		return
+	}
+
+	// Sync to ensure data is written immediately
+	f, err := os.OpenFile(absPath, os.O_RDONLY, 0644)
+	if err == nil {
+		f.Sync()
+		f.Close()
+	}
+}
+
+// updateTranscriptAudioPath updates the audio_path in the transcript file's frontmatter
+func (a *App) updateTranscriptAudioPath(transcriptPath, audioRelPath string) error {
+	absPath, ok := a.resolveContentPath(transcriptPath)
+	if !ok {
+		return fmt.Errorf("invalid transcript path: %s", transcriptPath)
+	}
+
+	// Read existing content
+	content, err := os.ReadFile(absPath)
+	if err != nil {
+		return fmt.Errorf("failed to read transcript file: %w", err)
+	}
+
+	// Parse frontmatter
+	frontMatter, markdownBody := fm.ParseFrontMatter(string(content))
+	if frontMatter == nil {
+		return fmt.Errorf("no frontmatter found in transcript file")
+	}
+
+	// Update audio_path in Raw map (since it's a custom field)
+	if frontMatter.Raw == nil {
+		frontMatter.Raw = make(map[string]any)
+	}
+	frontMatter.Raw["audio_path"] = audioRelPath
+	// Preserve existing created_at if present, otherwise set it
+	if _, exists := frontMatter.Raw["created_at"]; !exists {
+		frontMatter.Raw["created_at"] = time.Now().Format(time.RFC3339)
+	}
+
+	// Format frontmatter and combine with body
+	formattedFM := fm.FormatFrontMatter(frontMatter)
+	updatedContent := formattedFM + markdownBody
+
+	// Write directly to file to avoid SaveFile's ParseFrontMatter which might overwrite our changes
+	// We still need to handle git operations, so we'll use SaveFile but ensure the content is correct
+	// Actually, let's write directly and then commit via git if needed
+	if err := os.WriteFile(absPath, []byte(updatedContent), 0644); err != nil {
+		return fmt.Errorf("failed to write updated transcript: %w", err)
+	}
+
+	// Commit the change via git if VCS is available
+	if a.vcs != nil {
+		relPath, err := filepath.Rel(a.dataDir, absPath)
+		if err == nil {
+			if err := a.vcs.CommitFile(relPath, fmt.Sprintf("Update audio_path to %s", audioRelPath)); err != nil {
+				// Log but don't fail - the file is already updated
+				a.logError(fmt.Sprintf("Failed to commit audio_path update: %v", err))
+			}
+		}
+	}
+
+	return nil
+}
+
+func (a *App) initASRService() error {
+	cfgPath := filepath.Join(a.dataDir, "data", "asr", "config.json")
+	cfg, err := asr.LoadConfigFromFile(cfgPath)
+	if err != nil {
+		return err
+	}
+	if cfg == nil || !cfg.Enabled {
+		a.logInfo("ASR disabled (config missing or enabled=false)")
+		return nil
+	}
+	cfg.EnsureModelPathsAbsolute(a.dataDir)
+	svc, err := asr.NewService(cfg)
+	if err != nil {
+		return err
+	}
+	a.asrService = svc
+	return nil
+}
+
+func (a *App) waitForASRReady() bool {
+	if a.asrService != nil {
+		return true
+	}
+	if a.asrInitDone == nil {
+		return false
+	}
+	select {
+	case <-a.asrInitDone:
+		return a.asrService != nil
+	case <-time.After(30 * time.Second):
+		return a.asrService != nil
+	}
+}
+
+// ASRStatus represents the current status of the ASR service
+type ASRStatus struct {
+	Initialized  bool `json:"initialized"`
+	Initializing bool `json:"initializing"`
+}
+
+// GetASRStatus returns the current initialization status of the ASR service
+func (a *App) GetASRStatus() ASRStatus {
+	initialized := a.asrService != nil
+
+	initializing := false
+	if a.asrInitDone != nil {
+		select {
+		case <-a.asrInitDone:
+			// Initialization is complete (either succeeded or failed)
+			initializing = false
+		default:
+			// Still initializing
+			initializing = true
+		}
+	}
+
+	return ASRStatus{
+		Initialized:  initialized,
+		Initializing: initializing,
+	}
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Sync()
+}
+
 // GetConnectedPeers returns the list of connected peers (disabled for now - will be implemented with git integration)
-func (a *App) GetConnectedPeers() []sync.Peer {
+func (a *App) GetConnectedPeers() []syncpkg.Peer {
 	// TODO: Implement with git integration
-	return []sync.Peer{}
+	return []syncpkg.Peer{}
 }
 
 // ConnectToPeer connects to a peer (disabled for now - will be implemented with git integration)
@@ -1293,6 +1960,141 @@ func (a *App) ClearCustomCSS() error {
 	return nil
 }
 
+// GetAudioFileURL returns a URL for the audio file that can be used in HTML audio elements.
+// The audioPath should be relative to dataDir (e.g., "data/audio/xxx.wav").
+// Returns a URL path that will be served by the HTTP handler.
+func (a *App) GetAudioFileURL(audioPath string) (string, error) {
+	if audioPath == "" {
+		return "", fmt.Errorf("audio path is empty")
+	}
+
+	// Resolve to absolute path to verify file exists
+	var absPath string
+	if filepath.IsAbs(audioPath) {
+		absPath = audioPath
+	} else {
+		// Assume relative to dataDir
+		absPath = filepath.Join(a.dataDir, filepath.FromSlash(audioPath))
+	}
+
+	// Check if file exists
+	info, err := os.Stat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("audio file not found: %s", audioPath)
+		}
+		return "", fmt.Errorf("failed to stat audio file: %w", err)
+	}
+
+	// Return URL path that will be handled by the HTTP handler
+	// The handler will serve files from /audio/ path
+	urlPath := "/audio/" + filepath.ToSlash(audioPath)
+
+	// Log file size for debugging
+	a.logInfo(fmt.Sprintf("Audio file URL: %s (size: %d bytes)", urlPath, info.Size()))
+
+	return urlPath, nil
+}
+
+// createAudioHandler creates an HTTP handler that serves audio files.
+// This handler wraps the default asset handler and adds support for /audio/ paths.
+func (a *App) createAudioHandler() http.Handler {
+	// Get default asset handler
+	defaultHandler := http.FileServer(http.FS(assets))
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Handle /audio/ paths
+		if strings.HasPrefix(r.URL.Path, "/audio/") {
+			// Extract audio path from URL
+			audioPath := strings.TrimPrefix(r.URL.Path, "/audio/")
+
+			// Resolve to absolute path
+			var absPath string
+			if filepath.IsAbs(audioPath) {
+				absPath = audioPath
+			} else {
+				// Assume relative to dataDir
+				absPath = filepath.Join(a.dataDir, filepath.FromSlash(audioPath))
+			}
+
+			// Check if file exists
+			info, err := os.Stat(absPath)
+			if err != nil {
+				http.Error(w, "Audio file not found", http.StatusNotFound)
+				return
+			}
+
+			// Determine MIME type from file extension
+			ext := strings.ToLower(filepath.Ext(absPath))
+			var mimeType string
+			switch ext {
+			case ".wav":
+				mimeType = "audio/wav"
+			case ".mp3":
+				mimeType = "audio/mpeg"
+			case ".m4a":
+				mimeType = "audio/mp4"
+			case ".ogg":
+				mimeType = "audio/ogg"
+			default:
+				mimeType = "audio/mpeg" // default fallback
+			}
+
+			// Open file
+			file, err := os.Open(absPath)
+			if err != nil {
+				http.Error(w, "Failed to open audio file", http.StatusInternalServerError)
+				return
+			}
+			defer file.Close()
+
+			// Set headers
+			w.Header().Set("Content-Type", mimeType)
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
+			w.Header().Set("Accept-Ranges", "bytes") // Enable range requests for seeking
+
+			// Serve file
+			http.ServeContent(w, r, filepath.Base(absPath), info.ModTime(), file)
+			return
+		}
+
+		// For all other paths, use default asset handler
+		defaultHandler.ServeHTTP(w, r)
+	})
+}
+
+// formatTimestamp formats a timestamp in seconds as [HH:MM:SS.mmm] or [MM:SS.mmm]
+// Shows milliseconds (3 decimal places) for more precise timestamps
+func formatTimestamp(seconds float64) string {
+	totalSeconds := int(seconds)
+	hours := totalSeconds / 3600
+	minutes := (totalSeconds % 3600) / 60
+	secs := totalSeconds % 60
+	milliseconds := int((seconds - float64(totalSeconds)) * 1000)
+
+	if hours > 0 {
+		return fmt.Sprintf("[%02d:%02d:%02d.%03d]", hours, minutes, secs, milliseconds)
+	}
+	return fmt.Sprintf("[%02d:%02d.%03d]", minutes, secs, milliseconds)
+}
+
+// calculateRMS calculates the Root Mean Square of audio samples
+// Used for microphone input level indicator
+func calculateRMS(samples []float32) float32 {
+	if len(samples) == 0 {
+		return 0
+	}
+	var sum float64
+	for _, s := range samples {
+		sum += float64(s * s)
+	}
+	meanSquare := sum / float64(len(samples))
+	// Return RMS (square root of mean square)
+	// For performance, we'll use a simple approximation or just return meanSquare
+	// since we're just using it for visualization
+	return float32(meanSquare)
+}
+
 // LinkInfo represents a link found in markdown content
 type LinkInfo struct {
 	Target string
@@ -1386,4 +2188,861 @@ func (a *App) resolveLinkTarget(link LinkInfo, currentFile string) string {
 		runtime.LogInfo(a.ctx, fmt.Sprintf("  No resolution for kind: %s", link.Kind))
 		return ""
 	}
+}
+
+// recordingSegment holds state for a single speech segment during recording
+type recordingSegment struct {
+	samples          []float32
+	startSampleIndex int
+}
+
+// StartRecording starts real-time recording with transcription
+// Uses existing asr.Service (OfflineStream) instead of RealtimeService to avoid crashes
+func (a *App) StartRecording() error {
+	a.logInfo("[Recording] StartRecording called")
+	a.recordingMu.Lock()
+	defer a.recordingMu.Unlock()
+
+	if a.isRecording {
+		a.logError("[Recording] StartRecording called but already recording")
+		return fmt.Errorf("recording already in progress")
+	}
+
+	// Wait for ASR to be ready
+	a.logInfo("[Recording] Waiting for ASR service to be ready...")
+	if !a.waitForASRReady() {
+		a.logError("[Recording] ASR service not ready")
+		return fmt.Errorf("ASR service not ready")
+	}
+	a.logInfo("[Recording] ASR service is ready")
+
+	// Initialize RealtimeService for partial text support
+	// Check if model is suitable for online recognition (streaming model)
+	a.logInfo("[Recording] Initializing RealtimeService for partial text...")
+	cfgPath := filepath.Join(a.dataDir, "data", "asr", "config.json")
+	a.logInfo(fmt.Sprintf("[Recording] Loading ASR config from: %s", cfgPath))
+	cfg, err := asr.LoadConfigFromFile(cfgPath)
+	if err != nil {
+		a.logError(fmt.Sprintf("[Recording] Failed to load ASR config: %v", err))
+		return fmt.Errorf("failed to load ASR config: %w", err)
+	}
+	if cfg == nil {
+		a.logError("[Recording] ASR config is nil")
+		return fmt.Errorf("ASR config is nil")
+	}
+	a.logInfo(fmt.Sprintf("[Recording] ASR config loaded: enabled=%v, sampleRate=%d", cfg.Enabled, cfg.SampleRate))
+	if !cfg.Enabled {
+		a.logError("[Recording] ASR config not enabled")
+		return fmt.Errorf("ASR not enabled")
+	}
+	a.logInfo("[Recording] Making model paths absolute...")
+	cfg.EnsureModelPathsAbsolute(a.dataDir)
+	a.logInfo(fmt.Sprintf("[Recording] Model paths: encoder=%s, decoder=%s, joiner=%s, tokens=%s",
+		cfg.Model.Encoder, cfg.Model.Decoder, cfg.Model.Joiner, cfg.Model.Tokens))
+
+	// Check if model is suitable for online recognition
+	// Streaming models typically have "chunk", "left", "right", or "streaming" in the filename
+	isStreamingModel := strings.Contains(cfg.Model.Encoder, "chunk") ||
+		strings.Contains(cfg.Model.Encoder, "left") ||
+		strings.Contains(cfg.Model.Encoder, "right") ||
+		strings.Contains(cfg.Model.Encoder, "streaming") ||
+		strings.Contains(cfg.Model.Decoder, "chunk") ||
+		strings.Contains(cfg.Model.Decoder, "left") ||
+		strings.Contains(cfg.Model.Decoder, "right") ||
+		strings.Contains(cfg.Model.Decoder, "streaming")
+
+	if !isStreamingModel {
+		a.logInfo("[Recording] Model appears to be offline-only (no streaming indicators in filename). Skipping RealtimeService initialization.")
+		a.logInfo("[Recording] Partial text will not be available, but recording will continue with offline ASR.")
+		// Continue without RealtimeService - we'll use offline ASR only
+		a.realtimeService = nil
+	} else {
+		a.logInfo("[Recording] Model appears to be streaming-capable. Initializing RealtimeService...")
+		a.logInfo("[Recording] Calling asr.NewRealtimeService...")
+
+		// Create a logger function that writes to app.log
+		logFunc := func(format string, args ...interface{}) {
+			msg := fmt.Sprintf(format, args...)
+			a.logInfo(fmt.Sprintf("[Recording] [RealtimeASR] %s", msg))
+		}
+
+		// Call NewRealtimeService directly with panic recovery
+		var realtimeService *asr.RealtimeService
+		var serviceErr error
+
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					errMsg := fmt.Sprintf("panic in NewRealtimeService: %v", r)
+					a.logError(fmt.Sprintf("[Recording] %s", errMsg))
+					serviceErr = fmt.Errorf(errMsg)
+				}
+			}()
+
+			a.logInfo("[Recording] Entering NewRealtimeService (this may take a moment)...")
+			realtimeService, serviceErr = asr.NewRealtimeServiceWithLogger(cfg, logFunc)
+			a.logInfo(fmt.Sprintf("[Recording] NewRealtimeService returned: service=%v, err=%v",
+				realtimeService != nil, serviceErr))
+		}()
+
+		if serviceErr != nil {
+			a.logError(fmt.Sprintf("[Recording] Failed to initialize RealtimeService: %v", serviceErr))
+			a.logInfo("[Recording] Continuing without RealtimeService - will use offline ASR only")
+			// Don't fail - continue without RealtimeService
+			a.realtimeService = nil
+		} else if realtimeService == nil {
+			a.logError("[Recording] NewRealtimeService returned nil (no error)")
+			a.logInfo("[Recording] Continuing without RealtimeService - will use offline ASR only")
+			a.realtimeService = nil
+		} else {
+			a.realtimeService = realtimeService
+			a.logInfo("[Recording] RealtimeService initialized successfully")
+		}
+	}
+
+	// Create recorder
+	a.logInfo("[Recording] Creating audio recorder...")
+	recorder, err := audio.NewRecorder()
+	if err != nil {
+		a.logError(fmt.Sprintf("[Recording] Failed to create recorder: %v", err))
+		// Clean up RealtimeService if recorder creation fails
+		if a.realtimeService != nil {
+			a.realtimeService.Close()
+			a.realtimeService = nil
+		}
+		return fmt.Errorf("failed to create recorder: %w", err)
+	}
+	a.logInfo("[Recording] Audio recorder created successfully")
+
+	// Check if we can access microphone by trying to get default input device
+	// This will trigger permission request on macOS if not already granted
+	a.logInfo("[Recording] Checking microphone access...")
+
+	// Initialize recording state
+	a.recordingSamples = make([]float32, 0)
+	a.recordingVAD = audio.DefaultSimpleVAD()
+	a.recordingSegment = nil
+	a.recordingStopCh = make(chan struct{})
+	segmentIndex := 0
+
+	// Create transcript file at start (before recording starts)
+	// This ensures the file exists when we append transcript lines
+	timestamp := time.Now().Format("20060102-150405")
+	baseName := fmt.Sprintf("%s_recording", timestamp)
+	dirRel := filepath.ToSlash(filepath.Join("content", "transcripts"))
+	filename := baseName + ".md"
+	contentRel := filepath.ToSlash(filepath.Join(dirRel, filename))
+
+	// Resolve absolute path
+	makeAbs := func(rel string) (string, error) {
+		abs, ok := a.resolveContentPath(rel)
+		if !ok {
+			return "", fmt.Errorf("invalid transcript path: %s", rel)
+		}
+		return abs, nil
+	}
+
+	// Find available filename
+	absPath, err := makeAbs(contentRel)
+	if err != nil {
+		a.logError(fmt.Sprintf("[Recording] Failed to resolve transcript path: %v", err))
+		recorder.Close()
+		return fmt.Errorf("failed to resolve transcript path: %w", err)
+	}
+
+	for i := 2; ; i++ {
+		if _, err := os.Stat(absPath); os.IsNotExist(err) {
+			break
+		}
+		filename = fmt.Sprintf("%s-%d.md", baseName, i)
+		contentRel = filepath.ToSlash(filepath.Join(dirRel, filename))
+		absPath, err = makeAbs(contentRel)
+		if err != nil {
+			a.logError(fmt.Sprintf("[Recording] Failed to resolve transcript path: %v", err))
+			recorder.Close()
+			return fmt.Errorf("failed to resolve transcript path: %w", err)
+		}
+	}
+
+	// Create directory if needed
+	if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+		a.logError(fmt.Sprintf("[Recording] Failed to create transcript dir: %v", err))
+		recorder.Close()
+		return fmt.Errorf("failed to create transcript dir: %w", err)
+	}
+
+	// Create empty transcript file with frontmatter
+	// We'll append transcript lines as they come in
+	relAudioPath := filepath.ToSlash(filepath.Join("data", "audio", fmt.Sprintf("%s_recording.m4a", timestamp)))
+	body := a.composeTranscriptMarkdown(relAudioPath, "")
+	if err := a.SaveFile(contentRel, body); err != nil {
+		a.logError(fmt.Sprintf("[Recording] Failed to create transcript file: %v", err))
+		recorder.Close()
+		return fmt.Errorf("failed to create transcript file: %w", err)
+	}
+
+	a.recordingTranscriptPath = contentRel
+	a.logInfo(fmt.Sprintf("[Recording] Created transcript file: %s", contentRel))
+
+	// Start recording with callback that buffers samples
+	a.logInfo("[Recording] Starting audio recording...")
+	err = recorder.Start(func(samples []float32) {
+		// This callback runs in audio thread - only buffer samples, no CGO calls
+		a.recordingMu.Lock()
+		a.recordingSamples = append(a.recordingSamples, samples...)
+		a.recordingMu.Unlock()
+
+		// Calculate input level (RMS) for microphone indicator
+		// This is safe to do in audio thread as it's just math
+		rms := calculateRMS(samples)
+		// Emit input level event (use goroutine to avoid blocking audio thread)
+		go func() {
+			runtime.EventsEmit(a.ctx, "recording-input-level", map[string]interface{}{
+				"level": rms,
+			})
+		}()
+	})
+
+	if err != nil {
+		recorder.Close()
+		errMsg := fmt.Sprintf("[Recording] Failed to start recording: %v", err)
+		a.logError(errMsg)
+		// Provide helpful error message for permission issues
+		if strings.Contains(err.Error(), "permission") || strings.Contains(err.Error(), "denied") || strings.Contains(err.Error(), "access") {
+			a.logError("[Recording] Microphone permission may be denied. Please check System Settings > Privacy & Security > Microphone")
+			runtime.EventsEmit(a.ctx, "recording-error", map[string]interface{}{
+				"error":   "マイクの権限が拒否されています。システム設定 > プライバシーとセキュリティ > マイク でKarteにマイクへのアクセスを許可してください。",
+				"details": err.Error(),
+			})
+		}
+		return fmt.Errorf("failed to start recording: %w", err)
+	}
+
+	a.recorder = recorder
+	a.isRecording = true
+
+	// Start processing goroutine that handles ASR (runs outside audio thread)
+	a.recordingWg.Add(1)
+	go func() {
+		defer a.recordingWg.Done()
+		a.processRecordingSamples(&segmentIndex)
+	}()
+
+	runtime.EventsEmit(a.ctx, "recording-started", map[string]interface{}{
+		"transcriptPath": contentRel,
+	})
+	a.logInfo("[Recording] Recording started successfully")
+
+	return nil
+}
+
+// processRecordingSamples processes buffered samples using VAD and ASR
+// This runs in a separate goroutine to avoid CGO calls in audio thread
+func (a *App) processRecordingSamples(segmentIndex *int) {
+	a.logInfo("[Recording] Processing goroutine started")
+	defer a.logInfo("[Recording] Processing goroutine finished (defer)")
+
+	chunkSize := 160                // 10ms @ 16kHz
+	maxSegmentSamples := 16000 * 15 // 15 seconds max
+	processedSamples := 0
+
+	ticker := time.NewTicker(100 * time.Millisecond) // Process every 100ms
+	defer func() {
+		a.logInfo("[Recording] Stopping ticker...")
+		ticker.Stop()
+		a.logInfo("[Recording] Ticker stopped")
+	}()
+
+	for {
+		select {
+		case <-a.recordingStopCh:
+			// Stop ticker first to avoid processing new samples
+			a.logInfo("[Recording] Processing goroutine received stop signal in main select")
+			ticker.Stop()
+			a.logInfo("[Recording] Ticker stopped after stop signal")
+
+			// Get segment data without holding lock for long
+			var seg *recordingSegment
+			var startIdx int
+			var samplesCopy []float32
+			func() {
+				// Use a separate lock scope to minimize lock time
+				a.recordingMu.Lock()
+				defer a.recordingMu.Unlock()
+				if a.recordingSegment != nil && len(a.recordingSegment.samples) > 0 {
+					seg = a.recordingSegment
+					startIdx = seg.startSampleIndex
+					samplesCopy = make([]float32, len(seg.samples))
+					copy(samplesCopy, seg.samples)
+					a.recordingSegment = nil // Clear immediately
+				}
+			}()
+
+			// Finalize any remaining segment in background to avoid blocking exit
+			// Only process if segment is long enough (minimum 0.1 seconds = 1600 samples)
+			if seg != nil && len(samplesCopy) > 0 {
+				minSamples := 1600 // 0.1 seconds at 16kHz
+				if len(samplesCopy) >= minSamples {
+					a.logInfo(fmt.Sprintf("[Recording] Finalizing remaining segment before exit (async, %d samples)", len(samplesCopy)))
+					// Run finalization in background to avoid blocking exit
+					go func() {
+						a.finalizeRecordingSegment(segmentIndex, startIdx, samplesCopy)
+					}()
+				} else {
+					a.logInfo(fmt.Sprintf("[Recording] Skipping remaining segment (too short: %d samples, minimum: %d)", len(samplesCopy), minSamples))
+				}
+			} else {
+				a.logInfo("[Recording] No remaining segment to finalize")
+			}
+			a.logInfo("[Recording] Processing goroutine exiting (return statement)")
+			return
+		case <-ticker.C:
+			// Check if we should stop before processing
+			select {
+			case <-a.recordingStopCh:
+				// Stop signal received, exit immediately
+				a.logInfo("[Recording] Processing goroutine received stop signal in ticker select")
+				ticker.Stop()
+
+				// Get segment data without holding lock for long
+				var seg *recordingSegment
+				var startIdx int
+				var samplesCopy []float32
+				func() {
+					a.recordingMu.Lock()
+					defer a.recordingMu.Unlock()
+					if a.recordingSegment != nil && len(a.recordingSegment.samples) > 0 {
+						seg = a.recordingSegment
+						startIdx = seg.startSampleIndex
+						samplesCopy = make([]float32, len(seg.samples))
+						copy(samplesCopy, seg.samples)
+						a.recordingSegment = nil
+					}
+				}()
+
+				// Only process if segment is long enough (minimum 0.1 seconds = 1600 samples)
+				if seg != nil && len(samplesCopy) > 0 {
+					minSamples := 1600 // 0.1 seconds at 16kHz
+					if len(samplesCopy) >= minSamples {
+						go func() {
+							a.finalizeRecordingSegment(segmentIndex, startIdx, samplesCopy)
+						}()
+					} else {
+						a.logInfo(fmt.Sprintf("[Recording] Skipping segment (too short: %d samples, minimum: %d)", len(samplesCopy), minSamples))
+					}
+				}
+				a.logInfo("[Recording] Processing goroutine exiting from ticker select")
+				return
+			default:
+				// Continue processing
+			}
+
+			// Process buffered samples (minimize lock time)
+			var newSamples []float32
+			func() {
+				a.recordingMu.Lock()
+				defer a.recordingMu.Unlock()
+				if len(a.recordingSamples) <= processedSamples {
+					return
+				}
+				// Get new samples to process (copy to avoid holding lock)
+				newSamples = make([]float32, len(a.recordingSamples)-processedSamples)
+				copy(newSamples, a.recordingSamples[processedSamples:])
+			}()
+
+			if len(newSamples) == 0 {
+				continue
+			}
+
+			// Process with RealtimeService for partial text (if available)
+			if a.realtimeService != nil {
+				// Process audio chunks with RealtimeService
+				for i := 0; i < len(newSamples); i += chunkSize {
+					end := i + chunkSize
+					if end > len(newSamples) {
+						end = len(newSamples)
+					}
+					chunk := newSamples[i:end]
+
+					// Process with RealtimeService to get partial/final text
+					partialText, finalText, isFinal := a.realtimeService.ProcessAudio(chunk)
+
+					// Emit partial text event if text changed and write to file
+					if partialText != "" {
+						// Get current timestamp
+						currentSampleIndex := processedSamples + i
+						timestamp := float64(currentSampleIndex) / float64(audio.RecordingSampleRate)
+						var transcriptPath string
+						func() {
+							a.recordingMu.Lock()
+							defer a.recordingMu.Unlock()
+							transcriptPath = a.recordingTranscriptPath
+						}()
+						runtime.EventsEmit(a.ctx, "recording-transcript-partial", map[string]interface{}{
+							"text":           partialText,
+							"timestamp":      timestamp,
+							"transcriptPath": transcriptPath,
+						})
+
+						// Write partial text to transcript file
+						if transcriptPath != "" {
+							a.appendTranscriptPartial(transcriptPath, partialText)
+						}
+					}
+
+					// Emit final text event if endpoint reached
+					if isFinal && finalText != "" {
+						currentSampleIndex := processedSamples + i
+						timestamp := float64(currentSampleIndex) / float64(audio.RecordingSampleRate)
+						*segmentIndex++
+						var transcriptPath string
+						func() {
+							a.recordingMu.Lock()
+							defer a.recordingMu.Unlock()
+							transcriptPath = a.recordingTranscriptPath
+						}()
+						runtime.EventsEmit(a.ctx, "recording-transcript-final", map[string]interface{}{
+							"text":           finalText,
+							"segmentIndex":   *segmentIndex,
+							"timestamp":      timestamp,
+							"transcriptPath": transcriptPath,
+						})
+						a.logInfo(fmt.Sprintf("[Recording] Final transcript segment %d: %s (timestamp: %.2f)", *segmentIndex, finalText, timestamp))
+
+						// Append to transcript file
+						if transcriptPath != "" {
+							minutes := int(timestamp) / 60
+							seconds := int(timestamp) % 60
+							timestampedLine := fmt.Sprintf("**%02d:%02d** %s", minutes, seconds, finalText)
+							a.appendTranscriptLine(transcriptPath, timestampedLine)
+							a.logInfo(fmt.Sprintf("[Recording] Appended transcript segment %d to file", *segmentIndex))
+						}
+					}
+				}
+			}
+
+			// Process in chunks (for VAD and segment detection - keep existing logic)
+			for i := 0; i < len(newSamples); i += chunkSize {
+				// Check stop signal periodically during processing
+				select {
+				case <-a.recordingStopCh:
+					a.logInfo("[Recording] Processing goroutine received stop signal during chunk processing")
+					ticker.Stop()
+
+					// Get segment data without holding lock for long
+					var seg *recordingSegment
+					var startIdx int
+					var samplesCopy []float32
+					func() {
+						a.recordingMu.Lock()
+						defer a.recordingMu.Unlock()
+						if a.recordingSegment != nil && len(a.recordingSegment.samples) > 0 {
+							seg = a.recordingSegment
+							startIdx = seg.startSampleIndex
+							samplesCopy = make([]float32, len(seg.samples))
+							copy(samplesCopy, seg.samples)
+							a.recordingSegment = nil
+						}
+					}()
+
+					// Only process if segment is long enough (minimum 0.1 seconds = 1600 samples)
+					if seg != nil && len(samplesCopy) > 0 {
+						minSamples := 1600 // 0.1 seconds at 16kHz
+						if len(samplesCopy) >= minSamples {
+							go func() {
+								a.finalizeRecordingSegment(segmentIndex, startIdx, samplesCopy)
+							}()
+						} else {
+							a.logInfo(fmt.Sprintf("[Recording] Skipping segment (too short: %d samples, minimum: %d)", len(samplesCopy), minSamples))
+						}
+					}
+					a.logInfo("[Recording] Processing goroutine exiting from chunk processing")
+					return
+				default:
+					// Continue processing
+				}
+
+				end := i + chunkSize
+				if end > len(newSamples) {
+					end = len(newSamples)
+				}
+				chunk := newSamples[i:end]
+
+				// Use VAD to detect speech
+				isSpeech, flush := a.recordingVAD.Process(chunk)
+
+				if isSpeech {
+					// Update segment with lock protection
+					func() {
+						a.recordingMu.Lock()
+						defer a.recordingMu.Unlock()
+						if a.recordingSegment == nil {
+							// Start new segment
+							a.recordingSegment = &recordingSegment{
+								samples:          make([]float32, 0),
+								startSampleIndex: processedSamples + i,
+							}
+						}
+						a.recordingSegment.samples = append(a.recordingSegment.samples, chunk...)
+					}()
+
+					// Force flush if segment too long
+					var seg *recordingSegment
+					func() {
+						a.recordingMu.Lock()
+						defer a.recordingMu.Unlock()
+						if a.recordingSegment != nil && len(a.recordingSegment.samples) >= maxSegmentSamples {
+							seg = a.recordingSegment
+							a.recordingSegment = nil
+						}
+					}()
+					// Note: maxSegmentSamples is 15 seconds, so this segment is definitely long enough
+					if seg != nil {
+						startIdx := seg.startSampleIndex
+						samplesCopy := make([]float32, len(seg.samples))
+						copy(samplesCopy, seg.samples)
+						go func() {
+							a.finalizeRecordingSegment(segmentIndex, startIdx, samplesCopy)
+						}()
+						a.recordingVAD.Reset()
+					}
+				}
+
+				if flush {
+					var seg *recordingSegment
+					func() {
+						a.recordingMu.Lock()
+						defer a.recordingMu.Unlock()
+						if a.recordingSegment != nil && len(a.recordingSegment.samples) > 0 {
+							seg = a.recordingSegment
+							a.recordingSegment = nil
+						}
+					}()
+					// Only process if segment is long enough (minimum 0.1 seconds = 1600 samples)
+					if seg != nil {
+						startIdx := seg.startSampleIndex
+						samplesCopy := make([]float32, len(seg.samples))
+						copy(samplesCopy, seg.samples)
+						minSamples := 1600 // 0.1 seconds at 16kHz
+						if len(samplesCopy) >= minSamples {
+							go func() {
+								a.finalizeRecordingSegment(segmentIndex, startIdx, samplesCopy)
+							}()
+						} else {
+							a.logInfo(fmt.Sprintf("[Recording] Skipping VAD flush segment (too short: %d samples, minimum: %d)", len(samplesCopy), minSamples))
+						}
+						a.recordingVAD.Reset()
+					}
+				}
+
+				processedSamples += len(chunk)
+			}
+		}
+	}
+}
+
+// finalizeRecordingSegment processes a completed speech segment with ASR
+// Note: This function should be called with segment data as arguments,
+// as it may be called asynchronously after recordingSegment has been cleared
+func (a *App) finalizeRecordingSegment(segmentIndex *int, startSampleIndex int, samples []float32) {
+	// Add panic recovery to prevent crashes
+	defer func() {
+		if r := recover(); r != nil {
+			a.logError(fmt.Sprintf("[Recording] Panic in finalizeRecordingSegment: %v", r))
+		}
+	}()
+
+	if len(samples) == 0 {
+		return
+	}
+
+	// Skip processing if samples are too short (less than 0.1 seconds = 1600 samples at 16kHz)
+	// ASR models typically require a minimum duration to work properly
+	minSamples := 1600 // 0.1 seconds at 16kHz
+	if len(samples) < minSamples {
+		a.logInfo(fmt.Sprintf("[Recording] Skipping ASR for segment with %d samples (too short, minimum: %d)", len(samples), minSamples))
+		return
+	}
+
+	// Process with ASR (this uses CGO, but runs in separate goroutine)
+	if a.asrService != nil {
+		text, err := a.asrService.ProcessSamples(samples)
+		if err != nil {
+			a.logError(fmt.Sprintf("[Recording] ASR processing failed: %v", err))
+			return
+		}
+
+		if strings.TrimSpace(text) != "" {
+			*segmentIndex++
+			timestamp := float64(startSampleIndex) / float64(audio.RecordingSampleRate)
+			var transcriptPath string
+			func() {
+				a.recordingMu.Lock()
+				defer a.recordingMu.Unlock()
+				transcriptPath = a.recordingTranscriptPath
+			}()
+			a.logInfo(fmt.Sprintf("[Recording] Final transcript segment %d: %s (timestamp: %.2f)", *segmentIndex, text, timestamp))
+
+			// Emit event for UI
+			runtime.EventsEmit(a.ctx, "recording-transcript-final", map[string]interface{}{
+				"text":           text,
+				"segmentIndex":   *segmentIndex,
+				"timestamp":      timestamp,
+				"transcriptPath": transcriptPath,
+			})
+
+			// Append to transcript file immediately (with flush)
+			if transcriptPath != "" {
+				// Format timestamp as MM:SS
+				minutes := int(timestamp) / 60
+				seconds := int(timestamp) % 60
+				timestampedLine := fmt.Sprintf("**%02d:%02d** %s", minutes, seconds, text)
+				a.appendTranscriptLine(transcriptPath, timestampedLine)
+				a.logInfo(fmt.Sprintf("[Recording] Appended transcript segment %d to file", *segmentIndex))
+			} else {
+				a.logError("[Recording] Transcript path not set, cannot append transcript line")
+			}
+		}
+	}
+}
+
+// StopRecording stops recording and saves the audio file and transcript
+func (a *App) StopRecording() (string, error) {
+	a.logInfo("[Recording] StopRecording called")
+
+	// Check if recording first (without holding lock)
+	a.recordingMu.Lock()
+	isRecording := a.isRecording
+	a.recordingMu.Unlock()
+
+	if !isRecording {
+		a.logError("[Recording] StopRecording called but not recording")
+		return "", fmt.Errorf("not recording")
+	}
+
+	// Stop recorder first (before stopping processing goroutine)
+	a.logInfo("[Recording] Stopping audio recorder...")
+	var recorder *audio.Recorder
+	func() {
+		a.recordingMu.Lock()
+		defer a.recordingMu.Unlock()
+		recorder = a.recorder
+	}()
+
+	if recorder != nil {
+		if err := recorder.Stop(); err != nil {
+			a.logError(fmt.Sprintf("[Recording] Failed to stop recorder: %v", err))
+		} else {
+			a.logInfo("[Recording] Audio recorder stopped successfully")
+		}
+	}
+
+	// Flush RealtimeService before stopping processing
+	if a.realtimeService != nil {
+		a.logInfo("[Recording] Flushing RealtimeService...")
+		finalText := a.realtimeService.Flush()
+		if finalText != "" {
+			// Get current timestamp
+			var currentSamples int
+			func() {
+				a.recordingMu.Lock()
+				defer a.recordingMu.Unlock()
+				currentSamples = len(a.recordingSamples)
+			}()
+			timestamp := float64(currentSamples) / float64(audio.RecordingSampleRate)
+			var segmentIndex int
+			func() {
+				a.recordingMu.Lock()
+				defer a.recordingMu.Unlock()
+				// Get last segment index (we'll increment it)
+				segmentIndex = 0 // We'll need to track this differently
+			}()
+			var transcriptPath string
+			func() {
+				a.recordingMu.Lock()
+				defer a.recordingMu.Unlock()
+				transcriptPath = a.recordingTranscriptPath
+			}()
+			runtime.EventsEmit(a.ctx, "recording-transcript-final", map[string]interface{}{
+				"text":           finalText,
+				"segmentIndex":   segmentIndex,
+				"timestamp":      timestamp,
+				"transcriptPath": transcriptPath,
+			})
+			a.logInfo(fmt.Sprintf("[Recording] Flushed final transcript: %s", finalText))
+
+			// Append to transcript file
+			if transcriptPath != "" {
+				minutes := int(timestamp) / 60
+				seconds := int(timestamp) % 60
+				timestampedLine := fmt.Sprintf("**%02d:%02d** %s", minutes, seconds, finalText)
+				a.appendTranscriptLine(transcriptPath, timestampedLine)
+			}
+		}
+	}
+
+	// Stop processing goroutine
+	a.logInfo("[Recording] Stopping processing goroutine...")
+	if a.recordingStopCh != nil {
+		a.logInfo("[Recording] Closing recordingStopCh...")
+		close(a.recordingStopCh)
+		a.logInfo("[Recording] recordingStopCh closed, waiting for goroutine...")
+
+		// Wait with timeout to avoid hanging
+		done := make(chan struct{})
+		go func() {
+			a.logInfo("[Recording] Wait goroutine: calling recordingWg.Wait()...")
+			a.recordingWg.Wait()
+			a.logInfo("[Recording] Wait goroutine: recordingWg.Wait() completed")
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			a.logInfo("[Recording] Processing goroutine stopped successfully")
+		case <-time.After(5 * time.Second):
+			a.logError("[Recording] Timeout waiting for processing goroutine to stop (5 seconds)")
+			a.logError("[Recording] This may indicate the goroutine is blocked or waiting on a lock")
+		}
+		a.recordingStopCh = nil
+		a.logInfo("[Recording] recordingStopCh set to nil")
+	} else {
+		a.logInfo("[Recording] Processing goroutine already stopped (recordingStopCh is nil)")
+	}
+
+	// Get recorded samples from our buffer (not from recorder, which may be empty)
+	a.logInfo("[Recording] Getting recorded samples...")
+	var samples []float32
+	func() {
+		a.recordingMu.Lock()
+		defer a.recordingMu.Unlock()
+		samples = make([]float32, len(a.recordingSamples))
+		copy(samples, a.recordingSamples)
+		a.logInfo(fmt.Sprintf("[Recording] Copied %d samples from buffer", len(samples)))
+	}()
+	a.logInfo(fmt.Sprintf("[Recording] Recorded %d samples (%.2f seconds)", len(samples), float64(len(samples))/float64(audio.RecordingSampleRate)))
+	if len(samples) == 0 {
+		a.logError("[Recording] No audio samples recorded")
+		a.cleanupRecording()
+		return "", fmt.Errorf("no audio recorded")
+	}
+
+	// Generate filename with timestamp
+	timestamp := time.Now().Format("20060102-150405")
+	filename := fmt.Sprintf("%s_recording.m4a", timestamp)
+	a.logInfo(fmt.Sprintf("[Recording] Generated filename: %s", filename))
+
+	// Save audio file
+	audioDir := filepath.Join(a.dataDir, "data", "audio")
+	a.logInfo(fmt.Sprintf("[Recording] Creating audio directory: %s", audioDir))
+	if err := os.MkdirAll(audioDir, 0755); err != nil {
+		a.logError(fmt.Sprintf("[Recording] Failed to create audio directory: %v", err))
+		a.cleanupRecording()
+		return "", fmt.Errorf("failed to create audio directory: %w", err)
+	}
+
+	audioPath := filepath.Join(audioDir, filename)
+	a.logInfo(fmt.Sprintf("[Recording] Encoding audio to M4A: %s", audioPath))
+	if err := audio.EncodePCMToM4A(context.Background(), samples, audio.RecordingSampleRate, audioPath); err != nil {
+		a.logError(fmt.Sprintf("[Recording] Failed to encode audio: %v", err))
+		a.cleanupRecording()
+		return "", fmt.Errorf("failed to encode audio: %w", err)
+	}
+	a.logInfo(fmt.Sprintf("[Recording] Audio file saved: %s", audioPath))
+
+	// Get relative path
+	relAudioPath, err := filepath.Rel(a.dataDir, audioPath)
+	if err != nil {
+		relAudioPath = audioPath
+	}
+	relAudioPath = filepath.ToSlash(relAudioPath)
+
+	// Get transcript path (file was created at start)
+	var transcriptPath string
+	func() {
+		a.recordingMu.Lock()
+		defer a.recordingMu.Unlock()
+		transcriptPath = a.recordingTranscriptPath
+	}()
+
+	if transcriptPath == "" {
+		a.logError("[Recording] Transcript path not set, creating new transcript file...")
+		// Fallback: create transcript file if path was not set
+		transcriptText := "_（リアルタイム文字起こしが使用されました。録音中の文字起こし結果は個別のイベントで送信されました。）_\n"
+		var err error
+		transcriptPath, err = a.writeTranscriptDocument(relAudioPath, transcriptText)
+		if err != nil {
+			a.logError(fmt.Sprintf("[Recording] Failed to write transcript: %v", err))
+		} else {
+			a.logInfo(fmt.Sprintf("[Recording] Transcript document created: %s", transcriptPath))
+		}
+	} else {
+		a.logInfo(fmt.Sprintf("[Recording] Using existing transcript file: %s", transcriptPath))
+		// Update audio_path in frontmatter with actual audio file path
+		if err := a.updateTranscriptAudioPath(transcriptPath, relAudioPath); err != nil {
+			a.logError(fmt.Sprintf("[Recording] Failed to update audio_path in transcript: %v", err))
+			// Continue even if update fails
+		} else {
+			a.logInfo(fmt.Sprintf("[Recording] Updated audio_path in transcript: %s", relAudioPath))
+		}
+	}
+
+	// Cleanup
+	a.logInfo("[Recording] Cleaning up recording resources...")
+	a.cleanupRecording()
+
+	// Emit event
+	runtime.EventsEmit(a.ctx, "recording-stopped", map[string]interface{}{
+		"audioPath":      relAudioPath,
+		"transcriptPath": transcriptPath,
+	})
+
+	a.logInfo(fmt.Sprintf("[Recording] Recording stopped successfully: audio=%s, transcript=%s", relAudioPath, transcriptPath))
+
+	return relAudioPath, nil
+}
+
+// IsRecording returns whether recording is currently in progress
+func (a *App) IsRecording() bool {
+	a.recordingMu.Lock()
+	defer a.recordingMu.Unlock()
+	return a.isRecording
+}
+
+// cleanupRecording cleans up recording resources
+func (a *App) cleanupRecording() {
+	a.logInfo("[Recording] cleanupRecording called")
+
+	var recorder *audio.Recorder
+	func() {
+		a.recordingMu.Lock()
+		defer a.recordingMu.Unlock()
+		recorder = a.recorder
+		a.recorder = nil
+		a.recordingSamples = nil
+		a.recordingVAD = nil
+		a.recordingSegment = nil
+		a.recordingTranscriptPath = ""
+		a.isRecording = false
+	}()
+
+	if recorder != nil {
+		a.logInfo("[Recording] Closing audio recorder...")
+		recorder.Close()
+		a.logInfo("[Recording] Audio recorder closed")
+	}
+
+	// Close RealtimeService if it exists
+	func() {
+		a.recordingMu.Lock()
+		defer a.recordingMu.Unlock()
+		if a.realtimeService != nil {
+			a.logInfo("[Recording] Closing RealtimeService...")
+			a.realtimeService.Close()
+			a.realtimeService = nil
+			a.logInfo("[Recording] RealtimeService closed")
+		}
+	}()
+
+	a.logInfo("[Recording] Cleanup completed")
 }
