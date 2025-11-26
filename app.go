@@ -812,6 +812,24 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 		return "", fmt.Errorf("failed to render markdown: %v", err)
 	}
 
+	// Debug: log a sample of the generated HTML to check for KaTeX processing
+	if strings.Contains(html, "katex-inline") || strings.Contains(html, "katex-block") {
+		// Extract a sample of KaTeX content
+		inlineMatch := regexp.MustCompile(`<span class="katex-inline">([^<]+)</span>`)
+		blockMatch := regexp.MustCompile(`<div class="katex-block">([^<]+)</div>`)
+		if m := inlineMatch.FindStringSubmatch(html); len(m) > 1 {
+			a.logInfo(fmt.Sprintf("PreviewMarkdown: Found inline math in HTML: %q", m[1]))
+		}
+		if m := blockMatch.FindStringSubmatch(html); len(m) > 1 {
+			// Limit length to avoid huge logs
+			sample := m[1]
+			if len(sample) > 100 {
+				sample = sample[:100] + "..."
+			}
+			a.logInfo(fmt.Sprintf("PreviewMarkdown: Found block math in HTML: %q", sample))
+		}
+	}
+
 	return html, nil
 }
 

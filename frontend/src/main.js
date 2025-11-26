@@ -586,6 +586,84 @@ async function updatePreview() {
                         }
                     };
                     applySlide();
+
+                    // Initialize KaTeX for Marp presentations
+                    const iframeDoc = pv.contentDocument || pv.contentWindow.document;
+                    if (iframeDoc) {
+                        // Helper function to decode HTML entities
+                        const decodeHtmlEntities = (text) => {
+                            const textarea = iframeDoc.createElement('textarea');
+                            textarea.innerHTML = text;
+                            return textarea.value;
+                        };
+
+                        const initKaTeX = () => {
+                            const iframeWindow = pv.contentWindow;
+                            if (typeof iframeWindow.katex === 'undefined') {
+                                setTimeout(initKaTeX, 50);
+                                return;
+                            }
+
+                            jsLog('DEBUG', '[Marp] KaTeX is available, starting rendering');
+
+                            // Render inline math
+                            const inlineElements = iframeDoc.querySelectorAll('.katex-inline');
+                            jsLog('DEBUG', `[Marp] Found ${inlineElements.length} inline math elements`);
+                            inlineElements.forEach(function (el) {
+                                try {
+                                    // Skip if already rendered (has .katex child)
+                                    if (el.querySelector('.katex')) {
+                                        jsLog('DEBUG', '[Marp] Skipping already rendered inline math');
+                                        return;
+                                    }
+                                    // Use textContent to get raw text (avoids HTML entity issues)
+                                    // textContent automatically decodes HTML entities, so we don't need decodeHtmlEntities
+                                    const rawContent = el.textContent.trim();
+                                    jsLog('DEBUG', `[Marp] Inline math rawContent: ${JSON.stringify(rawContent)}`);
+                                    // textContent already decodes HTML entities, so use it directly
+                                    const math = rawContent;
+                                    jsLog('DEBUG', `[Marp] Inline math final: ${JSON.stringify(math)}`);
+                                    iframeWindow.katex.render(math, el, {
+                                        throwOnError: false,
+                                        displayMode: false
+                                    });
+                                    jsLog('DEBUG', '[Marp] Inline math rendered successfully');
+                                } catch (e) {
+                                    jsLog('ERROR', '[Marp] KaTeX inline rendering error:', e);
+                                    console.error('KaTeX inline rendering error:', e);
+                                }
+                            });
+
+                            // Render block math
+                            const blockElements = iframeDoc.querySelectorAll('.katex-block');
+                            jsLog('DEBUG', `[Marp] Found ${blockElements.length} block math elements`);
+                            blockElements.forEach(function (el) {
+                                try {
+                                    // Skip if already rendered (has .katex child)
+                                    if (el.querySelector('.katex')) {
+                                        jsLog('DEBUG', '[Marp] Skipping already rendered block math');
+                                        return;
+                                    }
+                                    // Use textContent to get raw text (avoids HTML entity issues)
+                                    // textContent automatically decodes HTML entities, so we don't need decodeHtmlEntities
+                                    const rawContent = el.textContent.trim();
+                                    jsLog('DEBUG', `[Marp] Block math rawContent: ${JSON.stringify(rawContent)}`);
+                                    // textContent already decodes HTML entities, so use it directly
+                                    const math = rawContent;
+                                    jsLog('DEBUG', `[Marp] Block math final: ${JSON.stringify(math)}`);
+                                    iframeWindow.katex.render(math, el, {
+                                        throwOnError: false,
+                                        displayMode: true
+                                    });
+                                    jsLog('DEBUG', '[Marp] Block math rendered successfully');
+                                } catch (e) {
+                                    jsLog('ERROR', '[Marp] KaTeX block rendering error:', e);
+                                    console.error('KaTeX block rendering error:', e);
+                                }
+                            });
+                        };
+                        initKaTeX();
+                    }
                 } catch (err) {
                     console.warn('Failed to restore Marp slide position:', err);
                 } finally {
@@ -709,8 +787,155 @@ function setupTimestampClickHandlers() {
                 newLink.style.color = 'var(--accent, #7c3aed)';
                 newLink.style.textDecoration = 'underline';
             });
+
+            // Helper function to decode HTML entities
+            const decodeHtmlEntities = (text) => {
+                const textarea = iframeDoc.createElement('textarea');
+                textarea.innerHTML = text;
+                return textarea.value;
+            };
+
+            // Load KaTeX dynamically if not already loaded
+            const loadKaTeX = (callback) => {
+                const iframeWindow = pv.contentWindow;
+                const iframeDoc = pv.contentDocument || iframeWindow.document;
+
+                if (!iframeDoc) {
+                    jsLog('ERROR', 'iframeDoc not available');
+                    return;
+                }
+
+                // Check if KaTeX is already loaded
+                if (typeof iframeWindow.katex !== 'undefined') {
+                    jsLog('DEBUG', 'KaTeX already loaded');
+                    callback();
+                    return;
+                }
+
+                // Check if KaTeX CSS is already loaded
+                const katexCSSLoaded = iframeDoc.querySelector('link[href*="katex"]');
+                if (!katexCSSLoaded) {
+                    jsLog('DEBUG', 'Loading KaTeX CSS...');
+                    const cssLink = iframeDoc.createElement('link');
+                    cssLink.rel = 'stylesheet';
+                    cssLink.href = 'https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.css';
+                    iframeDoc.head.appendChild(cssLink);
+                }
+
+                // Check if KaTeX script is already loading
+                if (iframeDoc.querySelector('script[src*="katex"]')) {
+                    jsLog('DEBUG', 'KaTeX script already loading, waiting...');
+                    const checkInterval = setInterval(() => {
+                        if (typeof iframeWindow.katex !== 'undefined') {
+                            clearInterval(checkInterval);
+                            jsLog('DEBUG', 'KaTeX loaded after waiting');
+                            callback();
+                        }
+                    }, 50);
+                    setTimeout(() => clearInterval(checkInterval), 10000); // Timeout after 10 seconds
+                    return;
+                }
+
+                // Load KaTeX script dynamically
+                jsLog('DEBUG', 'Loading KaTeX script dynamically...');
+                const script = iframeDoc.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.js';
+                script.onload = () => {
+                    jsLog('DEBUG', 'KaTeX script loaded successfully');
+                    callback();
+                };
+                script.onerror = () => {
+                    jsLog('ERROR', 'Failed to load KaTeX script from CDN');
+                };
+                iframeDoc.head.appendChild(script);
+            };
+
+            // Initialize KaTeX for math rendering
+            const initKaTeX = () => {
+                jsLog('DEBUG', 'initKaTeX called');
+                const iframeWindow = pv.contentWindow;
+                if (!iframeWindow) {
+                    jsLog('DEBUG', 'iframeWindow is not available yet');
+                    setTimeout(initKaTeX, 50);
+                    return;
+                }
+
+                // Load KaTeX if not already loaded
+                loadKaTeX(() => {
+                    const katex = iframeWindow.katex;
+                    if (!katex) {
+                        jsLog('ERROR', 'KaTeX object not available after loading');
+                        return;
+                    }
+
+                    jsLog('DEBUG', 'KaTeX is available, starting rendering');
+
+                    // Render inline math
+                    const inlineElements = iframeDoc.querySelectorAll('.katex-inline');
+                    jsLog('DEBUG', `Found ${inlineElements.length} inline math elements`);
+                    inlineElements.forEach(function (el) {
+                        try {
+                            // Skip if already rendered (has .katex child)
+                            if (el.querySelector('.katex')) {
+                                jsLog('DEBUG', 'Skipping already rendered inline math');
+                                return;
+                            }
+                            // Use textContent to get raw text (avoids HTML entity issues)
+                            // textContent automatically decodes HTML entities, so we don't need decodeHtmlEntities
+                            const rawContent = el.textContent.trim();
+                            jsLog('DEBUG', `Inline math rawContent: ${JSON.stringify(rawContent)}`);
+                            jsLog('DEBUG', `Inline math rawContent bytes: ${Array.from(rawContent).map(c => c.charCodeAt(0).toString(16)).join(' ')}`);
+                            // textContent already decodes HTML entities, so use it directly
+                            const math = rawContent;
+                            jsLog('DEBUG', `Inline math final: ${JSON.stringify(math)}`);
+                            katex.render(math, el, {
+                                throwOnError: false,
+                                displayMode: false
+                            });
+                            jsLog('DEBUG', 'Inline math rendered successfully');
+                        } catch (e) {
+                            jsLog('ERROR', 'KaTeX inline rendering error:', e);
+                            console.error('KaTeX inline rendering error:', e);
+                        }
+                    });
+
+                    // Render block math
+                    const blockElements = iframeDoc.querySelectorAll('.katex-block');
+                    jsLog('DEBUG', `Found ${blockElements.length} block math elements`);
+                    blockElements.forEach(function (el) {
+                        try {
+                            // Skip if already rendered (has .katex child)
+                            if (el.querySelector('.katex')) {
+                                jsLog('DEBUG', 'Skipping already rendered block math');
+                                return;
+                            }
+                            // Use textContent to get raw text (avoids HTML entity issues)
+                            // textContent automatically decodes HTML entities, so we don't need decodeHtmlEntities
+                            const rawContent = el.textContent.trim();
+                            jsLog('DEBUG', `Block math rawContent: ${JSON.stringify(rawContent)}`);
+                            jsLog('DEBUG', `Block math rawContent bytes: ${Array.from(rawContent.substring(0, 50)).map(c => c.charCodeAt(0).toString(16)).join(' ')}`);
+                            // textContent already decodes HTML entities, so use it directly
+                            const math = rawContent;
+                            jsLog('DEBUG', `Block math final: ${JSON.stringify(math)}`);
+                            katex.render(math, el, {
+                                throwOnError: false,
+                                displayMode: true
+                            });
+                            jsLog('DEBUG', 'Block math rendered successfully');
+                        } catch (e) {
+                            jsLog('ERROR', 'KaTeX block rendering error:', e);
+                            console.error('KaTeX block rendering error:', e);
+                        }
+                    });
+                });
+            };
+
+            // Wait for KaTeX to be loaded
+            jsLog('DEBUG', 'Calling initKaTeX from setupTimestampClickHandlers');
+            initKaTeX();
         } catch (err) {
             // Cross-origin or other error
+            jsLog('ERROR', 'Could not access iframe document:', err);
             console.warn('Could not access iframe document:', err);
         }
     };
