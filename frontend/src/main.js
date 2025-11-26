@@ -1,4 +1,4 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, GetASRStatus, GetAudioFileURL, StartRecording, StopRecording, IsRecording, LogJS } from '../wailsjs/wailsjs/go/main/App';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, StartRecording, StopRecording, IsRecording, LogJS } from '../wailsjs/wailsjs/go/main/App';
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
@@ -93,6 +93,16 @@ const mockFunctions = {
         return `data/audio/mock-${Date.now()}.wav`;
     },
 
+    async ImportImageFile(path) {
+        console.log('Mock ImportImageFile called:', path);
+        return `data/image/mock-${Date.now()}.png`;
+    },
+
+    async ImportImageBase64(name, data) {
+        console.log('Mock ImportImageBase64 called:', name, data.length);
+        return `data/image/mock-${Date.now()}.png`;
+    },
+
     async GetASRStatus() {
         console.log('Mock GetASRStatus called');
         return { initialized: false, initializing: false };
@@ -101,6 +111,11 @@ const mockFunctions = {
     async GetAudioFileURL(audioPath) {
         console.log('Mock GetAudioFileURL called:', audioPath);
         return `/audio/${audioPath}`;
+    },
+
+    async GetImageFileURL(imagePath) {
+        console.log('Mock GetImageFileURL called:', imagePath);
+        return `/image/${imagePath}`;
     },
 
     async StartRecording() {
@@ -139,8 +154,11 @@ const api = isBrowser ? mockFunctions : {
     ResolveConflict,
     ImportAudioFile,
     ImportAudioBase64,
+    ImportImageFile,
+    ImportImageBase64,
     GetASRStatus,
     GetAudioFileURL,
+    GetImageFileURL,
     StartRecording,
     StopRecording,
     IsRecording,
@@ -220,6 +238,7 @@ const cancelCustomCssBtn = document.getElementById('cancelCustomCssBtn');
 const customCssStatus = document.getElementById('customCssStatus');
 
 const supportedAudioExt = ['.wav', '.mp3', '.m4a'];
+const supportedImageExt = ['.jpg', '.jpeg', '.png', '.gif'];
 
 // Conflict modal elements
 const conflictModal = document.getElementById('conflictModal');
@@ -1635,8 +1654,29 @@ function setupDragAndDrop() {
         }
         event.preventDefault();
         hideOverlay();
-        handleAudioDrop(event.dataTransfer?.files || []).catch((error) => {
-            console.error('handleAudioDrop failed', error);
+        const files = Array.from(event.dataTransfer?.files || []);
+        if (files.length === 0) {
+            return;
+        }
+
+        const hasAudio = files.some((file) => isSupportedAudioFile(file.name));
+        const hasImage = files.some((file) => isSupportedImageFile(file.name));
+
+        const tasks = [];
+        if (hasAudio) {
+            tasks.push(handleAudioDrop(files));
+        }
+        if (hasImage) {
+            tasks.push(handleImageDrop(files));
+        }
+
+        if (tasks.length === 0) {
+            setStatusMessage('対応していないファイル形式です', 3000);
+            return;
+        }
+
+        Promise.all(tasks).catch((error) => {
+            console.error('handleDrop failed', error);
         });
     });
 }
@@ -1644,6 +1684,11 @@ function setupDragAndDrop() {
 function isSupportedAudioFile(name = '') {
     const lower = (name || '').toLowerCase();
     return supportedAudioExt.some((ext) => lower.endsWith(ext));
+}
+
+function isSupportedImageFile(name = '') {
+    const lower = (name || '').toLowerCase();
+    return supportedImageExt.some((ext) => lower.endsWith(ext));
 }
 
 async function handleAudioDrop(fileList) {
@@ -1682,6 +1727,44 @@ async function handleAudioDrop(fileList) {
 
     await loadFileList();
     setStatusMessage('音声ファイルを保存しました。文字起こしを開始します…', 3500);
+}
+
+async function handleImageDrop(fileList) {
+    if (!fileList || fileList.length === 0) {
+        return;
+    }
+    if (!api.ImportImageFile) {
+        console.warn('ImportImageFile API is unavailable in this environment');
+        return;
+    }
+
+    const files = Array.from(fileList).filter((file) => isSupportedImageFile(file.name));
+    if (files.length === 0) {
+        setStatusMessage('対応していない画像形式です (jpg/png/gif)', 3000);
+        return;
+    }
+
+    for (const file of files) {
+        try {
+            setStatusMessage(`画像を取り込み中: ${file.name}`);
+            if (file.path) {
+                await api.ImportImageFile(file.path);
+            } else if (api.ImportImageBase64 && file.arrayBuffer) {
+                const buffer = await file.arrayBuffer();
+                const base64 = arrayBufferToBase64(buffer);
+                await api.ImportImageBase64(file.name || `image-${Date.now()}.png`, base64);
+            } else {
+                console.warn('Cannot access data for dropped image:', file.name);
+                setStatusMessage('画像データにアクセスできませんでした', 4000);
+            }
+        } catch (error) {
+            console.error('ImportImageFile failed', error);
+            setStatusMessage(`画像取り込みに失敗: ${error?.message || error}`, 4000);
+        }
+    }
+
+    await loadFileList();
+    setStatusMessage('画像ファイルを保存しました。', 3000);
 }
 
 function arrayBufferToBase64(buffer) {

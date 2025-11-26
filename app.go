@@ -32,6 +32,13 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+var supportedImageExt = map[string]struct{}{
+	".jpg":  {},
+	".jpeg": {},
+	".png":  {},
+	".gif":  {},
+}
+
 // App struct
 type App struct {
 	ctx             context.Context
@@ -256,6 +263,7 @@ func (a *App) initializeDataDirectory() error {
 		filepath.Join("content", "transcripts"),
 		"data",
 		filepath.Join("data", "audio"),
+		filepath.Join("data", "image"),
 		filepath.Join("data", "asr"),
 		"themes",
 		"public",
@@ -947,6 +955,20 @@ func (a *App) initProject(root string) error {
 	return nil
 }
 
+func isSupportedImageExt(name string) bool {
+	ext := strings.ToLower(filepath.Ext(name))
+	_, ok := supportedImageExt[ext]
+	return ok
+}
+
+func sanitizeImageBaseName(name string) string {
+	base := audio.SanitizeFileName(name)
+	if base == "" || base == "audio" {
+		return "image"
+	}
+	return base
+}
+
 // ImportAudioFile copies an audio file into karte_data/data/audio and triggers transcription.
 func (a *App) ImportAudioFile(src string) (string, error) {
 	if src == "" {
@@ -965,6 +987,97 @@ func (a *App) ImportAudioFile(src string) (string, error) {
 	}
 	defer f.Close()
 	return a.importAudioFromReader(info.Name(), f)
+}
+
+// ImportImageFile copies an image file into karte_data/data/image.
+func (a *App) ImportImageFile(src string) (string, error) {
+	if src == "" {
+		return "", fmt.Errorf("source path is required")
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return "", fmt.Errorf("stat image: %w", err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("image path must be a file")
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		return "", fmt.Errorf("open image: %w", err)
+	}
+	defer f.Close()
+	return a.importImageFromReader(info.Name(), f)
+}
+
+// ImportImageBase64 saves image content provided as base64 (used when native paths are not available).
+func (a *App) ImportImageBase64(filename, base64Data string) (string, error) {
+	if filename == "" {
+		return "", fmt.Errorf("filename is required")
+	}
+	if base64Data == "" {
+		return "", fmt.Errorf("image data is empty")
+	}
+	data, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		return "", fmt.Errorf("decode image data: %w", err)
+	}
+	return a.importImageFromReader(filename, bytes.NewReader(data))
+}
+
+func (a *App) importImageFromReader(originalName string, src io.Reader) (string, error) {
+	if originalName == "" {
+		return "", fmt.Errorf("original name is required")
+	}
+	if !isSupportedImageExt(originalName) {
+		return "", fmt.Errorf("unsupported image format: %s", filepath.Ext(originalName))
+	}
+
+	destDir := filepath.Join(a.dataDir, "data", "image")
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return "", fmt.Errorf("prepare image dir: %w", err)
+	}
+
+	base := sanitizeImageBaseName(strings.TrimSuffix(originalName, filepath.Ext(originalName)))
+	ext := strings.ToLower(filepath.Ext(originalName))
+	timestamp := time.Now().Format("20060102-150405")
+	prefix := fmt.Sprintf("%s_%s", timestamp, base)
+	filename := prefix + ext
+	for i := 2; ; i++ {
+		_, err := os.Stat(filepath.Join(destDir, filename))
+		if os.IsNotExist(err) {
+			break
+		}
+		filename = fmt.Sprintf("%s_%02d%s", prefix, i, ext)
+	}
+
+	destPath := filepath.Join(destDir, filename)
+	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return "", fmt.Errorf("create image file: %w", err)
+	}
+	if _, err := io.Copy(out, src); err != nil {
+		out.Close()
+		return "", fmt.Errorf("write image file: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return "", fmt.Errorf("close image file: %w", err)
+	}
+
+	relPath, err := filepath.Rel(a.dataDir, destPath)
+	if err != nil {
+		relPath = destPath
+	}
+	relPath = filepath.ToSlash(relPath)
+
+	payload := map[string]interface{}{
+		"path":          relPath,
+		"original_name": originalName,
+		"saved_name":    filename,
+	}
+	runtime.EventsEmit(a.ctx, "image-imported", payload)
+	a.logInfo(fmt.Sprintf("Image imported: %s -> %s", originalName, relPath))
+
+	return relPath, nil
 }
 
 // ImportAudioBase64 saves audio content provided as base64 (used when native paths are not available).
@@ -2014,71 +2127,120 @@ func (a *App) GetAudioFileURL(audioPath string) (string, error) {
 	return urlPath, nil
 }
 
+// GetImageFileURL returns a URL for the image file that can be used in HTML img elements.
+// The imagePath should be relative to dataDir (e.g., "data/image/xxx.png").
+func (a *App) GetImageFileURL(imagePath string) (string, error) {
+	if imagePath == "" {
+		return "", fmt.Errorf("image path is empty")
+	}
+
+	var absPath string
+	if filepath.IsAbs(imagePath) {
+		absPath = imagePath
+	} else {
+		absPath = filepath.Join(a.dataDir, filepath.FromSlash(imagePath))
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("image file not found: %s", imagePath)
+		}
+		return "", fmt.Errorf("failed to stat image file: %w", err)
+	}
+
+	urlPath := "/image/" + filepath.ToSlash(imagePath)
+	a.logInfo(fmt.Sprintf("Image file URL: %s (size: %d bytes)", urlPath, info.Size()))
+	return urlPath, nil
+}
+
 // createAudioHandler creates an HTTP handler that serves audio files.
 // This handler wraps the default asset handler and adds support for /audio/ paths.
-func (a *App) createAudioHandler() http.Handler {
+func (a *App) createAssetHandler() http.Handler {
 	// Get default asset handler
 	defaultHandler := http.FileServer(http.FS(assets))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Handle /audio/ paths
 		if strings.HasPrefix(r.URL.Path, "/audio/") {
-			// Extract audio path from URL
-			audioPath := strings.TrimPrefix(r.URL.Path, "/audio/")
-
-			// Resolve to absolute path
-			var absPath string
-			if filepath.IsAbs(audioPath) {
-				absPath = audioPath
-			} else {
-				// Assume relative to dataDir
-				absPath = filepath.Join(a.dataDir, filepath.FromSlash(audioPath))
-			}
-
-			// Check if file exists
-			info, err := os.Stat(absPath)
-			if err != nil {
-				http.Error(w, "Audio file not found", http.StatusNotFound)
+			if a.serveMediaFile(w, r, "/audio/", "audio") {
 				return
 			}
-
-			// Determine MIME type from file extension
-			ext := strings.ToLower(filepath.Ext(absPath))
-			var mimeType string
-			switch ext {
-			case ".wav":
-				mimeType = "audio/wav"
-			case ".mp3":
-				mimeType = "audio/mpeg"
-			case ".m4a":
-				mimeType = "audio/mp4"
-			case ".ogg":
-				mimeType = "audio/ogg"
-			default:
-				mimeType = "audio/mpeg" // default fallback
-			}
-
-			// Open file
-			file, err := os.Open(absPath)
-			if err != nil {
-				http.Error(w, "Failed to open audio file", http.StatusInternalServerError)
+		}
+		if strings.HasPrefix(r.URL.Path, "/image/") {
+			if a.serveMediaFile(w, r, "/image/", "image") {
 				return
 			}
-			defer file.Close()
-
-			// Set headers
-			w.Header().Set("Content-Type", mimeType)
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
-			w.Header().Set("Accept-Ranges", "bytes") // Enable range requests for seeking
-
-			// Serve file
-			http.ServeContent(w, r, filepath.Base(absPath), info.ModTime(), file)
-			return
 		}
 
 		// For all other paths, use default asset handler
 		defaultHandler.ServeHTTP(w, r)
 	})
+}
+
+func (a *App) serveMediaFile(w http.ResponseWriter, r *http.Request, prefix, mediaType string) bool {
+	relPath := strings.TrimPrefix(r.URL.Path, prefix)
+
+	var absPath string
+	if filepath.IsAbs(relPath) {
+		absPath = relPath
+	} else {
+		absPath = filepath.Join(a.dataDir, filepath.FromSlash(relPath))
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("%s file not found", strings.Title(mediaType)), http.StatusNotFound)
+		return true
+	}
+
+	file, err := os.Open(absPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to open %s file", mediaType), http.StatusInternalServerError)
+		return true
+	}
+	defer file.Close()
+
+	ext := strings.ToLower(filepath.Ext(absPath))
+	var mimeType string
+
+	if mediaType == "audio" {
+		switch ext {
+		case ".wav":
+			mimeType = "audio/wav"
+		case ".mp3":
+			mimeType = "audio/mpeg"
+		case ".m4a":
+			mimeType = "audio/mp4"
+		case ".ogg":
+			mimeType = "audio/ogg"
+		default:
+			mimeType = "audio/mpeg"
+		}
+	} else {
+		switch ext {
+		case ".jpg", ".jpeg":
+			mimeType = "image/jpeg"
+		case ".png":
+			mimeType = "image/png"
+		case ".gif":
+			mimeType = "image/gif"
+		case ".webp":
+			mimeType = "image/webp"
+		case ".svg":
+			mimeType = "image/svg+xml"
+		default:
+			mimeType = "application/octet-stream"
+		}
+	}
+
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
+	if mediaType == "audio" {
+		w.Header().Set("Accept-Ranges", "bytes")
+	}
+
+	http.ServeContent(w, r, filepath.Base(absPath), info.ModTime(), file)
+	return true
 }
 
 // formatTimestamp formats a timestamp in seconds as [HH:MM:SS.mmm] or [MM:SS.mmm]
