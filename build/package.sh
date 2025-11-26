@@ -76,29 +76,44 @@ else
     fi
 fi
 
-if [ -z "$APP_BUNDLE" ] || [ -z "$TEMPLATE_DIR" ]; then
-    echo "Error: Unable to locate build output (.app) or template directory"
+if [ -z "$APP_BUNDLE" ]; then
+    echo "Error: Unable to locate build output (.app)"
     exit 1
 fi
 
+# Source template directory from repository
+TEMPLATE_SOURCE="$PROJECT_ROOT/templates/karte_data_template"
+
 # Ensure template directory exists
-mkdir -p "$TEMPLATE_DIR/data"
+mkdir -p "$TEMPLATE_DIR"
+
+# Copy template from repository if it exists
+if [ -d "$TEMPLATE_SOURCE" ]; then
+    echo "Copying template from $TEMPLATE_SOURCE to $TEMPLATE_DIR..."
+    rm -rf "$TEMPLATE_DIR"
+    cp -R "$TEMPLATE_SOURCE" "$TEMPLATE_DIR"
+    echo "Template copied successfully"
+else
+    echo "Warning: Template source not found at $TEMPLATE_SOURCE"
+    echo "Creating empty template directory..."
+    mkdir -p "$TEMPLATE_DIR/data"
+fi
 
 ASR_SOURCE="$PROJECT_ROOT/karte_data/data/asr"
 ASR_TARGET="$TEMPLATE_DIR/data/asr"
 
 echo "Packaging ASR models into $TEMPLATE_DIR..."
 
-# Clean previous ASR target and recreate
-rm -rf "$ASR_TARGET"
+# Ensure ASR target directory exists
 mkdir -p "$ASR_TARGET"
 
-# Copy ASR config and models
+# Copy ASR config and models from karte_data if it exists (overwrites template if present)
 if [ -d "$ASR_SOURCE" ]; then
     echo "Copying ASR models from $ASR_SOURCE..."
     cp -R "$ASR_SOURCE"/* "$ASR_TARGET/"
     echo "ASR models packaged successfully"
-else
+elif [ ! -d "$ASR_TARGET" ] || [ ! -f "$ASR_TARGET/config.json" ]; then
+    # Only create minimal config if template doesn't already have one
     echo "Warning: ASR source directory not found at $ASR_SOURCE"
     echo "Creating minimal ASR config..."
     mkdir -p "$ASR_TARGET"
