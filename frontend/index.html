@@ -533,6 +533,11 @@
   .drop-overlay__hint {
     font-size: 13px;
     color: var(--mute);
+    line-height: 1.6;
+  }
+
+  .drop-overlay__hint > div {
+    margin: 2px 0;
   }
 
   .asr-status {
@@ -742,8 +747,11 @@
 
 <div id="dropOverlay" class="drop-overlay" aria-hidden="true">
   <div class="drop-overlay__frame">
-    <div class="drop-overlay__label">音声ファイルをドロップ</div>
-    <div class="drop-overlay__hint">対応: WAV / MP3 / M4A</div>
+    <div class="drop-overlay__label">マルチメディアファイルをアップロード</div>
+    <div class="drop-overlay__hint">
+      <div>音声: WAV / MP3 / M4A</div>
+      <div>画像: JPG / PNG / GIF</div>
+    </div>
   </div>
 </div>
 
