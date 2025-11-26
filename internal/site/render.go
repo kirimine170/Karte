@@ -86,7 +86,10 @@ func RenderMarkdownWithOptions(root, path string, hardwrap bool) (string, *Front
 	if err := md.Convert(expanded, &buf); err != nil {
 		return "", nil, err
 	}
-	htmlOut := wrapWithLayout(root, fm, buf.String())
+	htmlContent := buf.String()
+	// Process KaTeX math expressions
+	htmlContent = processKaTeX(htmlContent)
+	htmlOut := wrapWithLayout(root, fm, htmlContent)
 	return htmlOut, fm, nil
 }
 
@@ -194,4 +197,68 @@ func parseCSVList(s string) []string {
 		p[i] = strings.TrimSpace(p[i])
 	}
 	return p
+}
+
+// processKaTeX processes KaTeX math expressions in HTML
+// Converts $...$ to inline math and $$$...$$$ to block math
+// Excludes code blocks (<pre><code>...</code></pre> and <code>...</code>)
+func processKaTeX(htmlContent string) string {
+	// First, protect code blocks by replacing them with placeholders
+	type codeBlock struct {
+		placeholder string
+		content     string
+	}
+	var codeBlocks []codeBlock
+	codeBlockIndex := 0
+
+	// Protect <pre><code>...</code></pre> blocks
+	preCodeRegex := regexp.MustCompile(`<pre><code[^>]*>[\s\S]*?</code></pre>`)
+	htmlContent = preCodeRegex.ReplaceAllStringFunc(htmlContent, func(match string) string {
+		placeholder := fmt.Sprintf("__CODE_BLOCK_PLACEHOLDER_%d__", codeBlockIndex)
+		codeBlocks = append(codeBlocks, codeBlock{
+			placeholder: placeholder,
+			content:     match,
+		})
+		codeBlockIndex++
+		return placeholder
+	})
+
+	// Protect inline <code>...</code> blocks
+	inlineCodeRegex := regexp.MustCompile(`<code[^>]*>[^<]*</code>`)
+	htmlContent = inlineCodeRegex.ReplaceAllStringFunc(htmlContent, func(match string) string {
+		placeholder := fmt.Sprintf("__INLINE_CODE_PLACEHOLDER_%d__", codeBlockIndex)
+		codeBlocks = append(codeBlocks, codeBlock{
+			placeholder: placeholder,
+			content:     match,
+		})
+		codeBlockIndex++
+		return placeholder
+	})
+
+	// Process block math: $$$...$$$ (can span multiple lines)
+	blockMathRegex := regexp.MustCompile(`\$\$\$([\s\S]*?)\$\$\$`)
+	htmlContent = blockMathRegex.ReplaceAllStringFunc(htmlContent, func(match string) string {
+		mathContent := blockMathRegex.FindStringSubmatch(match)[1]
+		// Decode HTML entities that goldmark may have created (e.g., &amp;, &lt;, &gt;)
+		mathContent = html.UnescapeString(mathContent)
+		// Trim whitespace
+		mathContent = strings.TrimSpace(mathContent)
+		return fmt.Sprintf(`<div class="katex-block">%s</div>`, mathContent)
+	})
+
+	// Process inline math: $...$ (single line, no newlines)
+	inlineMathRegex := regexp.MustCompile(`\$([^$\n]+?)\$`)
+	htmlContent = inlineMathRegex.ReplaceAllStringFunc(htmlContent, func(match string) string {
+		mathContent := inlineMathRegex.FindStringSubmatch(match)[1]
+		// Decode HTML entities that goldmark may have created (e.g., &amp;, &lt;, &gt;)
+		mathContent = html.UnescapeString(mathContent)
+		return fmt.Sprintf(`<span class="katex-inline">%s</span>`, mathContent)
+	})
+
+	// Restore code blocks
+	for _, cb := range codeBlocks {
+		htmlContent = strings.ReplaceAll(htmlContent, cb.placeholder, cb.content)
+	}
+
+	return htmlContent
 }

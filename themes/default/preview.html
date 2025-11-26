@@ -3,6 +3,7 @@
 <title>{{TITLE}}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.css">
 <style>
   /* Theme system variables */
   :root {
@@ -136,6 +137,8 @@
 </style>
 <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
 <script>mermaid.initialize({ startOnLoad: true });</script>
+<script src="https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.js"
+  onload="window.katexLoaded = true; if (window.initKaTeXCallback) window.initKaTeXCallback();"></script>
 
 <body>
   <header class="sitebar">
@@ -206,5 +209,57 @@
       // on change
       sel.addEventListener('change', function (e) { apply(e.target.value); });
     })();
+
+    // Helper function to decode HTML entities
+    function decodeHtmlEntities(text) {
+      const textarea = document.createElement('textarea');
+      textarea.innerHTML = text;
+      return textarea.value;
+    }
+
+    // Initialize KaTeX for math rendering
+    function initKaTeX() {
+      if (typeof katex === 'undefined') {
+        setTimeout(initKaTeX, 50);
+        return;
+      }
+
+      // Render inline math
+      document.querySelectorAll('.katex-inline').forEach(function (el) {
+        try {
+          // Use innerHTML to get the content, then decode HTML entities
+          const rawContent = el.innerHTML.trim();
+          const math = decodeHtmlEntities(rawContent);
+          katex.render(math, el, {
+            throwOnError: false,
+            displayMode: false
+          });
+        } catch (e) {
+          console.error('KaTeX inline rendering error:', e);
+        }
+      });
+
+      // Render block math
+      document.querySelectorAll('.katex-block').forEach(function (el) {
+        try {
+          // Use innerHTML to get the content, then decode HTML entities
+          const rawContent = el.innerHTML.trim();
+          const math = decodeHtmlEntities(rawContent);
+          katex.render(math, el, {
+            throwOnError: false,
+            displayMode: true
+          });
+        } catch (e) {
+          console.error('KaTeX block rendering error:', e);
+        }
+      });
+    }
+
+    // Wait for DOM to be ready
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initKaTeX);
+    } else {
+      initKaTeX();
+    }
   </script>
 </body>

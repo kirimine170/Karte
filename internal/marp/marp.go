@@ -77,6 +77,8 @@ func RenderSlideHTML(slideContent string) string {
 	var codeIsIndented bool
 	var codeLang string
 	var codeBuffer []string
+	var inBlockMath bool
+	var blockMathBuffer []string
 
 	// Remove HTML comments (like <!-- _class: lead -->) but keep them for class parsing
 	filteredLines := []string{}
@@ -113,6 +115,24 @@ func RenderSlideHTML(slideContent string) string {
 		codeIsIndented = false
 		codeLang = ""
 		codeBuffer = nil
+	}
+
+	flushBlockMath := func() {
+		if !inBlockMath {
+			return
+		}
+		// Join all lines in the block math buffer
+		mathContent := strings.Join(blockMathBuffer, "\n")
+		// Remove the opening and closing $$$ markers
+		mathContent = strings.TrimPrefix(mathContent, "$$$")
+		mathContent = strings.TrimSuffix(mathContent, "$$$")
+		mathContent = strings.TrimSpace(mathContent)
+		// Decode HTML entities if any
+		mathContent = html.UnescapeString(mathContent)
+		htmlLines = append(htmlLines, fmt.Sprintf(`<div class="katex-block">%s</div>`, mathContent))
+		// reset
+		inBlockMath = false
+		blockMathBuffer = nil
 	}
 
 	for i, line := range lines {
@@ -206,6 +226,49 @@ func RenderSlideHTML(slideContent string) string {
 		}
 		isOrderedMarker := func(s string) bool {
 			return regexp.MustCompile(`^\d+\.\s+`).MatchString(s)
+		}
+
+		// Block math start/end $$$ ... $$$
+		if strings.Contains(trimmed, "$$$") {
+			if inBlockMath {
+				// Closing block math - add this line and flush
+				blockMathBuffer = append(blockMathBuffer, line)
+				flushBlockMath()
+				continue
+			} else {
+				// Opening block math
+				closeAllLists()
+				if inTable && len(tableRows) > 0 {
+					htmlLines = append(htmlLines, processTableRows(tableRows))
+					tableRows = []string{}
+					inTable = false
+				}
+				// Check if it's a single-line block math ($$$...$$$)
+				if strings.Count(trimmed, "$$$") >= 2 {
+					// Single line block math
+					mathContent := trimmed
+					// Extract content between $$$ markers
+					mathRegex := regexp.MustCompile(`\$\$\$([\s\S]*?)\$\$\$`)
+					matches := mathRegex.FindStringSubmatch(mathContent)
+					if len(matches) > 1 {
+						mathContent = strings.TrimSpace(matches[1])
+						mathContent = html.UnescapeString(mathContent)
+						htmlLines = append(htmlLines, fmt.Sprintf(`<div class="katex-block">%s</div>`, mathContent))
+					}
+					continue
+				} else {
+					// Multi-line block math - start collecting
+					inBlockMath = true
+					blockMathBuffer = []string{line}
+					continue
+				}
+			}
+		}
+
+		// If inside block math, accumulate lines
+		if inBlockMath {
+			blockMathBuffer = append(blockMathBuffer, line)
+			continue
 		}
 
 		// Fenced code block start/end ```lang ... ```
@@ -349,6 +412,10 @@ func RenderSlideHTML(slideContent string) string {
 			if inCodeBlock {
 				flushCodeBlock()
 			}
+			// Close pending block math
+			if inBlockMath {
+				flushBlockMath()
+			}
 			closeAllLists()
 			if inTable && len(tableRows) > 0 {
 				htmlLines = append(htmlLines, processTableRows(tableRows))
@@ -356,7 +423,44 @@ func RenderSlideHTML(slideContent string) string {
 		}
 	}
 
-	return strings.Join(htmlLines, "\n")
+	htmlResult := strings.Join(htmlLines, "\n")
+
+	// Process block math: $$$...$$$ (can span multiple lines)
+	// Exclude code blocks
+	blockMathRegex := regexp.MustCompile(`\$\$\$([\s\S]*?)\$\$\$`)
+	htmlResult = blockMathRegex.ReplaceAllStringFunc(htmlResult, func(match string) string {
+		// Check if this match is inside a <pre><code> block
+		// Find the position of this match in the HTML
+		matchIndex := strings.Index(htmlResult, match)
+		if matchIndex == -1 {
+			return match
+		}
+		// Check if we're inside a code block
+		beforeMatch := htmlResult[:matchIndex]
+		// Count unclosed <pre> and <code> tags
+		preOpen := strings.Count(beforeMatch, "<pre>")
+		preClose := strings.Count(beforeMatch, "</pre>")
+		codeOpen := strings.Count(beforeMatch, "<code>")
+		codeClose := strings.Count(beforeMatch, "</code>")
+		if preOpen > preClose || codeOpen > codeClose {
+			// Inside code block, don't process
+			return match
+		}
+		// Extract math content
+		mathContent := blockMathRegex.FindStringSubmatch(match)[1]
+		// Decode HTML entities if any
+		mathContent = html.UnescapeString(mathContent)
+		// Trim whitespace
+		mathContent = strings.TrimSpace(mathContent)
+		return fmt.Sprintf(`<div class="katex-block">%s</div>`, mathContent)
+	})
+
+	// Remove <p> tags that wrap block math divs
+	// Pattern: <p><div class="katex-block">...</div></p>
+	pWrappedBlockMathRegex := regexp.MustCompile(`<p>\s*<div class="katex-block">([\s\S]*?)</div>\s*</p>`)
+	htmlResult = pWrappedBlockMathRegex.ReplaceAllString(htmlResult, `<div class="katex-block">$1</div>`)
+
+	return htmlResult
 }
 
 // processTableRows processes markdown table rows into HTML table
@@ -475,6 +579,15 @@ func processInlineFormatting(text string) string {
 		return fmt.Sprintf("<CODE_PLACEHOLDER>%s</CODE_PLACEHOLDER>", escapedContent)
 	})
 
+	// Inline math: $...$ (but not inside code blocks)
+	// Process after code to avoid matching $ inside code
+	// Use special markers to protect LaTeX content from HTML escaping
+	text = regexp.MustCompile(`\$([^$\n]+?)\$`).ReplaceAllStringFunc(text, func(match string) string {
+		content := regexp.MustCompile(`\$([^$\n]+?)\$`).FindStringSubmatch(match)[1]
+		// Use markers to protect LaTeX content
+		return fmt.Sprintf("<KATEX_INLINE_PLACEHOLDER>__KATEX_CONTENT_START__%s__KATEX_CONTENT_END__</KATEX_INLINE_PLACEHOLDER>", content)
+	})
+
 	// Escape remaining HTML (this will escape placeholders too, but we'll fix that)
 	text = html.EscapeString(text)
 
@@ -485,6 +598,22 @@ func processInlineFormatting(text string) string {
 	text = strings.ReplaceAll(text, "&lt;/EM_PLACEHOLDER&gt;", "</em>")
 	text = strings.ReplaceAll(text, "&lt;CODE_PLACEHOLDER&gt;", "<code>")
 	text = strings.ReplaceAll(text, "&lt;/CODE_PLACEHOLDER&gt;", "</code>")
+
+	// Replace KaTeX placeholder and decode the content
+	katexInlineRegex := regexp.MustCompile(`&lt;KATEX_INLINE_PLACEHOLDER&gt;(.*?)&lt;/KATEX_INLINE_PLACEHOLDER&gt;`)
+	text = katexInlineRegex.ReplaceAllStringFunc(text, func(match string) string {
+		content := katexInlineRegex.FindStringSubmatch(match)[1]
+		// Decode HTML entities in the content (between markers)
+		content = strings.ReplaceAll(content, "__KATEX_CONTENT_START__", "")
+		content = strings.ReplaceAll(content, "__KATEX_CONTENT_END__", "")
+		// Decode HTML entities
+		content = strings.ReplaceAll(content, "&amp;", "&")
+		content = strings.ReplaceAll(content, "&lt;", "<")
+		content = strings.ReplaceAll(content, "&gt;", ">")
+		content = strings.ReplaceAll(content, "&quot;", "\"")
+		content = strings.ReplaceAll(content, "&#39;", "'")
+		return fmt.Sprintf(`<span class="katex-inline">%s</span>`, content)
+	})
 
 	return text
 }
@@ -645,6 +774,7 @@ func RenderMarpHTML(slides []string, title string, header string, footer string,
 	<title>%s</title>
 	<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap">
 	<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Code+Pro&display=swap">
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.css">
 	<style>
 		* {
 			margin: 0;
@@ -1177,6 +1307,57 @@ func RenderMarpHTML(slides []string, title string, header string, footer string,
 		
 		// Initialize first slide
 		showSlide(0);
+	</script>
+	<script defer src="https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.js"></script>
+	<script>
+		// Helper function to decode HTML entities
+		function decodeHtmlEntities(text) {
+			const textarea = document.createElement('textarea');
+			textarea.innerHTML = text;
+			return textarea.value;
+		}
+		
+		// Initialize KaTeX for math rendering after KaTeX is loaded
+		window.addEventListener('DOMContentLoaded', function() {
+			// Wait for KaTeX to be available
+			function initKaTeX() {
+				if (typeof katex === 'undefined') {
+					setTimeout(initKaTeX, 50);
+					return;
+				}
+				
+				// Render inline math
+				document.querySelectorAll('.katex-inline').forEach(function(el) {
+					try {
+						// Use innerHTML to get the content, then decode HTML entities
+						const rawContent = el.innerHTML.trim();
+						const math = decodeHtmlEntities(rawContent);
+						katex.render(math, el, {
+							throwOnError: false,
+							displayMode: false
+						});
+					} catch (e) {
+						console.error('KaTeX inline rendering error:', e);
+					}
+				});
+				
+				// Render block math
+				document.querySelectorAll('.katex-block').forEach(function(el) {
+					try {
+						// Use innerHTML to get the content, then decode HTML entities
+						const rawContent = el.innerHTML.trim();
+						const math = decodeHtmlEntities(rawContent);
+						katex.render(math, el, {
+							throwOnError: false,
+							displayMode: true
+						});
+					} catch (e) {
+						console.error('KaTeX block rendering error:', e);
+					}
+				});
+			}
+			initKaTeX();
+		});
 	</script>
 </body>
 </html>`, html.EscapeString(title), themeCSS, baseWidth, baseHeight, aspectRatioCSS, aspectRatioWidth, aspectRatioHeight, aspectRatioWidth, aspectRatioHeight, strings.Join(slideHTMLs, "\n"), len(slides))
