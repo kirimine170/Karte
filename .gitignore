@@ -40,3 +40,7 @@ sandbox/
 
 dist/
 build/
+
+# Templates (include in repository)
+!templates/
+!templates/**
