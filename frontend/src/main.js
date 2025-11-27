@@ -1,4 +1,4 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS } from '../wailsjs/wailsjs/go/main/App';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, GetCollaborativeConfig, ComputeDocID, PublishCollaborativeCursor, OutlineMarkdown, StartRecording, StopRecording, IsRecording, LogJS } from '../wailsjs/wailsjs/go/main/App';
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
@@ -153,6 +153,33 @@ const mockFunctions = {
 
     async LogJS(level, msg) {
         console.log(`[Mock LogJS] ${level}: ${msg}`);
+    },
+
+    async GetCollaborativeConfig() {
+        console.log('Mock GetCollaborativeConfig called');
+        return { enabled: false };
+    },
+
+    async ComputeDocID(path) {
+        console.log('Mock ComputeDocID called:', path);
+        return `mock-doc-${path}`;
+    },
+
+    async OutlineMarkdown(content) {
+        console.log('Mock OutlineMarkdown called, length:', content?.length || 0);
+        const totalRunes = Array.from(content || '').length;
+        return [{
+            id: '000',
+            title: 'Document',
+            level: 1,
+            start: 0,
+            end: totalRunes
+        }];
+    },
+
+    async PublishCollaborativeCursor(docPath, sectionId, cursor, active) {
+        console.log('Mock PublishCollaborativeCursor called:', { docPath, sectionId, cursor, active });
+        return true;
     }
 };
 
@@ -183,7 +210,11 @@ const api = isBrowser ? mockFunctions : {
     StopRecording,
     IsRecording,
     SaveImageMetadata,
-    LogJS
+    LogJS,
+    GetCollaborativeConfig,
+    ComputeDocID,
+    PublishCollaborativeCursor,
+    OutlineMarkdown
 };
 
 // Logging helper function that writes to app.log via Go backend
@@ -211,10 +242,18 @@ function jsLog(level, ...args) {
     }
 
     // Send to Go backend to write to app.log
-    if (api.LogJS) {
-        api.LogJS(level, msg).catch(err => {
-            console.error('Failed to log to app.log:', err);
-        });
+    // Check if api exists and LogJS is available
+    try {
+        if (typeof api !== 'undefined' && api && api.LogJS) {
+            api.LogJS(level, msg).catch(err => {
+                console.error('Failed to log to app.log:', err);
+            });
+        } else {
+            // If api is not available yet, just log to console
+            console.warn('[jsLog] api.LogJS not available yet, logging to console only');
+        }
+    } catch (e) {
+        console.error('[jsLog] Error calling api.LogJS:', e);
     }
 }
 
@@ -228,6 +267,7 @@ let statusClearTimer = null;
 let currentMetadataImagePath = null;
 let imageMetadataDirty = false;
 let imageMetadataLoading = false;
+let collabLastSectionId = null;
 
 // DOM elements
 const statusEl = document.getElementById('status');
@@ -262,6 +302,9 @@ const imagePreviewClose = document.getElementById('imagePreviewClose');
 const imageMetadataEditor = document.getElementById('imageMetadataEditor');
 const imageMetadataSaveBtn = document.getElementById('imageMetadataSaveBtn');
 const imageMetadataStatus = document.getElementById('imageMetadataStatus');
+const collabPresenceEl = document.getElementById('collabPresence');
+const collabToggleBtn = document.getElementById('collabToggleBtn');
+const collabToggleLabel = document.getElementById('collabToggleLabel');
 
 if (imageMetadataEditor) {
     imageMetadataEditor.disabled = true;
@@ -324,27 +367,63 @@ const audioPlayer = document.getElementById('audioPlayer');
 let customCssCache = '';
 let currentConflictInfo = null;
 let asrStatusCheckInterval = null;
+let collabConfig = null;
+let collabEnabled = false;
+let currentDocId = null;
+let collabSections = [];
+let collabPresence = new Map();
+let collabCursorTimer = null;
+const COLLAB_CURSOR_INTERVAL = 150;
 
 // Initialize the application
+let initCalled = false;
 async function init() {
+    if (initCalled) {
+        console.error('[INIT] init already called, skipping');
+        return;
+    }
+    initCalled = true;
+    window._initCalled = true;
+
+    // Use console.error to ensure it's visible even if jsLog fails
+    console.error('[INIT] Initializing Karte application...');
+    try {
+        jsLog('INFO', 'Initializing Karte application...');
+    } catch (e) {
+        console.error('[INIT] jsLog failed:', e);
+    }
     console.log('Initializing Karte application...');
     try {
         // Load file list
+        jsLog('DEBUG', 'Loading file list...');
         console.log('Loading file list...');
         await loadFileList();
+        jsLog('DEBUG', 'File list loaded', { filesCount: files.length });
         console.log('File list loaded, files count:', files.length);
 
         // Load first file if available
         if (files && files.length > 0) {
+            jsLog('DEBUG', 'Loading first file', { path: files[0].path, title: files[0].title });
             console.log('Loading first file:', files[0]);
             console.log('First file path:', files[0].path);
             console.log('First file title:', files[0].title);
             await loadFile(files[0].path);
         } else {
+            jsLog('DEBUG', 'No files available to load');
             console.log('No files available to load');
         }
 
+        // Initialize collaborative config first (before setting up event listeners)
+        console.error('[INIT] Initializing collaborative config...');
+        jsLog('INFO', 'Initializing collaborative config...');
+        console.log('Initializing collaborative config...');
+        await initCollaborativeConfig();
+        console.error('[INIT] initCollaborativeConfig completed, collabEnabled:', collabEnabled);
+        jsLog('INFO', 'initCollaborativeConfig completed', { collabEnabled });
+
         // Setup event listeners
+        console.error('[INIT] Setting up event listeners...');
+        jsLog('DEBUG', 'Setting up event listeners...');
         console.log('Setting up event listeners...');
         setupEventListeners();
 
@@ -379,6 +458,7 @@ async function init() {
             EventsOn('audio-transcribed', handleAudioTranscribedEvent);
             EventsOn('audio-transcribe-progress', handleAudioTranscribeProgress);
             EventsOn('image-imported', handleImageImportedEvent);
+            EventsOn('collab-cursor', handleCollaborativeEvent);
 
             // Initialize ASR status check
             updateASRStatus();
@@ -425,9 +505,11 @@ async function init() {
 
         console.log('Initialization completed successfully');
     } catch (error) {
+        jsLog('ERROR', 'Failed to initialize:', error);
         console.error('Failed to initialize:', error);
         statusEl.textContent = 'Initialization failed: ' + error.message;
     }
+    jsLog('INFO', 'Initialization completed');
 }
 
 // Create new file
@@ -562,6 +644,9 @@ async function loadFile(path) {
         console.log('Calling LoadFile with path:', path);
         const content = await api.LoadFile(path);
         console.log('LoadFile returned content, length:', content.length);
+        if (collabEnabled && currentPath && currentPath !== path) {
+            await publishCollaborativeCursor(false);
+        }
         ta.value = content;
         currentPath = path;
 
@@ -583,6 +668,8 @@ async function loadFile(path) {
 
         // Also update audio player directly (in case updatePreview didn't call it)
         await updateAudioPlayer(content);
+        // refreshCollaborativeOutline will publish the cursor position after outline is ready
+        await refreshCollaborativeOutline(path, content);
 
         statusEl.textContent = 'Loaded';
         console.log('File loaded successfully');
@@ -1375,6 +1462,17 @@ function setupEventListeners() {
     setupRecording();
     setupImageGallery();
     setupPreviewImageDrop();
+    setupCollaborativeEditorHooks();
+
+    // Setup collaborative editing toggle button
+    if (collabToggleBtn) {
+        collabToggleBtn.addEventListener('click', async () => {
+            await toggleCollaborativeEditing();
+        });
+    }
+
+    // Update collaborative editing button state
+    updateCollaborativeToggleButton();
 }
 
 // Global variable to store current drag image data
@@ -1470,6 +1568,317 @@ function setupPreviewImageDrop() {
     if (pv.contentDocument || pv.contentWindow?.document) {
         setupDropHandlers();
     }
+}
+
+// Collaborative presence helpers
+async function initCollaborativeConfig() {
+    console.error('[COLLAB] initCollaborativeConfig: called', { isBrowser, hasApi: !!api.GetCollaborativeConfig });
+    jsLog('DEBUG', 'initCollaborativeConfig: called', { isBrowser, hasApi: !!api.GetCollaborativeConfig });
+    if (isBrowser) {
+        console.error('[COLLAB] Running in browser, disabling collaborative editing');
+        jsLog('DEBUG', 'initCollaborativeConfig: running in browser, disabling collaborative editing');
+        collabEnabled = false;
+        renderCollaborativePresence();
+        return;
+    }
+    try {
+        jsLog('DEBUG', 'initCollaborativeConfig: loading config');
+        if (!api.GetCollaborativeConfig) {
+            jsLog('ERROR', 'initCollaborativeConfig: api.GetCollaborativeConfig is not available');
+            collabEnabled = false;
+            renderCollaborativePresence();
+            return;
+        }
+        const cfg = await api.GetCollaborativeConfig();
+        console.error('[COLLAB] Received config:', cfg);
+        jsLog('DEBUG', 'initCollaborativeConfig: received config', cfg);
+        collabConfig = cfg || null;
+        collabEnabled = !!cfg?.enabled;
+        console.error('[COLLAB] collabEnabled set to:', collabEnabled, 'from config.enabled:', cfg?.enabled);
+        jsLog('INFO', 'initCollaborativeConfig: loaded', { enabled: collabEnabled, workspace: cfg?.workspace, userName: cfg?.userName, hasConfig: !!cfg });
+        renderCollaborativePresence();
+        updateCollaborativeToggleButton();
+        if (collabEnabled && currentPath && ta) {
+            jsLog('DEBUG', 'initCollaborativeConfig: refreshing outline for current file', { currentPath });
+            await refreshCollaborativeOutline(currentPath, ta.value || '');
+        } else {
+            jsLog('DEBUG', 'initCollaborativeConfig: skipping outline refresh', { collabEnabled, hasCurrentPath: !!currentPath, hasTa: !!ta });
+        }
+    } catch (error) {
+        jsLog('ERROR', 'Failed to load collaborative config:', error);
+        console.error('Failed to load collaborative config:', error);
+        collabEnabled = false;
+        renderCollaborativePresence();
+    }
+}
+
+// Toggle collaborative editing on/off
+async function toggleCollaborativeEditing() {
+    if (collabEnabled) {
+        // Disable collaborative editing
+        collabEnabled = false;
+        collabPresence.clear();
+        renderCollaborativePresence();
+        if (collabCursorTimer) {
+            clearTimeout(collabCursorTimer);
+            collabCursorTimer = null;
+        }
+        // Clear current cursor position
+        if (currentPath) {
+            try {
+                await api.PublishCollaborativeCursor(currentPath, '', 0, false);
+            } catch (error) {
+                console.error('Failed to clear collaborative cursor:', error);
+            }
+        }
+        jsLog('INFO', 'Collaborative editing disabled by user');
+        statusEl.textContent = '共同編集を無効にしました';
+        setTimeout(() => {
+            statusEl.textContent = '';
+        }, 3000);
+    } else {
+        // Enable collaborative editing
+        await initCollaborativeConfig();
+        if (collabEnabled && currentPath && ta) {
+            await refreshCollaborativeOutline(currentPath, ta.value || '');
+            jsLog('INFO', 'Collaborative editing enabled by user');
+            statusEl.textContent = '共同編集を有効にしました';
+            setTimeout(() => {
+                statusEl.textContent = '';
+            }, 3000);
+        } else {
+            jsLog('WARN', 'Failed to enable collaborative editing', { collabEnabled, hasCurrentPath: !!currentPath, hasTa: !!ta });
+            statusEl.textContent = '共同編集の有効化に失敗しました（設定を確認してください）';
+            setTimeout(() => {
+                statusEl.textContent = '';
+            }, 5000);
+        }
+    }
+    updateCollaborativeToggleButton();
+}
+
+// Update collaborative editing toggle button state
+function updateCollaborativeToggleButton() {
+    if (!collabToggleBtn || !collabToggleLabel) {
+        return;
+    }
+    if (collabEnabled) {
+        collabToggleLabel.textContent = '共同編集: 有効';
+        collabToggleBtn.style.background = 'var(--accent)';
+        collabToggleBtn.style.color = 'white';
+    } else {
+        collabToggleLabel.textContent = '共同編集: 無効';
+        collabToggleBtn.style.background = 'var(--backgroundcolor-unhover)';
+        collabToggleBtn.style.color = 'var(--ink)';
+    }
+}
+
+function setupCollaborativeEditorHooks() {
+    if (!ta) {
+        jsLog('DEBUG', 'setupCollaborativeEditorHooks: textarea not found');
+        return;
+    }
+    jsLog('DEBUG', 'setupCollaborativeEditorHooks: setting up event listeners');
+    ['input', 'click', 'keyup'].forEach((evt) => {
+        ta.addEventListener(evt, () => {
+            if (!collabEnabled) {
+                return;
+            }
+            jsLog('DEBUG', 'setupCollaborativeEditorHooks: event triggered', evt);
+            scheduleCollaborativePublish();
+        });
+    });
+    ta.addEventListener('blur', () => {
+        if (collabEnabled) {
+            jsLog('DEBUG', 'setupCollaborativeEditorHooks: blur event, clearing cursor');
+            publishCollaborativeCursor(false);
+        }
+    });
+    window.addEventListener('beforeunload', () => {
+        if (collabEnabled) {
+            jsLog('DEBUG', 'setupCollaborativeEditorHooks: beforeunload event, clearing cursor');
+            publishCollaborativeCursor(false);
+        }
+    });
+    jsLog('DEBUG', 'setupCollaborativeEditorHooks: event listeners set up');
+}
+
+function scheduleCollaborativePublish() {
+    if (!collabEnabled) {
+        jsLog('DEBUG', 'scheduleCollaborativePublish: collaborative editing is disabled');
+        return;
+    }
+    if (collabCursorTimer) {
+        clearTimeout(collabCursorTimer);
+    }
+    jsLog('DEBUG', 'scheduleCollaborativePublish: scheduling cursor publish in', COLLAB_CURSOR_INTERVAL, 'ms');
+    collabCursorTimer = setTimeout(() => {
+        collabCursorTimer = null;
+        publishCollaborativeCursor(true);
+    }, COLLAB_CURSOR_INTERVAL);
+}
+
+async function publishCollaborativeCursor(active = true) {
+    jsLog('DEBUG', 'publishCollaborativeCursor: called', { active, collabEnabled, hasApi: !!api.PublishCollaborativeCursor, currentPath });
+    if (!collabEnabled || !api.PublishCollaborativeCursor || !currentPath) {
+        jsLog('DEBUG', 'publishCollaborativeCursor: early return', { collabEnabled, hasApi: !!api.PublishCollaborativeCursor, currentPath });
+        return;
+    }
+    try {
+        if (!active) {
+            jsLog('DEBUG', 'publishCollaborativeCursor: clearing cursor');
+            collabLastSectionId = null;
+            await api.PublishCollaborativeCursor(currentPath, '', 0, false);
+            return;
+        }
+        if (!ta) {
+            jsLog('DEBUG', 'publishCollaborativeCursor: textarea not found');
+            return;
+        }
+        const cursor = ta.selectionStart || 0;
+        const cursorRunes = getRuneIndexFromSelection(cursor);
+        const section = findSectionForOffset(cursorRunes);
+        if (!section) {
+            jsLog('DEBUG', 'publishCollaborativeCursor: no section found for cursor', { cursor, cursorRunes });
+            await api.PublishCollaborativeCursor(currentPath, '', 0, false);
+            collabLastSectionId = null;
+            return;
+        }
+        const relative = Math.max(0, cursorRunes - section.start);
+        jsLog('DEBUG', 'publishCollaborativeCursor: publishing', { currentPath, sectionId: section.id, cursor: relative, cursorRunes, sectionStart: section.start });
+        await api.PublishCollaborativeCursor(currentPath, section.id, relative, true);
+    } catch (error) {
+        jsLog('ERROR', 'Failed to publish collaborative cursor:', error);
+        console.error('Failed to publish collaborative cursor:', error);
+    }
+}
+
+async function refreshCollaborativeOutline(path, content) {
+    if (!collabEnabled) {
+        jsLog('DEBUG', 'refreshCollaborativeOutline: collaborative editing disabled');
+        currentDocId = null;
+        collabSections = [];
+        collabPresence.clear();
+        renderCollaborativePresence();
+        return;
+    }
+    try {
+        jsLog('DEBUG', 'refreshCollaborativeOutline: refreshing', { path, contentLength: content?.length || 0 });
+        currentDocId = await api.ComputeDocID(path);
+        jsLog('DEBUG', 'refreshCollaborativeOutline: computed docId', { docId: currentDocId });
+        const outline = await api.OutlineMarkdown(content || '');
+        if (Array.isArray(outline) && outline.length > 0) {
+            collabSections = outline;
+            jsLog('DEBUG', 'refreshCollaborativeOutline: found sections', { count: outline.length, sections: outline.map(s => ({ id: s.id, title: s.title, start: s.start, end: s.end })) });
+        } else {
+            const totalRunes = Array.from(content || '').length;
+            collabSections = [{
+                id: '000',
+                title: 'Document',
+                level: 1,
+                start: 0,
+                end: totalRunes
+            }];
+            jsLog('DEBUG', 'refreshCollaborativeOutline: using default section', { totalRunes });
+        }
+        collabPresence.clear();
+        renderCollaborativePresence();
+
+        // Publish current cursor position after outline is refreshed
+        // This ensures that when a file is opened, the cursor position is immediately shared
+        if (collabEnabled && currentPath === path && ta) {
+            setTimeout(async () => {
+                await publishCollaborativeCursor(true);
+            }, 50);
+        }
+    } catch (error) {
+        jsLog('ERROR', 'Failed to refresh collaborative outline:', error);
+        console.error('Failed to refresh collaborative outline:', error);
+    }
+}
+
+function handleCollaborativeEvent(payload) {
+    if (!collabEnabled || !payload || payload.docId !== currentDocId) {
+        return;
+    }
+    const { sectionId, userName, cursor, active } = payload;
+    if (!sectionId || !userName) {
+        return;
+    }
+    if (!collabPresence.has(sectionId)) {
+        collabPresence.set(sectionId, new Map());
+    }
+    const sectionMap = collabPresence.get(sectionId);
+    if (!active) {
+        sectionMap.delete(userName);
+        if (sectionMap.size === 0) {
+            collabPresence.delete(sectionId);
+        }
+    } else {
+        sectionMap.set(userName, {
+            cursor: cursor ?? 0,
+            updatedAt: payload.updatedAt || Date.now()
+        });
+    }
+    renderCollaborativePresence();
+}
+
+function renderCollaborativePresence() {
+    if (!collabPresenceEl) {
+        return;
+    }
+    if (!collabEnabled) {
+        collabPresenceEl.classList.remove('has-presence');
+        collabPresenceEl.textContent = '共同編集: 無効';
+        return;
+    }
+    const entries = [];
+    collabPresence.forEach((users, sectionId) => {
+        users.forEach((info, userName) => {
+            entries.push({
+                sectionId,
+                userName,
+                cursor: info.cursor
+            });
+        });
+    });
+
+    if (entries.length === 0) {
+        collabPresenceEl.classList.remove('has-presence');
+        collabPresenceEl.textContent = '他の編集者は現在いません';
+        return;
+    }
+
+    collabPresenceEl.classList.add('has-presence');
+    entries.sort((a, b) => a.sectionId.localeCompare(b.sectionId) || a.userName.localeCompare(b.userName));
+    const html = entries.map((entry) => {
+        const section = collabSections.find((s) => s.id === entry.sectionId);
+        const title = section ? section.title : `Section ${entry.sectionId}`;
+        return `<div class="presence-entry"><span class="presence-user">${escapeHtml(entry.userName)}</span><span>${escapeHtml(title)} · cursor ${entry.cursor}</span></div>`;
+    }).join('');
+    collabPresenceEl.innerHTML = html;
+    updateCollaborativeToggleButton();
+}
+
+function findSectionForOffset(runeOffset) {
+    if (!Array.isArray(collabSections) || collabSections.length === 0) {
+        return null;
+    }
+    for (let i = collabSections.length - 1; i >= 0; i -= 1) {
+        const section = collabSections[i];
+        if (runeOffset >= section.start) {
+            return section;
+        }
+    }
+    return collabSections[0];
+}
+
+function getRuneIndexFromSelection(codeUnitIndex) {
+    if (!ta || !ta.value) {
+        return 0;
+    }
+    const slice = ta.value.slice(0, Math.max(0, codeUnitIndex));
+    return Array.from(slice).length;
 }
 
 // Setup image gallery
@@ -3087,8 +3496,37 @@ if (resolveConflictBtn && cancelConflictBtn) {
 }
 
 // Initialize when DOM is loaded
+// Try multiple methods to ensure init is called in Wails environment
+jsLog('INFO', '[MAIN] Script loaded', { readyState: document.readyState });
+console.error('[MAIN] Script loaded, readyState:', document.readyState);
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+    jsLog('DEBUG', '[MAIN] Adding DOMContentLoaded listener');
+    console.error('[MAIN] Adding DOMContentLoaded listener');
+    document.addEventListener('DOMContentLoaded', () => {
+        jsLog('INFO', '[MAIN] DOMContentLoaded fired, calling init');
+        console.error('[MAIN] DOMContentLoaded fired, calling init');
+        init();
+    });
 } else {
-    init();
+    jsLog('DEBUG', '[MAIN] DOM already loaded, calling init immediately');
+    console.error('[MAIN] DOM already loaded, calling init immediately');
+    // Use setTimeout to ensure DOM is fully ready
+    setTimeout(() => {
+        jsLog('DEBUG', '[MAIN] setTimeout callback, calling init');
+        console.error('[MAIN] setTimeout callback, calling init');
+        init();
+    }, 0);
 }
+
+// Also try window.onload as fallback
+window.addEventListener('load', () => {
+    jsLog('DEBUG', '[MAIN] window.onload fired');
+    console.error('[MAIN] window.onload fired');
+    // Only call init if it hasn't been called yet
+    if (!window._initCalled) {
+        jsLog('INFO', '[MAIN] init not called yet, calling from window.onload');
+        console.error('[MAIN] init not called yet, calling from window.onload');
+        window._initCalled = true;
+        init();
+    }
+});

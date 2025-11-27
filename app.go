@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"crypto/tls"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -22,8 +25,10 @@ import (
 	"sync"
 	"time"
 
+	"karte/internal/appconfig"
 	"karte/internal/asr"
 	"karte/internal/audio"
+	"karte/internal/collab"
 	fm "karte/internal/frontmatter"
 	gitvcs "karte/internal/git"
 	"karte/internal/marp"
@@ -32,6 +37,7 @@ import (
 	syncpkg "karte/internal/sync"
 
 	"github.com/chai2010/webp"
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -55,6 +61,8 @@ type App struct {
 	root            string
 	dataDir         string
 	logFilePath     string
+	config          appconfig.Config
+	configPath      string
 	syncManager     *syncpkg.SyncManager
 	vcs             *gitvcs.VCS
 	asrService      *asr.Service
@@ -70,6 +78,9 @@ type App struct {
 	recordingWg             sync.WaitGroup // WaitGroup for recording processing goroutine
 	recordingStopCh         chan struct{}  // Channel to stop recording processing
 	recordingTranscriptPath string         // Path to transcript file (created at start)
+	mqttClient              mqtt.Client
+	mqttMu                  sync.Mutex
+	collabOnlineTopic       string
 	// NOTE: Multi-window support requires Wails v3 (currently in development)
 	// Uncomment when upgrading to Wails v3:
 	// presenter windows keyed by document id (e.g., "content/xxx.md")
@@ -229,6 +240,9 @@ func (a *App) startup(ctx context.Context) {
 		runtime.LogError(ctx, fmt.Sprintf("Failed to initialize data directory: %v", err))
 		return
 	}
+	if err := a.loadAppConfig(); err != nil {
+		runtime.LogError(ctx, fmt.Sprintf("Failed to load config: %v", err))
+	}
 
 	a.asrInitDone = make(chan struct{})
 	go func() {
@@ -241,6 +255,7 @@ func (a *App) startup(ctx context.Context) {
 	}()
 
 	a.logInfo(fmt.Sprintf("Karte started. root=%s dataDir=%s exeDir=%s", a.root, a.dataDir, exeDir))
+	a.initCollaborative()
 
 	// Initialize sync manager (disabled for now - will be implemented with git integration)
 	// a.syncManager = syncpkg.NewSyncManager(ctx, a.root)
@@ -254,6 +269,14 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.asrService != nil {
 		a.asrService.Close()
 		a.asrService = nil
+	}
+	if a.config.Collaborative.Enabled {
+		if err := a.publishCollaborativeOnlineStatus(false); err != nil {
+			a.logError(fmt.Sprintf("Failed to publish offline status: %v", err))
+		}
+	}
+	if a.mqttClient != nil {
+		a.mqttClient.Disconnect(250)
 	}
 	// Cleanup recording if active
 	if a.isRecording {
@@ -420,6 +443,11 @@ func (a *App) shouldOverwriteTemplateFile(relPath string) bool {
 			return false
 		}
 	}
+	if normalized == "config.json" {
+		if _, err := os.Stat(filepath.Join(a.dataDir, relPath)); err == nil {
+			return false
+		}
+	}
 	// Preserve user-configured ASR config.json if it already exists
 	if normalized == "data/asr/config.json" {
 		if _, err := os.Stat(filepath.Join(a.dataDir, relPath)); err == nil {
@@ -464,6 +492,224 @@ func (a *App) initializeGitRepository() error {
 	}
 
 	return nil
+}
+
+func (a *App) GetCollaborativeConfig() appconfig.CollaborativeConfig {
+	return a.config.Collaborative
+}
+
+func (a *App) ComputeDocID(path string) string {
+	return computeDocID(path)
+}
+
+func (a *App) PublishCollaborativeCursor(docPath, sectionID string, cursor int, active bool) error {
+	if !a.config.Collaborative.Enabled {
+		a.logInfo("PublishCollaborativeCursor: collaborative editing is disabled")
+		return nil
+	}
+	a.mqttMu.Lock()
+	client := a.mqttClient
+	a.mqttMu.Unlock()
+	if client == nil || !client.IsConnected() {
+		a.logError("PublishCollaborativeCursor: MQTT client not connected")
+		return fmt.Errorf("collaborative client not connected")
+	}
+	user := strings.TrimSpace(a.config.Collaborative.UserName)
+	if user == "" {
+		a.logError("PublishCollaborativeCursor: userName is empty")
+		return fmt.Errorf("collaborative userName is empty; update config.json")
+	}
+	docID := computeDocID(docPath)
+	topic := fmt.Sprintf("karte/%s/doc/%s/section/%s/editor/%s",
+		a.config.Collaborative.Workspace, docID, sectionID, user)
+
+	var payload []byte
+	var err error
+	if active && sectionID != "" {
+		body := struct {
+			Cursor int `json:"cursor"`
+		}{Cursor: cursor}
+		payload, err = json.Marshal(body)
+		if err != nil {
+			a.logError(fmt.Sprintf("PublishCollaborativeCursor: failed to marshal payload: %v", err))
+			return fmt.Errorf("marshal collaborative payload: %w", err)
+		}
+		a.logInfo(fmt.Sprintf("PublishCollaborativeCursor: publishing cursor docPath=%s docID=%s sectionID=%s cursor=%d active=true topic=%s", docPath, docID, sectionID, cursor, topic))
+	} else {
+		payload = []byte{}
+		a.logInfo(fmt.Sprintf("PublishCollaborativeCursor: clearing cursor docPath=%s docID=%s sectionID=%s active=false topic=%s", docPath, docID, sectionID, topic))
+	}
+
+	token := client.Publish(topic, 1, true, payload)
+	token.Wait()
+	if token.Error() != nil {
+		a.logError(fmt.Sprintf("PublishCollaborativeCursor: publish failed: %v", token.Error()))
+		return token.Error()
+	}
+	a.logInfo(fmt.Sprintf("PublishCollaborativeCursor: published successfully topic=%s", topic))
+	return nil
+}
+
+func (a *App) OutlineMarkdown(content string) []collab.SectionOutline {
+	return collab.Outline(content)
+}
+
+func (a *App) loadAppConfig() error {
+	a.configPath = filepath.Join(a.dataDir, "config.json")
+	cfg, created, err := appconfig.LoadOrCreate(a.configPath)
+	if err != nil {
+		return err
+	}
+	a.config = cfg
+	if created {
+		a.logInfo(fmt.Sprintf("Created default config at %s", a.configPath))
+	}
+	return nil
+}
+
+func (a *App) initCollaborative() {
+	if !a.config.Collaborative.Enabled {
+		return
+	}
+	broker := strings.TrimSpace(a.config.Collaborative.MQTT.Broker)
+	if broker == "" {
+		a.logError("Collaborative editing enabled but mqtt broker is empty")
+		return
+	}
+	opts := mqtt.NewClientOptions().AddBroker(broker)
+	clientID := strings.TrimSpace(a.config.Collaborative.ClientID)
+	if clientID == "" {
+		clientID = fmt.Sprintf("karte-%d", time.Now().UnixNano())
+		a.config.Collaborative.ClientID = clientID
+		if err := appconfig.Save(a.configPath, a.config); err != nil {
+			a.logError(fmt.Sprintf("Failed to persist generated clientId: %v", err))
+		}
+	}
+	opts.SetClientID(clientID)
+	userName := strings.TrimSpace(a.config.Collaborative.UserName)
+	if userName == "" {
+		a.logError("Collaborative editing enabled but userName is empty")
+		return
+	}
+	a.collabOnlineTopic = fmt.Sprintf("online/%s", userName)
+
+	if user := strings.TrimSpace(a.config.Collaborative.MQTT.Username); user != "" {
+		opts.SetUsername(user)
+		opts.SetPassword(a.config.Collaborative.MQTT.Password)
+	}
+	if a.config.Collaborative.MQTT.TLS {
+		opts.SetTLSConfig(&tls.Config{
+			InsecureSkipVerify: a.config.Collaborative.MQTT.SkipVerify,
+		})
+	}
+	keepAlive := time.Duration(a.config.Collaborative.MQTT.KeepAliveSeconds)
+	if keepAlive <= 0 {
+		keepAlive = 30
+	}
+	opts.SetKeepAlive(keepAlive * time.Second)
+	opts.SetAutoReconnect(true)
+	if a.collabOnlineTopic != "" {
+		willPayload := map[string]interface{}{
+			"status":    "offline",
+			"userName":  userName,
+			"timestamp": time.Now().Unix(),
+		}
+		if data, err := json.Marshal(willPayload); err == nil {
+			opts.SetWill(a.collabOnlineTopic, string(data), 1, true)
+		}
+	}
+	opts.SetCleanSession(false)
+	opts.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
+		a.logError(fmt.Sprintf("MQTT connection lost: %v", err))
+	})
+	opts.SetOnConnectHandler(func(c mqtt.Client) {
+		topic := fmt.Sprintf("karte/%s/doc/+/section/+/editor/+", a.config.Collaborative.Workspace)
+		token := c.Subscribe(topic, 1, a.handleCollaborativeMessage)
+		if token.Wait() && token.Error() != nil {
+			a.logError(fmt.Sprintf("Failed to subscribe collaborative topic: %v", token.Error()))
+		} else {
+			a.logInfo(fmt.Sprintf("Collaborative presence subscribed to %s", topic))
+		}
+		if err := a.publishCollaborativeOnlineStatus(true); err != nil {
+			a.logError(fmt.Sprintf("Failed to publish online status: %v", err))
+		}
+	})
+
+	client := mqtt.NewClient(opts)
+	token := client.Connect()
+	if token.Wait() && token.Error() != nil {
+		a.logError(fmt.Sprintf("Failed to connect MQTT broker: %v", token.Error()))
+		return
+	}
+	a.mqttClient = client
+	a.logInfo(fmt.Sprintf("Connected to MQTT broker %s (client=%s)", broker, clientID))
+}
+
+func (a *App) handleCollaborativeMessage(_ mqtt.Client, msg mqtt.Message) {
+	topicParts := strings.Split(msg.Topic(), "/")
+	if len(topicParts) < 8 {
+		return
+	}
+	docID := topicParts[3]
+	sectionID := topicParts[5]
+	userName := topicParts[7]
+	if userName == strings.TrimSpace(a.config.Collaborative.UserName) {
+		return
+	}
+
+	event := map[string]interface{}{
+		"docId":     docID,
+		"sectionId": sectionID,
+		"userName":  userName,
+		"active":    msg.Payload() != nil && len(msg.Payload()) > 0,
+		"updatedAt": time.Now().UnixMilli(),
+	}
+
+	if len(msg.Payload()) > 0 {
+		var payload struct {
+			Cursor int `json:"cursor"`
+		}
+		if err := json.Unmarshal(msg.Payload(), &payload); err != nil {
+			a.logError(fmt.Sprintf("Failed to decode collaborative payload: %v", err))
+			return
+		}
+		event["cursor"] = payload.Cursor
+	} else {
+		event["cursor"] = 0
+	}
+
+	runtime.EventsEmit(a.ctx, "collab-cursor", event)
+}
+
+func (a *App) publishCollaborativeOnlineStatus(online bool) error {
+	if a.collabOnlineTopic == "" {
+		return nil
+	}
+	a.mqttMu.Lock()
+	client := a.mqttClient
+	a.mqttMu.Unlock()
+	if client == nil || !client.IsConnected() {
+		return fmt.Errorf("mqtt client not connected")
+	}
+
+	status := "offline"
+	if online {
+		status = "online"
+	}
+	payload := map[string]interface{}{
+		"status":    status,
+		"userName":  strings.TrimSpace(a.config.Collaborative.UserName),
+		"workspace": a.config.Collaborative.Workspace,
+		"timestamp": time.Now().Unix(),
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal online payload: %w", err)
+	}
+
+	token := client.Publish(a.collabOnlineTopic, 1, true, data)
+	token.Wait()
+	return token.Error()
 }
 
 // GetFileList returns a list of markdown files in the content directory
@@ -2569,6 +2815,19 @@ func calculateRMS(samples []float32) float32 {
 	// For performance, we'll use a simple approximation or just return meanSquare
 	// since we're just using it for visualization
 	return float32(meanSquare)
+}
+
+func computeDocID(path string) string {
+	normalized := normalizeDocPath(path)
+	hasher := sha1.New()
+	_, _ = hasher.Write([]byte(normalized))
+	return hex.EncodeToString(hasher.Sum(nil))
+}
+
+func normalizeDocPath(path string) string {
+	p := strings.TrimSpace(path)
+	p = strings.ReplaceAll(p, "\\", "/")
+	return p
 }
 
 // LinkInfo represents a link found in markdown content

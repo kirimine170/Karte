@@ -127,7 +127,33 @@
 
   .status {
     margin-left: auto;
-    color: var(--mute)
+    color: var(--mute);
+    font-size: 12px;
+    min-height: 18px;
+  }
+
+  .collab-presence {
+    font-size: 12px;
+    color: var(--mute);
+    margin-left: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-width: 320px;
+  }
+
+  .collab-presence.has-presence {
+    color: var(--ink);
+  }
+
+  .collab-presence .presence-entry {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .collab-presence .presence-user {
+    font-weight: 600;
   }
 
   .layout {
@@ -553,7 +579,7 @@
     line-height: 1.6;
   }
 
-  .drop-overlay__hint > div {
+  .drop-overlay__hint>div {
     margin: 2px 0;
   }
 
@@ -903,8 +929,12 @@
       <span class="asr-status-indicator"></span>
       <span class="asr-status-text">ASR: 確認中...</span>
     </div>
+    <button class="btn" id="collabToggleBtn" title="共同編集を開始/停止" style="margin-left:8px;">
+      <span id="collabToggleLabel">共同編集: 無効</span>
+    </button>
   </div>
   <div class="status" id="status"></div>
+  <div class="collab-presence" id="collabPresence" aria-live="polite"></div>
   <div id="transcriptionProgress" class="transcription-progress" style="display:none;">
     <div class="transcription-progress-bar">
       <div class="transcription-progress-fill"></div>

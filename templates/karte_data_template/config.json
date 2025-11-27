@@ -1,0 +1,16 @@
+{
+    "collaborative": {
+        "enabled": false,
+        "workspace": "HackSick",
+        "userName": "your-name",
+        "clientId": "",
+        "mqtt": {
+            "broker": "mqtts://broker.example.com:8883",
+            "username": "",
+            "password": "",
+            "tls": true,
+            "skipVerify": false,
+            "keepAliveSeconds": 30
+        }
+    }
+}

@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/chai2010/webp v1.4.0
+	github.com/eclipse/paho.mqtt.golang v1.4.3
 	github.com/go-git/go-git/v5 v5.13.2
 	github.com/gordonklaus/portaudio v0.0.0-20250206071425-98a94950218b
 	github.com/jung-kurt/gofpdf v1.16.2
