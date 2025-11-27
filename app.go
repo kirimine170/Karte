@@ -131,6 +131,14 @@ type FileItem struct {
 	Title string `json:"title"`
 }
 
+// ImageItem represents an image file in the gallery
+type ImageItem struct {
+	Path    string    `json:"path"`
+	Name    string    `json:"name"`
+	Size    int64     `json:"size"`
+	ModTime time.Time `json:"modTime"`
+}
+
 // GraphNode represents a node in the graph
 type GraphNode struct {
 	ID     string   `json:"id"`
@@ -494,6 +502,56 @@ func (a *App) GetFileList() []FileItem {
 	a.logInfo(fmt.Sprintf("Found %d markdown files", len(files)))
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files
+}
+
+// GetImageList returns a list of image files in the data/image directory
+func (a *App) GetImageList() []ImageItem {
+	var images []ImageItem
+	imageDir := filepath.Join(a.dataDir, "data", "image")
+
+	a.logInfo(fmt.Sprintf("GetImageList: imageDir=%s", imageDir))
+
+	// Check if image directory exists
+	if _, err := os.Stat(imageDir); os.IsNotExist(err) {
+		a.logInfo(fmt.Sprintf("Image directory does not exist: %s", imageDir))
+		return []ImageItem{}
+	}
+
+	err := filepath.Walk(imageDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			a.logError(fmt.Sprintf("Error walking path %s: %v", p, err))
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if isSupportedImageExt(info.Name()) {
+			// Generate path relative to dataDir so that it starts with "data/image/..."
+			rel, _ := filepath.Rel(a.dataDir, p)
+			imageItem := ImageItem{
+				Path:    filepath.ToSlash(rel),
+				Name:    info.Name(),
+				Size:    info.Size(),
+				ModTime: info.ModTime(),
+			}
+			images = append(images, imageItem)
+			a.logInfo(fmt.Sprintf("Found image: %s", imageItem.Path))
+		}
+		return nil
+	})
+
+	if err != nil {
+		a.logError(fmt.Sprintf("Error walking image directory: %v", err))
+		return []ImageItem{}
+	}
+
+	// Sort by modification time (newest first)
+	sort.Slice(images, func(i, j int) bool {
+		return images[i].ModTime.After(images[j].ModTime)
+	})
+
+	a.logInfo(fmt.Sprintf("Found %d image files", len(images)))
+	return images
 }
 
 // CreateNewFile creates a new markdown file in the content directory

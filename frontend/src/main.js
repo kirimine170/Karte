@@ -1,4 +1,4 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, StartRecording, StopRecording, IsRecording, LogJS } from '../wailsjs/wailsjs/go/main/App';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetImageList, StartRecording, StopRecording, IsRecording, LogJS } from '../wailsjs/wailsjs/go/main/App';
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
@@ -118,6 +118,14 @@ const mockFunctions = {
         return `/image/${imagePath}`;
     },
 
+    async GetImageList() {
+        console.log('Mock GetImageList called');
+        return [
+            { path: 'data/image/mock-1.png', name: 'mock-1.png', size: 1024, modTime: new Date().toISOString() },
+            { path: 'data/image/mock-2.jpg', name: 'mock-2.jpg', size: 2048, modTime: new Date().toISOString() }
+        ];
+    },
+
     async StartRecording() {
         console.log('Mock StartRecording called');
         return true;
@@ -159,6 +167,7 @@ const api = isBrowser ? mockFunctions : {
     GetASRStatus,
     GetAudioFileURL,
     GetImageFileURL,
+    GetImageList,
     StartRecording,
     StopRecording,
     IsRecording,
@@ -221,6 +230,20 @@ const tabs = document.querySelectorAll('.tab');
 const tabContents = document.querySelectorAll('.tab-content');
 const dropOverlay = document.getElementById('dropOverlay');
 const recordingBtn = document.getElementById('recordingBtn');
+const sidebarToggle = document.getElementById('sidebarToggle');
+const galleryToggle = document.getElementById('galleryToggle');
+const layout = document.querySelector('.layout');
+const row = document.querySelector('.row');
+
+// Image gallery elements
+const imageGalleryContainer = document.getElementById('imageGalleryContainer');
+const imageGalleryGrid = document.getElementById('imageGalleryGrid');
+const imageGalleryEmpty = document.getElementById('imageGalleryEmpty');
+const imagePreviewModal = document.getElementById('imagePreviewModal');
+const imagePreviewImg = document.getElementById('imagePreviewImg');
+const imagePreviewName = document.getElementById('imagePreviewName');
+const imagePreviewPath = document.getElementById('imagePreviewPath');
+const imagePreviewClose = document.getElementById('imagePreviewClose');
 
 // Modal elements
 const filenameModal = document.getElementById('filenameModal');
@@ -318,6 +341,8 @@ async function init() {
             EventsOn('audio-imported', handleAudioImportedEvent);
             EventsOn('audio-transcribed', handleAudioTranscribedEvent);
             EventsOn('audio-transcribe-progress', handleAudioTranscribeProgress);
+            EventsOn('image-imported', handleImageImportedEvent);
+            EventsOn('image-imported', handleImageImportedEvent);
 
             // Initialize ASR status check
             updateASRStatus();
@@ -1265,6 +1290,197 @@ function setupEventListeners() {
 
     setupDragAndDrop();
     setupRecording();
+    setupImageGallery();
+}
+
+// Setup image gallery
+function setupImageGallery() {
+    // Load initial gallery
+    loadImageGallery();
+
+    // Setup toggle button in top bar
+    if (galleryToggle) {
+        galleryToggle.addEventListener('click', toggleImageGallery);
+    }
+
+    // Setup preview modal close
+    if (imagePreviewClose) {
+        imagePreviewClose.addEventListener('click', closeImagePreview);
+    }
+
+    if (imagePreviewModal) {
+        const overlay = imagePreviewModal.querySelector('.image-preview-overlay');
+        if (overlay) {
+            overlay.addEventListener('click', closeImagePreview);
+        }
+    }
+
+    // Setup sidebar toggle
+    if (sidebarToggle) {
+        sidebarToggle.addEventListener('click', toggleSidebar);
+    }
+
+    // Restore gallery hidden state from localStorage
+    const isGalleryHidden = localStorage.getItem('imageGalleryHidden') === 'true';
+    if (isGalleryHidden && row) {
+        row.classList.add('gallery-hidden');
+        if (imageGalleryContainer) {
+            imageGalleryContainer.classList.add('collapsed');
+        }
+        if (galleryToggle) {
+            galleryToggle.title = '画像ギャラリーを表示';
+        }
+    } else {
+        if (galleryToggle) {
+            galleryToggle.title = '画像ギャラリーを非表示';
+        }
+    }
+
+    // Restore sidebar hidden state from localStorage
+    const isSidebarHidden = localStorage.getItem('sidebarHidden') === 'true';
+    if (isSidebarHidden && layout) {
+        layout.classList.add('sidebar-hidden');
+        if (sidebarToggle) {
+            sidebarToggle.title = 'ファイルリストを表示';
+        }
+    } else {
+        if (sidebarToggle) {
+            sidebarToggle.title = 'ファイルリストを非表示';
+        }
+    }
+}
+
+// Handle image imported event
+// Load image gallery from backend
+async function loadImageGallery() {
+    if (!imageGalleryGrid || !api.GetImageList) {
+        return;
+    }
+
+    try {
+        const images = await api.GetImageList();
+        renderImageGallery(images);
+    } catch (error) {
+        console.error('Failed to load image gallery:', error);
+        jsLog('ERROR', 'Failed to load image gallery:', error);
+    }
+}
+
+// Render image gallery
+function renderImageGallery(images) {
+    if (!imageGalleryGrid || !imageGalleryEmpty) {
+        return;
+    }
+
+    imageGalleryGrid.innerHTML = '';
+
+    if (!images || images.length === 0) {
+        imageGalleryEmpty.style.display = 'block';
+        imageGalleryGrid.style.display = 'none';
+        return;
+    }
+
+    imageGalleryEmpty.style.display = 'none';
+    imageGalleryGrid.style.display = 'grid';
+
+    images.forEach(async (image) => {
+        try {
+            const imageURL = await api.GetImageFileURL(image.path);
+            const thumbnail = document.createElement('img');
+            thumbnail.className = 'image-thumbnail';
+            thumbnail.src = imageURL;
+            thumbnail.alt = image.name;
+            thumbnail.title = image.name;
+            thumbnail.addEventListener('click', () => {
+                showImagePreview(image.path, image.name, imageURL);
+            });
+            imageGalleryGrid.appendChild(thumbnail);
+        } catch (error) {
+            console.error('Failed to load image thumbnail:', image.path, error);
+        }
+    });
+}
+
+// Toggle image gallery visibility
+function toggleImageGallery() {
+    if (!row) {
+        return;
+    }
+
+    const isHidden = row.classList.contains('gallery-hidden');
+    if (isHidden) {
+        // Show gallery
+        row.classList.remove('gallery-hidden');
+        if (imageGalleryContainer) {
+            imageGalleryContainer.classList.remove('collapsed');
+        }
+        if (galleryToggle) {
+            galleryToggle.title = '画像ギャラリーを非表示';
+        }
+    } else {
+        // Hide gallery
+        row.classList.add('gallery-hidden');
+        if (imageGalleryContainer) {
+            imageGalleryContainer.classList.add('collapsed');
+        }
+        if (galleryToggle) {
+            galleryToggle.title = '画像ギャラリーを表示';
+        }
+    }
+
+    // Save state to localStorage
+    localStorage.setItem('imageGalleryHidden', !isHidden);
+}
+
+// Toggle sidebar visibility
+function toggleSidebar() {
+    if (!layout || !sidebarToggle) {
+        return;
+    }
+
+    const isHidden = layout.classList.contains('sidebar-hidden');
+    if (isHidden) {
+        layout.classList.remove('sidebar-hidden');
+        sidebarToggle.title = 'ファイルリストを非表示';
+    } else {
+        layout.classList.add('sidebar-hidden');
+        sidebarToggle.title = 'ファイルリストを表示';
+    }
+
+    // Save state to localStorage
+    localStorage.setItem('sidebarHidden', !isHidden);
+}
+
+// Show image preview modal
+function showImagePreview(imagePath, imageName, imageURL) {
+    if (!imagePreviewModal || !imagePreviewImg || !imagePreviewName || !imagePreviewPath) {
+        return;
+    }
+
+    imagePreviewImg.src = imageURL;
+    imagePreviewName.textContent = imageName;
+    imagePreviewPath.textContent = imagePath;
+    imagePreviewModal.style.display = 'flex';
+    imagePreviewModal.setAttribute('aria-hidden', 'false');
+}
+
+// Close image preview modal
+function closeImagePreview() {
+    if (!imagePreviewModal) {
+        return;
+    }
+
+    imagePreviewModal.style.display = 'none';
+    imagePreviewModal.setAttribute('aria-hidden', 'true');
+    if (imagePreviewImg) {
+        imagePreviewImg.src = '';
+    }
+}
+
+function handleImageImportedEvent(payload) {
+    jsLog('INFO', 'Image imported event:', payload);
+    // Reload gallery when new image is imported
+    loadImageGallery();
 }
 
 // Setup recording functionality
@@ -1765,6 +1981,8 @@ async function handleImageDrop(fileList) {
 
     await loadFileList();
     setStatusMessage('画像ファイルを保存しました。', 3000);
+    // Reload image gallery after import
+    await loadImageGallery();
 }
 
 function arrayBufferToBase64(buffer) {
