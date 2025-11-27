@@ -342,7 +342,6 @@ async function init() {
             EventsOn('audio-transcribed', handleAudioTranscribedEvent);
             EventsOn('audio-transcribe-progress', handleAudioTranscribeProgress);
             EventsOn('image-imported', handleImageImportedEvent);
-            EventsOn('image-imported', handleImageImportedEvent);
 
             // Initialize ASR status check
             updateASRStatus();
@@ -1493,20 +1492,44 @@ function setupImageGallery() {
     }
 }
 
-// Handle image imported event
+let imageGalleryRequestId = 0;
+
 // Load image gallery from backend
 async function loadImageGallery() {
     if (!imageGalleryGrid || !api.GetImageList) {
         return;
     }
 
+    const requestId = ++imageGalleryRequestId;
+
     try {
         const images = await api.GetImageList();
-        await renderImageGallery(images);
+        if (requestId !== imageGalleryRequestId) {
+            // A newer request finished first, so ignore this result
+            return;
+        }
+        const dedupedImages = deduplicateImages(images);
+        await renderImageGallery(dedupedImages);
     } catch (error) {
         console.error('Failed to load image gallery:', error);
         jsLog('ERROR', 'Failed to load image gallery:', error);
     }
+}
+
+function deduplicateImages(images) {
+    if (!Array.isArray(images)) {
+        return [];
+    }
+    const seen = new Map();
+    for (const image of images) {
+        if (!image || !image.path) {
+            continue;
+        }
+        if (!seen.has(image.path)) {
+            seen.set(image.path, image);
+        }
+    }
+    return Array.from(seen.values());
 }
 
 // Render image gallery
