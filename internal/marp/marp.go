@@ -579,6 +579,42 @@ func processInlineFormatting(text string) string {
 		return fmt.Sprintf("<CODE_PLACEHOLDER>%s</CODE_PLACEHOLDER>", escapedContent)
 	})
 
+	// Images: ![alt](path "title") or ![alt](path)
+	// Process before HTML escaping to preserve image tags
+	// Match pattern: ![alt](path) or ![alt](path "title")
+	// Note: path can contain spaces, but title is in quotes
+	imageRegex := regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
+	text = imageRegex.ReplaceAllStringFunc(text, func(match string) string {
+		parts := imageRegex.FindStringSubmatch(match)
+		if len(parts) < 3 {
+			return match
+		}
+		alt := parts[1]
+		pathAndTitle := parts[2] // This may contain path "title"
+
+		// Parse path and title from pathAndTitle
+		// Format: path or path "title"
+		var path, title string
+		titleMatch := regexp.MustCompile(`^(.+?)\s+"([^"]+)"$`).FindStringSubmatch(pathAndTitle)
+		if len(titleMatch) >= 3 {
+			// Has title
+			path = titleMatch[1]
+			title = titleMatch[2]
+		} else {
+			// No title, entire string is path
+			path = pathAndTitle
+			title = ""
+		}
+
+		// Escape alt and title for HTML attributes, but keep path unescaped for URL processing
+		escapedAlt := html.EscapeString(alt)
+		escapedTitle := html.EscapeString(title)
+
+		// Build img tag with unescaped path (will be properly escaped in the final output)
+		// Use special markers to protect the path from HTML escaping
+		return fmt.Sprintf("<IMAGE_PLACEHOLDER>__IMAGE_PATH_START__%s__IMAGE_PATH_END____IMAGE_ALT_START__%s__IMAGE_ALT_END____IMAGE_TITLE_START__%s__IMAGE_TITLE_END__</IMAGE_PLACEHOLDER>", path, escapedAlt, escapedTitle)
+	})
+
 	// Inline math: $...$ (but not inside code blocks)
 	// Process after code to avoid matching $ inside code
 	// Use special markers to protect LaTeX content from HTML escaping
@@ -598,6 +634,73 @@ func processInlineFormatting(text string) string {
 	text = strings.ReplaceAll(text, "&lt;/EM_PLACEHOLDER&gt;", "</em>")
 	text = strings.ReplaceAll(text, "&lt;CODE_PLACEHOLDER&gt;", "<code>")
 	text = strings.ReplaceAll(text, "&lt;/CODE_PLACEHOLDER&gt;", "</code>")
+
+	// Replace image placeholder (image tags should not be escaped)
+	// First, handle escaped placeholders
+	text = strings.ReplaceAll(text, "&lt;IMAGE_PLACEHOLDER&gt;", "<IMAGE_PLACEHOLDER>")
+	text = strings.ReplaceAll(text, "&lt;/IMAGE_PLACEHOLDER&gt;", "</IMAGE_PLACEHOLDER>")
+
+	// Extract and restore image tags
+	imagePlaceholderRegex := regexp.MustCompile(`<IMAGE_PLACEHOLDER>(.*?)</IMAGE_PLACEHOLDER>`)
+	text = imagePlaceholderRegex.ReplaceAllStringFunc(text, func(match string) string {
+		content := imagePlaceholderRegex.FindStringSubmatch(match)[1]
+		// Decode HTML entities in the content
+		content = strings.ReplaceAll(content, "&amp;", "&")
+		content = strings.ReplaceAll(content, "&lt;", "<")
+		content = strings.ReplaceAll(content, "&gt;", ">")
+		content = strings.ReplaceAll(content, "&quot;", "\"")
+		content = strings.ReplaceAll(content, "&#39;", "'")
+
+		// Extract path, alt, and title from markers
+		pathMatch := regexp.MustCompile(`__IMAGE_PATH_START__(.*?)__IMAGE_PATH_END__`).FindStringSubmatch(content)
+		altMatch := regexp.MustCompile(`__IMAGE_ALT_START__(.*?)__IMAGE_ALT_END__`).FindStringSubmatch(content)
+		titleMatch := regexp.MustCompile(`__IMAGE_TITLE_START__(.*?)__IMAGE_TITLE_END__`).FindStringSubmatch(content)
+
+		if len(pathMatch) < 2 || len(altMatch) < 2 {
+			// Log error for debugging
+			fmt.Printf("[Marp] Failed to parse image placeholder: content=%q\n", content)
+			return match // Return original if parsing fails
+		}
+
+		imgPath := pathMatch[1]
+		imgAlt := altMatch[1]
+		imgTitle := ""
+		if len(titleMatch) >= 2 && titleMatch[1] != "" {
+			imgTitle = titleMatch[1]
+		}
+
+		// Decode any HTML entities that might have been encoded in the path
+		// This handles cases where the path was partially escaped
+		imgPath = strings.ReplaceAll(imgPath, "&amp;", "&")
+		imgPath = strings.ReplaceAll(imgPath, "&lt;", "<")
+		imgPath = strings.ReplaceAll(imgPath, "&gt;", ">")
+		imgPath = strings.ReplaceAll(imgPath, "&quot;", "\"")
+		imgPath = strings.ReplaceAll(imgPath, "&#34;", "\"")
+		imgPath = strings.ReplaceAll(imgPath, "&#39;", "'")
+		imgPath = strings.ReplaceAll(imgPath, "&amp;#34;", "\"")
+		imgPath = strings.ReplaceAll(imgPath, "&amp;#39;", "'")
+
+		// Remove any title that might have been included in the path
+		// Pattern: path "title" -> path
+		titleInPathRegex := regexp.MustCompile(`^(.+?)\s+"[^"]*"$`)
+		if titleMatch := titleInPathRegex.FindStringSubmatch(imgPath); len(titleMatch) >= 2 {
+			imgPath = titleMatch[1]
+		}
+
+		// Escape path for HTML attribute (but keep it as a URL path)
+		escapedPath := html.EscapeString(imgPath)
+
+		// Build img tag
+		imgTag := fmt.Sprintf(`<img src="%s" alt="%s"`, escapedPath, imgAlt)
+		if imgTitle != "" {
+			imgTag += fmt.Sprintf(` title="%s"`, imgTitle)
+		}
+		imgTag += `>`
+
+		fmt.Printf("[Marp] Generated img tag: %s (path: %s, title: %s)\n", imgTag, imgPath, imgTitle)
+
+		return imgTag
+	})
 
 	// Replace KaTeX placeholder and decode the content
 	katexInlineRegex := regexp.MustCompile(`&lt;KATEX_INLINE_PLACEHOLDER&gt;(.*?)&lt;/KATEX_INLINE_PLACEHOLDER&gt;`)
@@ -978,6 +1081,27 @@ func RenderMarpHTML(slides []string, title string, header string, footer string,
 			background: rgba(0, 0, 0, 0.05);
 			padding: 0.2em 0.4em;
 			border-radius: 3px;
+		}
+		
+		/* Images */
+		.slide img {
+			max-width: 100%%;
+			max-height: 100%%;
+			width: auto;
+			height: auto;
+			object-fit: contain;
+			display: block;
+			margin: 0.5em auto;
+		}
+		
+		/* Image size classes - based on slide size (100%% = full slide) */
+		.slide img[style*="width:"] {
+			/* Custom width styles are preserved */
+		}
+		
+		/* Default image size is 80%% of slide width for better readability */
+		.slide img:not([style*="width:"]) {
+			max-width: 80%%;
 		}
 		
 		/* Block code */

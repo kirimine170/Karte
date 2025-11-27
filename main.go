@@ -15,8 +15,8 @@ func main() {
 	// Create an instance of the app structure
 	app := NewApp()
 
-	// Create custom HTTP handler for audio files
-	audioHandler := app.createAudioHandler()
+	// Create custom HTTP handler for media files
+	assetHandler := app.createAssetHandler()
 
 	// Create application with options
 	err := wails.Run(&options.App{
@@ -25,7 +25,7 @@ func main() {
 		Height: 900,
 		AssetServer: &assetserver.Options{
 			Assets:  assets,
-			Handler: audioHandler,
+			Handler: assetHandler,
 		},
 		BackgroundColour: &options.RGBA{R: 255, G: 255, B: 255, A: 1},
 		OnStartup:        app.startup,

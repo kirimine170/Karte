@@ -137,10 +137,19 @@
     height: calc(100% - 44px);
   }
 
+  .layout.sidebar-hidden {
+    grid-template-columns: 0 1fr;
+  }
+
+  .layout.sidebar-hidden .side {
+    display: none;
+  }
+
   .side {
     border-right: 1px solid var(--line);
     padding: 12px;
-    background: var(--panel)
+    background: var(--panel);
+    transition: width 0.2s;
   }
 
   .search {
@@ -436,10 +445,18 @@
 
   .row {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr;
     gap: var(--gap);
     flex: 1;
     min-height: 0;
+  }
+
+  .row.gallery-hidden {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .row.gallery-hidden .image-gallery-container {
+    display: none;
   }
 
   .btn {
@@ -533,6 +550,211 @@
   .drop-overlay__hint {
     font-size: 13px;
     color: var(--mute);
+    line-height: 1.6;
+  }
+
+  .drop-overlay__hint > div {
+    margin: 2px 0;
+  }
+
+  .image-gallery-container {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+    height: 100%;
+  }
+
+  .image-gallery-header {
+    display: flex;
+    align-items: center;
+    padding: 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+
+  .image-gallery-title {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--ink);
+  }
+
+  .image-gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    grid-auto-rows: auto;
+    gap: 8px;
+    padding: 12px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+    align-content: start;
+  }
+
+  .image-gallery-container.collapsed .image-gallery-grid {
+    display: none;
+  }
+
+  .image-thumbnail {
+    aspect-ratio: 1;
+    width: 100%;
+    object-fit: cover;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 1px solid var(--line);
+    background: var(--backgroundcolor-unhover);
+    transition: transform 0.2s, box-shadow 0.2s;
+  }
+
+  .image-thumbnail:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 1;
+    position: relative;
+  }
+
+  .image-gallery-empty {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--mute);
+    font-size: 14px;
+  }
+
+  .image-preview-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .image-preview-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.8);
+    cursor: pointer;
+  }
+
+  .image-preview-content {
+    position: relative;
+    max-width: 90vw;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    z-index: 1001;
+  }
+
+  .image-preview-close {
+    position: absolute;
+    top: -40px;
+    right: 0;
+    background: rgba(255, 255, 255, 0.9);
+    border: none;
+    border-radius: 50%;
+    width: 32px;
+    height: 32px;
+    font-size: 24px;
+    line-height: 1;
+    cursor: pointer;
+    color: var(--ink);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+  }
+
+  .image-preview-close:hover {
+    background: rgba(255, 255, 255, 1);
+  }
+
+  .image-preview-img {
+    max-width: 100%;
+    max-height: 80vh;
+    object-fit: contain;
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  }
+
+  .image-preview-info {
+    margin-top: 16px;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.9);
+    border-radius: 8px;
+    text-align: center;
+    color: var(--ink);
+  }
+
+  .image-preview-name {
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 4px;
+  }
+
+  .image-preview-path {
+    font-size: 12px;
+    color: var(--mute);
+  }
+
+  .image-metadata-section {
+    margin-top: 16px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    text-align: left;
+  }
+
+  .image-metadata-header {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .image-metadata-textarea {
+    width: 100%;
+    min-height: 150px;
+    resize: vertical;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 13px;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--backgroundcolor-unhover);
+    color: var(--ink);
+  }
+
+  .image-metadata-textarea:disabled {
+    opacity: 0.65;
+  }
+
+  .image-metadata-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .image-metadata-status {
+    font-size: 12px;
+    color: var(--mute);
+  }
+
+  .image-metadata-status.success {
+    color: #22c55e;
+  }
+
+  .image-metadata-status.error {
+    color: #ef4444;
+  }
+
+  .image-metadata-status.warning {
+    color: #f97316;
   }
 
   .asr-status {
@@ -658,6 +880,8 @@
   <div class="logo">Karte</div>
   <div class="pill">Editor</div>
   <div class="hint">Ctrl/Cmd+S: 保存・再ビルド</div>
+  <button class="btn" id="sidebarToggle" title="ファイルリストを表示/非表示" style="margin-right: 8px;">📁</button>
+  <button class="btn" id="galleryToggle" title="画像ギャラリーを表示/非表示" style="margin-right: 8px;">🖼️</button>
   <div class="toolbar">
     <label class="hint" for="theme">Theme</label>
     <select id="theme">
@@ -727,6 +951,15 @@
           </div>
           <iframe id="preview"></iframe>
         </div>
+        <div class="image-gallery-container" id="imageGalleryContainer">
+          <div class="image-gallery-header">
+            <div class="image-gallery-title">画像ギャラリー</div>
+          </div>
+          <div class="image-gallery-grid" id="imageGalleryGrid"></div>
+          <div class="image-gallery-empty" id="imageGalleryEmpty" style="display: none;">
+            画像がありません
+          </div>
+        </div>
       </div>
     </div>
     <div class="tab-content" id="graph-tab">
@@ -740,10 +973,35 @@
   </main>
 </div>
 
+<!-- Image preview modal -->
+<div id="imagePreviewModal" class="image-preview-modal" style="display: none;" aria-hidden="true">
+  <div class="image-preview-overlay"></div>
+  <div class="image-preview-content">
+    <button class="image-preview-close" id="imagePreviewClose" title="閉じる">×</button>
+    <img id="imagePreviewImg" class="image-preview-img" alt="Preview" />
+    <div class="image-preview-info">
+      <div class="image-preview-name" id="imagePreviewName"></div>
+      <div class="image-preview-path" id="imagePreviewPath"></div>
+    </div>
+    <div class="image-metadata-section">
+      <div class="image-metadata-header">メタデータ (YAML)</div>
+      <textarea id="imageMetadataEditor" class="image-metadata-textarea" spellcheck="false"
+        placeholder="例:&#10;title: サンプル&#10;tags: [sample, demo]"></textarea>
+      <div class="image-metadata-actions">
+        <button class="btn" id="imageMetadataSaveBtn">保存</button>
+        <span class="image-metadata-status" id="imageMetadataStatus"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="dropOverlay" class="drop-overlay" aria-hidden="true">
   <div class="drop-overlay__frame">
-    <div class="drop-overlay__label">音声ファイルをドロップ</div>
-    <div class="drop-overlay__hint">対応: WAV / MP3 / M4A</div>
+    <div class="drop-overlay__label">マルチメディアファイルをアップロード</div>
+    <div class="drop-overlay__hint">
+      <div>音声: WAV / MP3 / M4A</div>
+      <div>画像: JPG / PNG / GIF / WebP</div>
+    </div>
   </div>
 </div>
 

@@ -1,4 +1,4 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, GetASRStatus, GetAudioFileURL, StartRecording, StopRecording, IsRecording, LogJS } from '../wailsjs/wailsjs/go/main/App';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS } from '../wailsjs/wailsjs/go/main/App';
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
@@ -93,6 +93,16 @@ const mockFunctions = {
         return `data/audio/mock-${Date.now()}.wav`;
     },
 
+    async ImportImageFile(path) {
+        console.log('Mock ImportImageFile called:', path);
+        return `data/image/mock-${Date.now()}.png`;
+    },
+
+    async ImportImageBase64(name, data) {
+        console.log('Mock ImportImageBase64 called:', name, data.length);
+        return `data/image/mock-${Date.now()}.png`;
+    },
+
     async GetASRStatus() {
         console.log('Mock GetASRStatus called');
         return { initialized: false, initializing: false };
@@ -101,6 +111,29 @@ const mockFunctions = {
     async GetAudioFileURL(audioPath) {
         console.log('Mock GetAudioFileURL called:', audioPath);
         return `/audio/${audioPath}`;
+    },
+
+    async GetImageFileURL(imagePath) {
+        console.log('Mock GetImageFileURL called:', imagePath);
+        return `/image/${imagePath}`;
+    },
+
+    async GetImageList() {
+        console.log('Mock GetImageList called');
+        return [
+            { path: 'data/image/mock-1.png', name: 'mock-1.png', size: 1024, modTime: new Date().toISOString() },
+            { path: 'data/image/mock-2.jpg', name: 'mock-2.jpg', size: 2048, modTime: new Date().toISOString() }
+        ];
+    },
+
+    async GetImageMetadata(path) {
+        console.log('Mock GetImageMetadata called:', path);
+        return 'title: mock image\nnotes: サンプルメタデータ';
+    },
+
+    async SaveImageMetadata(path, yaml) {
+        console.log('Mock SaveImageMetadata called:', path, yaml);
+        return true;
     },
 
     async StartRecording() {
@@ -139,11 +172,17 @@ const api = isBrowser ? mockFunctions : {
     ResolveConflict,
     ImportAudioFile,
     ImportAudioBase64,
+    ImportImageFile,
+    ImportImageBase64,
     GetASRStatus,
     GetAudioFileURL,
+    GetImageFileURL,
+    GetImageList,
+    GetImageMetadata,
     StartRecording,
     StopRecording,
     IsRecording,
+    SaveImageMetadata,
     LogJS
 };
 
@@ -186,6 +225,9 @@ let files = [];
 let graphModule = null;
 let lastMarpSlideIndex = 0;
 let statusClearTimer = null;
+let currentMetadataImagePath = null;
+let imageMetadataDirty = false;
+let imageMetadataLoading = false;
 
 // DOM elements
 const statusEl = document.getElementById('status');
@@ -203,6 +245,42 @@ const tabs = document.querySelectorAll('.tab');
 const tabContents = document.querySelectorAll('.tab-content');
 const dropOverlay = document.getElementById('dropOverlay');
 const recordingBtn = document.getElementById('recordingBtn');
+const sidebarToggle = document.getElementById('sidebarToggle');
+const galleryToggle = document.getElementById('galleryToggle');
+const layout = document.querySelector('.layout');
+const row = document.querySelector('.row');
+
+// Image gallery elements
+const imageGalleryContainer = document.getElementById('imageGalleryContainer');
+const imageGalleryGrid = document.getElementById('imageGalleryGrid');
+const imageGalleryEmpty = document.getElementById('imageGalleryEmpty');
+const imagePreviewModal = document.getElementById('imagePreviewModal');
+const imagePreviewImg = document.getElementById('imagePreviewImg');
+const imagePreviewName = document.getElementById('imagePreviewName');
+const imagePreviewPath = document.getElementById('imagePreviewPath');
+const imagePreviewClose = document.getElementById('imagePreviewClose');
+const imageMetadataEditor = document.getElementById('imageMetadataEditor');
+const imageMetadataSaveBtn = document.getElementById('imageMetadataSaveBtn');
+const imageMetadataStatus = document.getElementById('imageMetadataStatus');
+
+if (imageMetadataEditor) {
+    imageMetadataEditor.disabled = true;
+    imageMetadataEditor.addEventListener('input', () => {
+        if (imageMetadataLoading) {
+            return;
+        }
+        imageMetadataDirty = true;
+        updateImageMetadataStatus('未保存の変更があります', 'warning');
+    });
+}
+
+if (imageMetadataSaveBtn) {
+    imageMetadataSaveBtn.disabled = true;
+    imageMetadataSaveBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        saveCurrentImageMetadata();
+    });
+}
 
 // Modal elements
 const filenameModal = document.getElementById('filenameModal');
@@ -220,6 +298,7 @@ const cancelCustomCssBtn = document.getElementById('cancelCustomCssBtn');
 const customCssStatus = document.getElementById('customCssStatus');
 
 const supportedAudioExt = ['.wav', '.mp3', '.m4a'];
+const supportedImageExt = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
 
 // Conflict modal elements
 const conflictModal = document.getElementById('conflictModal');
@@ -299,6 +378,7 @@ async function init() {
             EventsOn('audio-imported', handleAudioImportedEvent);
             EventsOn('audio-transcribed', handleAudioTranscribedEvent);
             EventsOn('audio-transcribe-progress', handleAudioTranscribeProgress);
+            EventsOn('image-imported', handleImageImportedEvent);
 
             // Initialize ASR status check
             updateASRStatus();
@@ -575,7 +655,7 @@ async function updatePreview() {
             }
             const targetSlide = Math.max(0, lastMarpSlideIndex || 0);
 
-            pv.onload = () => {
+            const handleMarpLoad = () => {
                 try {
                     const applySlide = (attempt = 0) => {
                         const frame = pv.contentWindow;
@@ -590,13 +670,6 @@ async function updatePreview() {
                     // Initialize KaTeX for Marp presentations
                     const iframeDoc = pv.contentDocument || pv.contentWindow.document;
                     if (iframeDoc) {
-                        // Helper function to decode HTML entities
-                        const decodeHtmlEntities = (text) => {
-                            const textarea = iframeDoc.createElement('textarea');
-                            textarea.innerHTML = text;
-                            return textarea.value;
-                        };
-
                         const initKaTeX = () => {
                             const iframeWindow = pv.contentWindow;
                             if (typeof iframeWindow.katex === 'undefined') {
@@ -611,16 +684,12 @@ async function updatePreview() {
                             jsLog('DEBUG', `[Marp] Found ${inlineElements.length} inline math elements`);
                             inlineElements.forEach(function (el) {
                                 try {
-                                    // Skip if already rendered (has .katex child)
                                     if (el.querySelector('.katex')) {
                                         jsLog('DEBUG', '[Marp] Skipping already rendered inline math');
                                         return;
                                     }
-                                    // Use textContent to get raw text (avoids HTML entity issues)
-                                    // textContent automatically decodes HTML entities, so we don't need decodeHtmlEntities
                                     const rawContent = el.textContent.trim();
                                     jsLog('DEBUG', `[Marp] Inline math rawContent: ${JSON.stringify(rawContent)}`);
-                                    // textContent already decodes HTML entities, so use it directly
                                     const math = rawContent;
                                     jsLog('DEBUG', `[Marp] Inline math final: ${JSON.stringify(math)}`);
                                     iframeWindow.katex.render(math, el, {
@@ -639,16 +708,12 @@ async function updatePreview() {
                             jsLog('DEBUG', `[Marp] Found ${blockElements.length} block math elements`);
                             blockElements.forEach(function (el) {
                                 try {
-                                    // Skip if already rendered (has .katex child)
                                     if (el.querySelector('.katex')) {
                                         jsLog('DEBUG', '[Marp] Skipping already rendered block math');
                                         return;
                                     }
-                                    // Use textContent to get raw text (avoids HTML entity issues)
-                                    // textContent automatically decodes HTML entities, so we don't need decodeHtmlEntities
                                     const rawContent = el.textContent.trim();
                                     jsLog('DEBUG', `[Marp] Block math rawContent: ${JSON.stringify(rawContent)}`);
-                                    // textContent already decodes HTML entities, so use it directly
                                     const math = rawContent;
                                     jsLog('DEBUG', `[Marp] Block math final: ${JSON.stringify(math)}`);
                                     iframeWindow.katex.render(math, el, {
@@ -667,11 +732,22 @@ async function updatePreview() {
                 } catch (err) {
                     console.warn('Failed to restore Marp slide position:', err);
                 } finally {
-                    pv.onload = null;
+                    pv.removeEventListener('load', handleMarpLoad);
                 }
             };
+            pv.addEventListener('load', handleMarpLoad);
+
+            // Reset drop handler flag so it can be set up again after iframe reloads
+            if (pv.contentDocument) {
+                pv.contentDocument._imageDropHandlersSetup = false;
+            }
 
             pv.srcdoc = mdHtml;
+
+            // Setup drop handlers after iframe loads (for Marp)
+            pv.addEventListener('load', () => {
+                setupPreviewImageDrop();
+            }, { once: true });
 
             // Handle audio player even for Marp presentations
             await updateAudioPlayer(content);
@@ -692,7 +768,18 @@ async function updatePreview() {
 
         // Setup timestamp click handlers before setting srcdoc
         setupTimestampClickHandlers();
+
+        // Reset drop handler flag so it can be set up again after iframe reloads
+        if (pv.contentDocument) {
+            pv.contentDocument._imageDropHandlersSetup = false;
+        }
+
         pv.srcdoc = finalHtml;
+
+        // Setup drop handlers after iframe loads
+        pv.addEventListener('load', () => {
+            setupPreviewImageDrop();
+        }, { once: true });
 
         // Handle audio player
         await updateAudioPlayer(content);
@@ -738,19 +825,15 @@ function setupTimestampClickHandlers() {
         return;
     }
 
-    // Store original onload handler if exists
-    const originalOnload = pv.onload;
+    // Remove previous handler if exists
+    if (pv._timestampLoadHandler) {
+        pv.removeEventListener('load', pv._timestampLoadHandler);
+        pv._timestampLoadHandler = null;
+    }
 
-    // Wait for iframe to load
-    pv.onload = () => {
-        // Call original onload if it exists
-        if (originalOnload) {
-            try {
-                originalOnload();
-            } catch (err) {
-                console.warn('Original onload handler error:', err);
-            }
-        }
+    const handleTimestampLoad = () => {
+        pv.removeEventListener('load', handleTimestampLoad);
+        pv._timestampLoadHandler = null;
 
         // Setup timestamp click handlers
         try {
@@ -939,6 +1022,9 @@ function setupTimestampClickHandlers() {
             console.warn('Could not access iframe document:', err);
         }
     };
+
+    pv._timestampLoadHandler = handleTimestampLoad;
+    pv.addEventListener('load', handleTimestampLoad);
 }
 
 // Update audio player based on content
@@ -1231,6 +1317,47 @@ function setupEventListeners() {
         }, 300);
     });
 
+    // Setup editor drop handler for images
+    if (ta) {
+        ta.addEventListener('dragover', (e) => {
+            // Check if dragging an image from gallery by checking dataTransfer types
+            const types = Array.from(e.dataTransfer.types || []);
+            if (types.includes('application/json') || types.includes('text/plain')) {
+                // Check if it's an image drag by looking at the source element
+                const dragSource = document.querySelector('.image-thumbnail[style*="opacity: 0.5"]');
+                if (dragSource) {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'copy';
+                }
+            }
+        });
+
+        ta.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            const data = e.dataTransfer.getData('application/json');
+            if (!data) {
+                // Try text/plain as fallback
+                const path = e.dataTransfer.getData('text/plain');
+                if (path) {
+                    // Try to get name from attribute
+                    const dragSource = document.querySelector('.image-thumbnail[data-image-path="' + path + '"]');
+                    const name = dragSource?.getAttribute('data-image-name') || path.split('/').pop();
+                    insertImageAtCursor(path, name);
+                }
+                return;
+            }
+
+            try {
+                const imageData = JSON.parse(data);
+                if (imageData.path && imageData.name) {
+                    insertImageAtCursor(imageData.path, imageData.name);
+                }
+            } catch (error) {
+                console.error('Failed to parse image data:', error);
+            }
+        });
+    }
+
     // Load saved theme
     const savedTheme = localStorage.getItem('karte-theme') || 'light';
     themeSel.value = savedTheme;
@@ -1246,6 +1373,599 @@ function setupEventListeners() {
 
     setupDragAndDrop();
     setupRecording();
+    setupImageGallery();
+    setupPreviewImageDrop();
+}
+
+// Global variable to store current drag image data
+let currentDragImageData = null;
+
+// Setup preview iframe drop handler for images
+function setupPreviewImageDrop() {
+    if (!pv) {
+        return;
+    }
+
+    // This function will be called whenever the iframe loads
+    const setupDropHandlers = () => {
+        try {
+            const iframeDoc = pv.contentDocument || pv.contentWindow?.document;
+            if (!iframeDoc) {
+                return;
+            }
+
+            // Remove existing listeners to avoid duplicates
+            const newDoc = iframeDoc.cloneNode(true);
+            // Actually, we can't clone the document, so we'll use a flag to prevent duplicates
+            if (iframeDoc._imageDropHandlersSetup) {
+                return;
+            }
+            iframeDoc._imageDropHandlersSetup = true;
+
+            // Setup dragover to allow drop
+            iframeDoc.addEventListener('dragover', (e) => {
+                // Check if dragging an image from gallery by checking types
+                const types = Array.from(e.dataTransfer.types || []);
+                if (types.includes('application/json') || types.includes('text/plain')) {
+                    // Check if it's an image drag by looking at the source element
+                    const dragSource = document.querySelector('.image-thumbnail[style*="opacity: 0.5"]');
+                    if (dragSource) {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = 'copy';
+                    }
+                }
+            });
+
+            // Setup drop handler
+            iframeDoc.addEventListener('drop', async (e) => {
+                e.preventDefault();
+
+                // Get image data from global variable (set during dragstart)
+                let imagePath = null;
+                let imageName = null;
+
+                // Try to get from global variable first
+                if (currentDragImageData) {
+                    imagePath = currentDragImageData.path;
+                    imageName = currentDragImageData.name;
+                } else {
+                    // Fallback: try to get from parent window's drag source
+                    const dragSource = document.querySelector('.image-thumbnail[style*="opacity: 0.5"]');
+                    if (dragSource) {
+                        imagePath = dragSource.getAttribute('data-image-path');
+                        imageName = dragSource.getAttribute('data-image-name');
+                    }
+                }
+
+                if (!imagePath || !imageName) {
+                    console.error('Failed to get image data from drag');
+                    return;
+                }
+
+                // Clear the global variable
+                currentDragImageData = null;
+
+                try {
+                    // Find element at drop position
+                    const element = iframeDoc.elementFromPoint(e.clientX, e.clientY);
+                    if (element) {
+                        await insertImageAfterElement(imagePath, imageName, element);
+                    } else {
+                        // Fallback: append to end
+                        insertImageAtCursor(imagePath, imageName);
+                    }
+                } catch (error) {
+                    console.error('Failed to handle image drop in preview:', error);
+                }
+            });
+        } catch (error) {
+            console.error('Failed to setup preview drop handler:', error);
+        }
+    };
+
+    // Setup on initial load
+    pv.addEventListener('load', setupDropHandlers);
+
+    // Also setup immediately if iframe is already loaded
+    if (pv.contentDocument || pv.contentWindow?.document) {
+        setupDropHandlers();
+    }
+}
+
+// Setup image gallery
+function setupImageGallery() {
+    // Load initial gallery
+    loadImageGallery();
+
+    // Setup toggle button in top bar
+    if (galleryToggle) {
+        galleryToggle.addEventListener('click', toggleImageGallery);
+    }
+
+    // Setup preview modal close
+    if (imagePreviewClose) {
+        imagePreviewClose.addEventListener('click', closeImagePreview);
+    }
+
+    if (imagePreviewModal) {
+        const overlay = imagePreviewModal.querySelector('.image-preview-overlay');
+        if (overlay) {
+            overlay.addEventListener('click', closeImagePreview);
+        }
+    }
+
+    // Setup sidebar toggle
+    if (sidebarToggle) {
+        sidebarToggle.addEventListener('click', toggleSidebar);
+    }
+
+    // Restore gallery hidden state from localStorage
+    const isGalleryHidden = localStorage.getItem('imageGalleryHidden') === 'true';
+    if (isGalleryHidden && row) {
+        row.classList.add('gallery-hidden');
+        if (imageGalleryContainer) {
+            imageGalleryContainer.classList.add('collapsed');
+        }
+        if (galleryToggle) {
+            galleryToggle.title = '画像ギャラリーを表示';
+        }
+    } else {
+        if (galleryToggle) {
+            galleryToggle.title = '画像ギャラリーを非表示';
+        }
+    }
+
+    // Restore sidebar hidden state from localStorage
+    const isSidebarHidden = localStorage.getItem('sidebarHidden') === 'true';
+    if (isSidebarHidden && layout) {
+        layout.classList.add('sidebar-hidden');
+        if (sidebarToggle) {
+            sidebarToggle.title = 'ファイルリストを表示';
+        }
+    } else {
+        if (sidebarToggle) {
+            sidebarToggle.title = 'ファイルリストを非表示';
+        }
+    }
+}
+
+let imageGalleryRequestId = 0;
+
+// Load image gallery from backend
+async function loadImageGallery() {
+    if (!imageGalleryGrid || !api.GetImageList) {
+        return;
+    }
+
+    const requestId = ++imageGalleryRequestId;
+
+    try {
+        const images = await api.GetImageList();
+        if (requestId !== imageGalleryRequestId) {
+            // A newer request finished first, so ignore this result
+            return;
+        }
+        const dedupedImages = deduplicateImages(images);
+        await renderImageGallery(dedupedImages);
+    } catch (error) {
+        console.error('Failed to load image gallery:', error);
+        jsLog('ERROR', 'Failed to load image gallery:', error);
+    }
+}
+
+function deduplicateImages(images) {
+    if (!Array.isArray(images)) {
+        return [];
+    }
+    const seen = new Map();
+    for (const image of images) {
+        if (!image || !image.path) {
+            continue;
+        }
+        if (!seen.has(image.path)) {
+            seen.set(image.path, image);
+        }
+    }
+    return Array.from(seen.values());
+}
+
+// Render image gallery
+async function renderImageGallery(images) {
+    if (!imageGalleryGrid || !imageGalleryEmpty) {
+        return;
+    }
+
+    imageGalleryGrid.innerHTML = '';
+
+    if (!images || images.length === 0) {
+        imageGalleryEmpty.style.display = 'block';
+        imageGalleryGrid.style.display = 'none';
+        return;
+    }
+
+    imageGalleryEmpty.style.display = 'none';
+    imageGalleryGrid.style.display = 'grid';
+
+    // Use for...of loop instead of forEach to properly handle async operations
+    for (const image of images) {
+        try {
+            const imageURL = await api.GetImageFileURL(image.path);
+            const thumbnail = document.createElement('img');
+            thumbnail.className = 'image-thumbnail';
+            thumbnail.src = imageURL;
+            thumbnail.alt = image.name;
+            thumbnail.title = image.name;
+
+            // Store image data in attributes before adding event listeners
+            thumbnail.setAttribute('data-image-path', image.path);
+            thumbnail.setAttribute('data-image-name', image.name);
+
+            thumbnail.addEventListener('click', () => {
+                const path = thumbnail.getAttribute('data-image-path');
+                const name = thumbnail.getAttribute('data-image-name');
+                showImagePreview(path, name, imageURL);
+            });
+
+            // Make thumbnail draggable
+            thumbnail.draggable = true;
+
+            // Handle drag start - read from data attributes to avoid closure issues
+            thumbnail.addEventListener('dragstart', (e) => {
+                const path = thumbnail.getAttribute('data-image-path');
+                const name = thumbnail.getAttribute('data-image-name');
+
+                if (!path || !name) {
+                    console.error('Missing image data attributes');
+                    return;
+                }
+
+                // Store in global variable for iframe drop handler
+                currentDragImageData = { path: path, name: name };
+
+                e.dataTransfer.effectAllowed = 'copy';
+                e.dataTransfer.setData('text/plain', path);
+                e.dataTransfer.setData('application/json', JSON.stringify({
+                    path: path,
+                    name: name
+                }));
+                // Add visual feedback
+                thumbnail.style.opacity = '0.5';
+            });
+
+            thumbnail.addEventListener('dragend', () => {
+                thumbnail.style.opacity = '1';
+                // Clear global variable when drag ends
+                currentDragImageData = null;
+            });
+            imageGalleryGrid.appendChild(thumbnail);
+        } catch (error) {
+            console.error('Failed to load image thumbnail:', image.path, error);
+        }
+    }
+}
+
+// Toggle image gallery visibility
+function toggleImageGallery() {
+    if (!row) {
+        return;
+    }
+
+    const isHidden = row.classList.contains('gallery-hidden');
+    if (isHidden) {
+        // Show gallery
+        row.classList.remove('gallery-hidden');
+        if (imageGalleryContainer) {
+            imageGalleryContainer.classList.remove('collapsed');
+        }
+        if (galleryToggle) {
+            galleryToggle.title = '画像ギャラリーを非表示';
+        }
+    } else {
+        // Hide gallery
+        row.classList.add('gallery-hidden');
+        if (imageGalleryContainer) {
+            imageGalleryContainer.classList.add('collapsed');
+        }
+        if (galleryToggle) {
+            galleryToggle.title = '画像ギャラリーを表示';
+        }
+    }
+
+    // Save state to localStorage
+    localStorage.setItem('imageGalleryHidden', !isHidden);
+}
+
+// Toggle sidebar visibility
+function toggleSidebar() {
+    if (!layout || !sidebarToggle) {
+        return;
+    }
+
+    const isHidden = layout.classList.contains('sidebar-hidden');
+    if (isHidden) {
+        layout.classList.remove('sidebar-hidden');
+        sidebarToggle.title = 'ファイルリストを非表示';
+    } else {
+        layout.classList.add('sidebar-hidden');
+        sidebarToggle.title = 'ファイルリストを表示';
+    }
+
+    // Save state to localStorage
+    localStorage.setItem('sidebarHidden', !isHidden);
+}
+
+// Show image preview modal
+async function showImagePreview(imagePath, imageName, imageURL = null) {
+    if (!imagePreviewModal || !imagePreviewImg || !imagePreviewName || !imagePreviewPath) {
+        console.error('Image preview modal elements not found');
+        return;
+    }
+
+    try {
+        // If imageURL is not provided, get it from API
+        let finalImageURL = imageURL;
+        if (!finalImageURL && imagePath && api.GetImageFileURL) {
+            finalImageURL = await api.GetImageFileURL(imagePath);
+        }
+
+        if (!finalImageURL) {
+            console.error('Failed to get image URL for:', imagePath);
+            setStatusMessage('画像のURLを取得できませんでした', 3000);
+            return;
+        }
+
+        imagePreviewImg.src = finalImageURL;
+        imagePreviewName.textContent = imageName || '画像';
+        imagePreviewPath.textContent = imagePath || '';
+        imagePreviewModal.style.display = 'flex';
+        imagePreviewModal.setAttribute('aria-hidden', 'false');
+
+        // Handle image load error
+        imagePreviewImg.onerror = () => {
+            console.error('Failed to load image:', finalImageURL);
+            setStatusMessage('画像の読み込みに失敗しました', 3000);
+            closeImagePreview();
+        };
+
+        await loadImageMetadataForPreview(imagePath);
+    } catch (error) {
+        console.error('Error showing image preview:', error);
+        setStatusMessage('画像プレビューの表示に失敗しました', 3000);
+    }
+}
+
+// Close image preview modal
+function closeImagePreview() {
+    if (!imagePreviewModal) {
+        return;
+    }
+
+    imagePreviewModal.style.display = 'none';
+    imagePreviewModal.setAttribute('aria-hidden', 'true');
+    if (imagePreviewImg) {
+        imagePreviewImg.src = '';
+    }
+    resetImageMetadataUI();
+}
+
+function updateImageMetadataStatus(message = '', level = 'info') {
+    if (!imageMetadataStatus) {
+        return;
+    }
+    imageMetadataStatus.textContent = message || '';
+    imageMetadataStatus.classList.remove('success', 'error', 'warning');
+    if (message && level && level !== 'info') {
+        imageMetadataStatus.classList.add(level);
+    }
+}
+
+function resetImageMetadataUI() {
+    currentMetadataImagePath = null;
+    imageMetadataDirty = false;
+    imageMetadataLoading = false;
+    if (imageMetadataEditor) {
+        imageMetadataEditor.value = '';
+        imageMetadataEditor.disabled = true;
+    }
+    if (imageMetadataSaveBtn) {
+        imageMetadataSaveBtn.disabled = true;
+    }
+    updateImageMetadataStatus('');
+}
+
+async function loadImageMetadataForPreview(imagePath) {
+    if (!imagePath || !api.GetImageMetadata || !imageMetadataEditor) {
+        return;
+    }
+    currentMetadataImagePath = imagePath;
+    imageMetadataLoading = true;
+    imageMetadataEditor.disabled = true;
+    if (imageMetadataSaveBtn) {
+        imageMetadataSaveBtn.disabled = true;
+    }
+    updateImageMetadataStatus('メタデータを読み込み中…');
+    try {
+        const yamlText = await api.GetImageMetadata(imagePath);
+        imageMetadataEditor.value = yamlText || '{}\n';
+        imageMetadataEditor.disabled = false;
+        if (imageMetadataSaveBtn) {
+            imageMetadataSaveBtn.disabled = false;
+        }
+        imageMetadataDirty = false;
+        updateImageMetadataStatus('メタデータを読み込みました', 'success');
+    } catch (error) {
+        console.error('Failed to load image metadata:', error);
+        imageMetadataEditor.value = '{}\n';
+        updateImageMetadataStatus(`読み込み失敗: ${error?.message || error}`, 'error');
+    } finally {
+        imageMetadataLoading = false;
+    }
+}
+
+async function saveCurrentImageMetadata() {
+    if (!currentMetadataImagePath || !api.SaveImageMetadata || !imageMetadataEditor) {
+        return;
+    }
+    if (imageMetadataSaveBtn) {
+        imageMetadataSaveBtn.disabled = true;
+    }
+    updateImageMetadataStatus('保存中…');
+    try {
+        await api.SaveImageMetadata(currentMetadataImagePath, imageMetadataEditor.value);
+        imageMetadataDirty = false;
+        updateImageMetadataStatus('保存しました', 'success');
+        setStatusMessage('画像メタデータを保存しました。', 2500);
+    } catch (error) {
+        console.error('Failed to save image metadata:', error);
+        updateImageMetadataStatus(`保存に失敗: ${error?.message || error}`, 'error');
+    } finally {
+        if (imageMetadataSaveBtn) {
+            imageMetadataSaveBtn.disabled = false;
+        }
+    }
+}
+
+function handleImageImportedEvent(payload) {
+    jsLog('INFO', 'Image imported event:', payload);
+    // Reload gallery when new image is imported
+    loadImageGallery();
+}
+
+// Insert image at cursor position in editor
+function insertImageAtCursor(imagePath, imageName) {
+    if (!ta) {
+        return;
+    }
+
+    const cursorPos = ta.selectionStart;
+    const textBefore = ta.value.substring(0, cursorPos);
+    const textAfter = ta.value.substring(cursorPos);
+
+    // Get image name without extension for alt text
+    const nameWithoutExt = imageName.replace(/\.[^/.]+$/, '');
+
+    // Create Markdown image syntax: ![alt](path "title")
+    const imageMarkdown = `![${nameWithoutExt}](${imagePath} "${imageName}")`;
+
+    // Insert image markdown
+    const newText = textBefore + imageMarkdown + textAfter;
+    ta.value = newText;
+
+    // Set cursor position after inserted image
+    const newCursorPos = cursorPos + imageMarkdown.length;
+    ta.setSelectionRange(newCursorPos, newCursorPos);
+    ta.focus();
+
+    // Update preview
+    updatePreview();
+
+    // Trigger input event to save
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+// Find Markdown position from preview element
+function findMarkdownPositionFromElement(element, markdownContent) {
+    if (!element || !markdownContent) {
+        return -1;
+    }
+
+    // Walk up the DOM tree to find a meaningful element
+    let currentElement = element;
+    let attempts = 0;
+    const maxAttempts = 10;
+
+    while (currentElement && attempts < maxAttempts) {
+        // Try to find by heading level first (most reliable)
+        if (currentElement.tagName && currentElement.tagName.match(/^H[1-6]$/)) {
+            const level = parseInt(currentElement.tagName.charAt(1));
+            const headingText = currentElement.textContent?.trim();
+            if (headingText) {
+                // Escape special regex characters
+                const escapedText = headingText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const headingPattern = new RegExp(`^#{${level}}\\s+${escapedText}`, 'm');
+                const match = markdownContent.match(headingPattern);
+                if (match) {
+                    // Find the end of the heading line
+                    const headingEnd = markdownContent.indexOf('\n', match.index + match[0].length);
+                    return headingEnd !== -1 ? headingEnd : markdownContent.length;
+                }
+            }
+        }
+
+        // Try to find by paragraph text
+        if (currentElement.tagName === 'P' || currentElement.tagName === 'DIV') {
+            const elementText = currentElement.textContent?.trim();
+            if (elementText && elementText.length > 0) {
+                // Use first meaningful part of text (avoid very long text)
+                const searchText = elementText.substring(0, Math.min(100, elementText.length));
+                // Escape special regex characters for search
+                const escapedSearch = searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const regex = new RegExp(escapedSearch.replace(/\s+/g, '\\s+'), 'm');
+                const match = markdownContent.match(regex);
+                if (match) {
+                    // Find the end of the line or paragraph
+                    const lineEnd = markdownContent.indexOf('\n', match.index);
+                    return lineEnd !== -1 ? lineEnd : markdownContent.length;
+                }
+            }
+        }
+
+        // Try to find by list item
+        if (currentElement.tagName === 'LI') {
+            const itemText = currentElement.textContent?.trim();
+            if (itemText) {
+                // Look for list marker followed by text
+                const escapedText = itemText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const listPattern = new RegExp(`^[\\s\\-*+\\d\\.]+\\s+${escapedText.substring(0, 50)}`, 'm');
+                const match = markdownContent.match(listPattern);
+                if (match) {
+                    const lineEnd = markdownContent.indexOf('\n', match.index);
+                    return lineEnd !== -1 ? lineEnd : markdownContent.length;
+                }
+            }
+        }
+
+        // Move to parent element
+        currentElement = currentElement.parentElement;
+        attempts++;
+    }
+
+    // Last resort: append to end
+    return markdownContent.length;
+}
+
+// Insert image after element in preview
+async function insertImageAfterElement(imagePath, imageName, element) {
+    if (!ta || !element) {
+        return;
+    }
+
+    const markdownContent = ta.value;
+    const position = findMarkdownPositionFromElement(element, markdownContent);
+
+    if (position === -1) {
+        // Fallback: append to end
+        const nameWithoutExt = imageName.replace(/\.[^/.]+$/, '');
+        const imageMarkdown = `\n\n![${nameWithoutExt}](${imagePath} "${imageName}")\n`;
+        ta.value = markdownContent + imageMarkdown;
+        ta.setSelectionRange(ta.value.length, ta.value.length);
+    } else {
+        const textBefore = markdownContent.substring(0, position);
+        const textAfter = markdownContent.substring(position);
+
+        const nameWithoutExt = imageName.replace(/\.[^/.]+$/, '');
+        const imageMarkdown = `\n\n![${nameWithoutExt}](${imagePath} "${imageName}")\n`;
+
+        const newText = textBefore + imageMarkdown + textAfter;
+        ta.value = newText;
+
+        const newCursorPos = position + imageMarkdown.length;
+        ta.setSelectionRange(newCursorPos, newCursorPos);
+    }
+
+    ta.focus();
+    updatePreview();
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 // Setup recording functionality
@@ -1635,8 +2355,29 @@ function setupDragAndDrop() {
         }
         event.preventDefault();
         hideOverlay();
-        handleAudioDrop(event.dataTransfer?.files || []).catch((error) => {
-            console.error('handleAudioDrop failed', error);
+        const files = Array.from(event.dataTransfer?.files || []);
+        if (files.length === 0) {
+            return;
+        }
+
+        const hasAudio = files.some((file) => isSupportedAudioFile(file.name));
+        const hasImage = files.some((file) => isSupportedImageFile(file.name));
+
+        const tasks = [];
+        if (hasAudio) {
+            tasks.push(handleAudioDrop(files));
+        }
+        if (hasImage) {
+            tasks.push(handleImageDrop(files));
+        }
+
+        if (tasks.length === 0) {
+            setStatusMessage('対応していないファイル形式です', 3000);
+            return;
+        }
+
+        Promise.all(tasks).catch((error) => {
+            console.error('handleDrop failed', error);
         });
     });
 }
@@ -1644,6 +2385,11 @@ function setupDragAndDrop() {
 function isSupportedAudioFile(name = '') {
     const lower = (name || '').toLowerCase();
     return supportedAudioExt.some((ext) => lower.endsWith(ext));
+}
+
+function isSupportedImageFile(name = '') {
+    const lower = (name || '').toLowerCase();
+    return supportedImageExt.some((ext) => lower.endsWith(ext));
 }
 
 async function handleAudioDrop(fileList) {
@@ -1682,6 +2428,46 @@ async function handleAudioDrop(fileList) {
 
     await loadFileList();
     setStatusMessage('音声ファイルを保存しました。文字起こしを開始します…', 3500);
+}
+
+async function handleImageDrop(fileList) {
+    if (!fileList || fileList.length === 0) {
+        return;
+    }
+    if (!api.ImportImageFile) {
+        console.warn('ImportImageFile API is unavailable in this environment');
+        return;
+    }
+
+    const files = Array.from(fileList).filter((file) => isSupportedImageFile(file.name));
+    if (files.length === 0) {
+        setStatusMessage('対応していない画像形式です (jpg/png/gif/webp)', 3000);
+        return;
+    }
+
+    for (const file of files) {
+        try {
+            setStatusMessage(`画像を取り込み中: ${file.name}`);
+            if (file.path) {
+                await api.ImportImageFile(file.path);
+            } else if (api.ImportImageBase64 && file.arrayBuffer) {
+                const buffer = await file.arrayBuffer();
+                const base64 = arrayBufferToBase64(buffer);
+                await api.ImportImageBase64(file.name || `image-${Date.now()}.png`, base64);
+            } else {
+                console.warn('Cannot access data for dropped image:', file.name);
+                setStatusMessage('画像データにアクセスできませんでした', 4000);
+            }
+        } catch (error) {
+            console.error('ImportImageFile failed', error);
+            setStatusMessage(`画像取り込みに失敗: ${error?.message || error}`, 4000);
+        }
+    }
+
+    await loadFileList();
+    setStatusMessage('画像ファイルを保存しました。', 3000);
+    // Reload image gallery after import
+    await loadImageGallery();
 }
 
 function arrayBufferToBase64(buffer) {
