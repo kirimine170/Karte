@@ -619,7 +619,7 @@ async function updatePreview() {
             }
             const targetSlide = Math.max(0, lastMarpSlideIndex || 0);
 
-            pv.onload = () => {
+            const handleMarpLoad = () => {
                 try {
                     const applySlide = (attempt = 0) => {
                         const frame = pv.contentWindow;
@@ -634,13 +634,6 @@ async function updatePreview() {
                     // Initialize KaTeX for Marp presentations
                     const iframeDoc = pv.contentDocument || pv.contentWindow.document;
                     if (iframeDoc) {
-                        // Helper function to decode HTML entities
-                        const decodeHtmlEntities = (text) => {
-                            const textarea = iframeDoc.createElement('textarea');
-                            textarea.innerHTML = text;
-                            return textarea.value;
-                        };
-
                         const initKaTeX = () => {
                             const iframeWindow = pv.contentWindow;
                             if (typeof iframeWindow.katex === 'undefined') {
@@ -655,16 +648,12 @@ async function updatePreview() {
                             jsLog('DEBUG', `[Marp] Found ${inlineElements.length} inline math elements`);
                             inlineElements.forEach(function (el) {
                                 try {
-                                    // Skip if already rendered (has .katex child)
                                     if (el.querySelector('.katex')) {
                                         jsLog('DEBUG', '[Marp] Skipping already rendered inline math');
                                         return;
                                     }
-                                    // Use textContent to get raw text (avoids HTML entity issues)
-                                    // textContent automatically decodes HTML entities, so we don't need decodeHtmlEntities
                                     const rawContent = el.textContent.trim();
                                     jsLog('DEBUG', `[Marp] Inline math rawContent: ${JSON.stringify(rawContent)}`);
-                                    // textContent already decodes HTML entities, so use it directly
                                     const math = rawContent;
                                     jsLog('DEBUG', `[Marp] Inline math final: ${JSON.stringify(math)}`);
                                     iframeWindow.katex.render(math, el, {
@@ -683,16 +672,12 @@ async function updatePreview() {
                             jsLog('DEBUG', `[Marp] Found ${blockElements.length} block math elements`);
                             blockElements.forEach(function (el) {
                                 try {
-                                    // Skip if already rendered (has .katex child)
                                     if (el.querySelector('.katex')) {
                                         jsLog('DEBUG', '[Marp] Skipping already rendered block math');
                                         return;
                                     }
-                                    // Use textContent to get raw text (avoids HTML entity issues)
-                                    // textContent automatically decodes HTML entities, so we don't need decodeHtmlEntities
                                     const rawContent = el.textContent.trim();
                                     jsLog('DEBUG', `[Marp] Block math rawContent: ${JSON.stringify(rawContent)}`);
-                                    // textContent already decodes HTML entities, so use it directly
                                     const math = rawContent;
                                     jsLog('DEBUG', `[Marp] Block math final: ${JSON.stringify(math)}`);
                                     iframeWindow.katex.render(math, el, {
@@ -711,9 +696,10 @@ async function updatePreview() {
                 } catch (err) {
                     console.warn('Failed to restore Marp slide position:', err);
                 } finally {
-                    pv.onload = null;
+                    pv.removeEventListener('load', handleMarpLoad);
                 }
             };
+            pv.addEventListener('load', handleMarpLoad);
 
             // Reset drop handler flag so it can be set up again after iframe reloads
             if (pv.contentDocument) {
@@ -803,19 +789,15 @@ function setupTimestampClickHandlers() {
         return;
     }
 
-    // Store original onload handler if exists
-    const originalOnload = pv.onload;
+    // Remove previous handler if exists
+    if (pv._timestampLoadHandler) {
+        pv.removeEventListener('load', pv._timestampLoadHandler);
+        pv._timestampLoadHandler = null;
+    }
 
-    // Wait for iframe to load
-    pv.onload = () => {
-        // Call original onload if it exists
-        if (originalOnload) {
-            try {
-                originalOnload();
-            } catch (err) {
-                console.warn('Original onload handler error:', err);
-            }
-        }
+    const handleTimestampLoad = () => {
+        pv.removeEventListener('load', handleTimestampLoad);
+        pv._timestampLoadHandler = null;
 
         // Setup timestamp click handlers
         try {
@@ -1004,6 +986,9 @@ function setupTimestampClickHandlers() {
             console.warn('Could not access iframe document:', err);
         }
     };
+
+    pv._timestampLoadHandler = handleTimestampLoad;
+    pv.addEventListener('load', handleTimestampLoad);
 }
 
 // Update audio player based on content

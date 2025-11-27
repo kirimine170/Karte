@@ -839,7 +839,18 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 		}
 
 		html := marp.RenderMarpHTML(slides, title, header, footer, paginate, aspectRatio, marpTheme)
-		
+
+		// Log HTML sample to debug image rendering
+		if strings.Contains(html, "<img") {
+			imgMatch := regexp.MustCompile(`<img[^>]+>`)
+			imgs := imgMatch.FindAllString(html, 5)
+			for i, img := range imgs {
+				a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: Found img tag %d: %s", i+1, img))
+			}
+		} else {
+			a.logInfo("PreviewMarkdown [Marp]: No img tags found in HTML")
+		}
+
 		// Convert image paths in HTML to URLs that can be served by the HTTP handler
 		// Match img src attributes that point to data/image/ files
 		imgPathRegex := regexp.MustCompile(`(<img[^>]+src=["'])([^"']+)(["'][^>]*>)`)
@@ -852,15 +863,19 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 			imgPath := parts[2]
 			suffix := parts[3]
 
+			a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: Processing image path: %s", imgPath))
+
 			// Check if this is a data/image/ path
 			if strings.HasPrefix(imgPath, "data/image/") {
 				// Convert to URL path that will be served by HTTP handler
 				urlPath := "/image/" + imgPath
+				a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: Converted image path: %s -> %s", imgPath, urlPath))
 				return prefix + urlPath + suffix
 			}
+			a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: Image path does not start with data/image/: %s", imgPath))
 			return match
 		})
-		
+
 		return html, nil
 	}
 
@@ -2281,6 +2296,8 @@ func (a *App) createAssetHandler() http.Handler {
 func (a *App) serveMediaFile(w http.ResponseWriter, r *http.Request, prefix, mediaType string) bool {
 	relPath := strings.TrimPrefix(r.URL.Path, prefix)
 
+	a.logInfo(fmt.Sprintf("serveMediaFile: %s request for %s, relPath: %s", mediaType, r.URL.Path, relPath))
+
 	var absPath string
 	if filepath.IsAbs(relPath) {
 		absPath = relPath
@@ -2288,11 +2305,20 @@ func (a *App) serveMediaFile(w http.ResponseWriter, r *http.Request, prefix, med
 		absPath = filepath.Join(a.dataDir, filepath.FromSlash(relPath))
 	}
 
+	a.logInfo(fmt.Sprintf("serveMediaFile: %s resolved path: %s", mediaType, absPath))
+
 	info, err := os.Stat(absPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			a.logError(fmt.Sprintf("serveMediaFile: %s file not found: %s (resolved: %s)", mediaType, relPath, absPath))
+		} else {
+			a.logError(fmt.Sprintf("serveMediaFile: %s stat error: %v (path: %s)", mediaType, err, absPath))
+		}
 		http.Error(w, fmt.Sprintf("%s file not found", strings.Title(mediaType)), http.StatusNotFound)
 		return true
 	}
+
+	a.logInfo(fmt.Sprintf("serveMediaFile: %s file found: %s (size: %d bytes)", mediaType, absPath, info.Size()))
 
 	file, err := os.Open(absPath)
 	if err != nil {
