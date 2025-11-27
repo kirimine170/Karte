@@ -839,6 +839,28 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 		}
 
 		html := marp.RenderMarpHTML(slides, title, header, footer, paginate, aspectRatio, marpTheme)
+		
+		// Convert image paths in HTML to URLs that can be served by the HTTP handler
+		// Match img src attributes that point to data/image/ files
+		imgPathRegex := regexp.MustCompile(`(<img[^>]+src=["'])([^"']+)(["'][^>]*>)`)
+		html = imgPathRegex.ReplaceAllStringFunc(html, func(match string) string {
+			parts := imgPathRegex.FindStringSubmatch(match)
+			if len(parts) < 4 {
+				return match
+			}
+			prefix := parts[1]
+			imgPath := parts[2]
+			suffix := parts[3]
+
+			// Check if this is a data/image/ path
+			if strings.HasPrefix(imgPath, "data/image/") {
+				// Convert to URL path that will be served by HTTP handler
+				urlPath := "/image/" + imgPath
+				return prefix + urlPath + suffix
+			}
+			return match
+		})
+		
 		return html, nil
 	}
 
@@ -877,6 +899,27 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 		a.logError(fmt.Sprintf("PreviewMarkdown: failed to render markdown: %v (root: %s, tmpFile: %s)", err, a.dataDir, tmpFile))
 		return "", fmt.Errorf("failed to render markdown: %v", err)
 	}
+
+	// Convert image paths in HTML to URLs that can be served by the HTTP handler
+	// Match img src attributes that point to data/image/ files
+	imgPathRegex := regexp.MustCompile(`(<img[^>]+src=["'])([^"']+)(["'][^>]*>)`)
+	html = imgPathRegex.ReplaceAllStringFunc(html, func(match string) string {
+		parts := imgPathRegex.FindStringSubmatch(match)
+		if len(parts) < 4 {
+			return match
+		}
+		prefix := parts[1]
+		imgPath := parts[2]
+		suffix := parts[3]
+
+		// Check if this is a data/image/ path
+		if strings.HasPrefix(imgPath, "data/image/") {
+			// Convert to URL path that will be served by HTTP handler
+			urlPath := "/image/" + imgPath
+			return prefix + urlPath + suffix
+		}
+		return match
+	})
 
 	// Debug: log a sample of the generated HTML to check for KaTeX processing
 	if strings.Contains(html, "katex-inline") || strings.Contains(html, "katex-block") {

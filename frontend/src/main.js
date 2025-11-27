@@ -715,7 +715,17 @@ async function updatePreview() {
                 }
             };
 
+            // Reset drop handler flag so it can be set up again after iframe reloads
+            if (pv.contentDocument) {
+                pv.contentDocument._imageDropHandlersSetup = false;
+            }
+
             pv.srcdoc = mdHtml;
+
+            // Setup drop handlers after iframe loads (for Marp)
+            pv.addEventListener('load', () => {
+                setupPreviewImageDrop();
+            }, { once: true });
 
             // Handle audio player even for Marp presentations
             await updateAudioPlayer(content);
@@ -736,7 +746,18 @@ async function updatePreview() {
 
         // Setup timestamp click handlers before setting srcdoc
         setupTimestampClickHandlers();
+
+        // Reset drop handler flag so it can be set up again after iframe reloads
+        if (pv.contentDocument) {
+            pv.contentDocument._imageDropHandlersSetup = false;
+        }
+
         pv.srcdoc = finalHtml;
+
+        // Setup drop handlers after iframe loads
+        pv.addEventListener('load', () => {
+            setupPreviewImageDrop();
+        }, { once: true });
 
         // Handle audio player
         await updateAudioPlayer(content);
@@ -1275,6 +1296,47 @@ function setupEventListeners() {
         }, 300);
     });
 
+    // Setup editor drop handler for images
+    if (ta) {
+        ta.addEventListener('dragover', (e) => {
+            // Check if dragging an image from gallery by checking dataTransfer types
+            const types = Array.from(e.dataTransfer.types || []);
+            if (types.includes('application/json') || types.includes('text/plain')) {
+                // Check if it's an image drag by looking at the source element
+                const dragSource = document.querySelector('.image-thumbnail[style*="opacity: 0.5"]');
+                if (dragSource) {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'copy';
+                }
+            }
+        });
+
+        ta.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            const data = e.dataTransfer.getData('application/json');
+            if (!data) {
+                // Try text/plain as fallback
+                const path = e.dataTransfer.getData('text/plain');
+                if (path) {
+                    // Try to get name from attribute
+                    const dragSource = document.querySelector('.image-thumbnail[data-image-path="' + path + '"]');
+                    const name = dragSource?.getAttribute('data-image-name') || path.split('/').pop();
+                    insertImageAtCursor(path, name);
+                }
+                return;
+            }
+
+            try {
+                const imageData = JSON.parse(data);
+                if (imageData.path && imageData.name) {
+                    insertImageAtCursor(imageData.path, imageData.name);
+                }
+            } catch (error) {
+                console.error('Failed to parse image data:', error);
+            }
+        });
+    }
+
     // Load saved theme
     const savedTheme = localStorage.getItem('karte-theme') || 'light';
     themeSel.value = savedTheme;
@@ -1291,6 +1353,102 @@ function setupEventListeners() {
     setupDragAndDrop();
     setupRecording();
     setupImageGallery();
+    setupPreviewImageDrop();
+}
+
+// Global variable to store current drag image data
+let currentDragImageData = null;
+
+// Setup preview iframe drop handler for images
+function setupPreviewImageDrop() {
+    if (!pv) {
+        return;
+    }
+
+    // This function will be called whenever the iframe loads
+    const setupDropHandlers = () => {
+        try {
+            const iframeDoc = pv.contentDocument || pv.contentWindow?.document;
+            if (!iframeDoc) {
+                return;
+            }
+
+            // Remove existing listeners to avoid duplicates
+            const newDoc = iframeDoc.cloneNode(true);
+            // Actually, we can't clone the document, so we'll use a flag to prevent duplicates
+            if (iframeDoc._imageDropHandlersSetup) {
+                return;
+            }
+            iframeDoc._imageDropHandlersSetup = true;
+
+            // Setup dragover to allow drop
+            iframeDoc.addEventListener('dragover', (e) => {
+                // Check if dragging an image from gallery by checking types
+                const types = Array.from(e.dataTransfer.types || []);
+                if (types.includes('application/json') || types.includes('text/plain')) {
+                    // Check if it's an image drag by looking at the source element
+                    const dragSource = document.querySelector('.image-thumbnail[style*="opacity: 0.5"]');
+                    if (dragSource) {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = 'copy';
+                    }
+                }
+            });
+
+            // Setup drop handler
+            iframeDoc.addEventListener('drop', async (e) => {
+                e.preventDefault();
+
+                // Get image data from global variable (set during dragstart)
+                let imagePath = null;
+                let imageName = null;
+
+                // Try to get from global variable first
+                if (currentDragImageData) {
+                    imagePath = currentDragImageData.path;
+                    imageName = currentDragImageData.name;
+                } else {
+                    // Fallback: try to get from parent window's drag source
+                    const dragSource = document.querySelector('.image-thumbnail[style*="opacity: 0.5"]');
+                    if (dragSource) {
+                        imagePath = dragSource.getAttribute('data-image-path');
+                        imageName = dragSource.getAttribute('data-image-name');
+                    }
+                }
+
+                if (!imagePath || !imageName) {
+                    console.error('Failed to get image data from drag');
+                    return;
+                }
+
+                // Clear the global variable
+                currentDragImageData = null;
+
+                try {
+                    // Find element at drop position
+                    const element = iframeDoc.elementFromPoint(e.clientX, e.clientY);
+                    if (element) {
+                        await insertImageAfterElement(imagePath, imageName, element);
+                    } else {
+                        // Fallback: append to end
+                        insertImageAtCursor(imagePath, imageName);
+                    }
+                } catch (error) {
+                    console.error('Failed to handle image drop in preview:', error);
+                }
+            });
+        } catch (error) {
+            console.error('Failed to setup preview drop handler:', error);
+        }
+    };
+
+    // Setup on initial load
+    pv.addEventListener('load', setupDropHandlers);
+
+    // Also setup immediately if iframe is already loaded
+    if (pv.contentDocument || pv.contentWindow?.document) {
+        setupDropHandlers();
+    }
 }
 
 // Setup image gallery
@@ -1359,7 +1517,7 @@ async function loadImageGallery() {
 
     try {
         const images = await api.GetImageList();
-        renderImageGallery(images);
+        await renderImageGallery(images);
     } catch (error) {
         console.error('Failed to load image gallery:', error);
         jsLog('ERROR', 'Failed to load image gallery:', error);
@@ -1367,7 +1525,7 @@ async function loadImageGallery() {
 }
 
 // Render image gallery
-function renderImageGallery(images) {
+async function renderImageGallery(images) {
     if (!imageGalleryGrid || !imageGalleryEmpty) {
         return;
     }
@@ -1383,7 +1541,8 @@ function renderImageGallery(images) {
     imageGalleryEmpty.style.display = 'none';
     imageGalleryGrid.style.display = 'grid';
 
-    images.forEach(async (image) => {
+    // Use for...of loop instead of forEach to properly handle async operations
+    for (const image of images) {
         try {
             const imageURL = await api.GetImageFileURL(image.path);
             const thumbnail = document.createElement('img');
@@ -1391,14 +1550,53 @@ function renderImageGallery(images) {
             thumbnail.src = imageURL;
             thumbnail.alt = image.name;
             thumbnail.title = image.name;
+
+            // Store image data in attributes before adding event listeners
+            thumbnail.setAttribute('data-image-path', image.path);
+            thumbnail.setAttribute('data-image-name', image.name);
+
             thumbnail.addEventListener('click', () => {
-                showImagePreview(image.path, image.name, imageURL);
+                const path = thumbnail.getAttribute('data-image-path');
+                const name = thumbnail.getAttribute('data-image-name');
+                showImagePreview(path, name, imageURL);
+            });
+
+            // Make thumbnail draggable
+            thumbnail.draggable = true;
+
+            // Handle drag start - read from data attributes to avoid closure issues
+            thumbnail.addEventListener('dragstart', (e) => {
+                const path = thumbnail.getAttribute('data-image-path');
+                const name = thumbnail.getAttribute('data-image-name');
+
+                if (!path || !name) {
+                    console.error('Missing image data attributes');
+                    return;
+                }
+
+                // Store in global variable for iframe drop handler
+                currentDragImageData = { path: path, name: name };
+
+                e.dataTransfer.effectAllowed = 'copy';
+                e.dataTransfer.setData('text/plain', path);
+                e.dataTransfer.setData('application/json', JSON.stringify({
+                    path: path,
+                    name: name
+                }));
+                // Add visual feedback
+                thumbnail.style.opacity = '0.5';
+            });
+
+            thumbnail.addEventListener('dragend', () => {
+                thumbnail.style.opacity = '1';
+                // Clear global variable when drag ends
+                currentDragImageData = null;
             });
             imageGalleryGrid.appendChild(thumbnail);
         } catch (error) {
             console.error('Failed to load image thumbnail:', image.path, error);
         }
-    });
+    }
 }
 
 // Toggle image gallery visibility
@@ -1452,16 +1650,41 @@ function toggleSidebar() {
 }
 
 // Show image preview modal
-function showImagePreview(imagePath, imageName, imageURL) {
+async function showImagePreview(imagePath, imageName, imageURL = null) {
     if (!imagePreviewModal || !imagePreviewImg || !imagePreviewName || !imagePreviewPath) {
+        console.error('Image preview modal elements not found');
         return;
     }
 
-    imagePreviewImg.src = imageURL;
-    imagePreviewName.textContent = imageName;
-    imagePreviewPath.textContent = imagePath;
-    imagePreviewModal.style.display = 'flex';
-    imagePreviewModal.setAttribute('aria-hidden', 'false');
+    try {
+        // If imageURL is not provided, get it from API
+        let finalImageURL = imageURL;
+        if (!finalImageURL && imagePath && api.GetImageFileURL) {
+            finalImageURL = await api.GetImageFileURL(imagePath);
+        }
+
+        if (!finalImageURL) {
+            console.error('Failed to get image URL for:', imagePath);
+            setStatusMessage('画像のURLを取得できませんでした', 3000);
+            return;
+        }
+
+        imagePreviewImg.src = finalImageURL;
+        imagePreviewName.textContent = imageName || '画像';
+        imagePreviewPath.textContent = imagePath || '';
+        imagePreviewModal.style.display = 'flex';
+        imagePreviewModal.setAttribute('aria-hidden', 'false');
+
+        // Handle image load error
+        imagePreviewImg.onerror = () => {
+            console.error('Failed to load image:', finalImageURL);
+            setStatusMessage('画像の読み込みに失敗しました', 3000);
+            closeImagePreview();
+        };
+    } catch (error) {
+        console.error('Error showing image preview:', error);
+        setStatusMessage('画像プレビューの表示に失敗しました', 3000);
+    }
 }
 
 // Close image preview modal
@@ -1481,6 +1704,143 @@ function handleImageImportedEvent(payload) {
     jsLog('INFO', 'Image imported event:', payload);
     // Reload gallery when new image is imported
     loadImageGallery();
+}
+
+// Insert image at cursor position in editor
+function insertImageAtCursor(imagePath, imageName) {
+    if (!ta) {
+        return;
+    }
+
+    const cursorPos = ta.selectionStart;
+    const textBefore = ta.value.substring(0, cursorPos);
+    const textAfter = ta.value.substring(cursorPos);
+
+    // Get image name without extension for alt text
+    const nameWithoutExt = imageName.replace(/\.[^/.]+$/, '');
+
+    // Create Markdown image syntax: ![alt](path "title")
+    const imageMarkdown = `![${nameWithoutExt}](${imagePath} "${imageName}")`;
+
+    // Insert image markdown
+    const newText = textBefore + imageMarkdown + textAfter;
+    ta.value = newText;
+
+    // Set cursor position after inserted image
+    const newCursorPos = cursorPos + imageMarkdown.length;
+    ta.setSelectionRange(newCursorPos, newCursorPos);
+    ta.focus();
+
+    // Update preview
+    updatePreview();
+
+    // Trigger input event to save
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+// Find Markdown position from preview element
+function findMarkdownPositionFromElement(element, markdownContent) {
+    if (!element || !markdownContent) {
+        return -1;
+    }
+
+    // Walk up the DOM tree to find a meaningful element
+    let currentElement = element;
+    let attempts = 0;
+    const maxAttempts = 10;
+
+    while (currentElement && attempts < maxAttempts) {
+        // Try to find by heading level first (most reliable)
+        if (currentElement.tagName && currentElement.tagName.match(/^H[1-6]$/)) {
+            const level = parseInt(currentElement.tagName.charAt(1));
+            const headingText = currentElement.textContent?.trim();
+            if (headingText) {
+                // Escape special regex characters
+                const escapedText = headingText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const headingPattern = new RegExp(`^#{${level}}\\s+${escapedText}`, 'm');
+                const match = markdownContent.match(headingPattern);
+                if (match) {
+                    // Find the end of the heading line
+                    const headingEnd = markdownContent.indexOf('\n', match.index + match[0].length);
+                    return headingEnd !== -1 ? headingEnd : markdownContent.length;
+                }
+            }
+        }
+
+        // Try to find by paragraph text
+        if (currentElement.tagName === 'P' || currentElement.tagName === 'DIV') {
+            const elementText = currentElement.textContent?.trim();
+            if (elementText && elementText.length > 0) {
+                // Use first meaningful part of text (avoid very long text)
+                const searchText = elementText.substring(0, Math.min(100, elementText.length));
+                // Escape special regex characters for search
+                const escapedSearch = searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const regex = new RegExp(escapedSearch.replace(/\s+/g, '\\s+'), 'm');
+                const match = markdownContent.match(regex);
+                if (match) {
+                    // Find the end of the line or paragraph
+                    const lineEnd = markdownContent.indexOf('\n', match.index);
+                    return lineEnd !== -1 ? lineEnd : markdownContent.length;
+                }
+            }
+        }
+
+        // Try to find by list item
+        if (currentElement.tagName === 'LI') {
+            const itemText = currentElement.textContent?.trim();
+            if (itemText) {
+                // Look for list marker followed by text
+                const escapedText = itemText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const listPattern = new RegExp(`^[\\s\\-*+\\d\\.]+\\s+${escapedText.substring(0, 50)}`, 'm');
+                const match = markdownContent.match(listPattern);
+                if (match) {
+                    const lineEnd = markdownContent.indexOf('\n', match.index);
+                    return lineEnd !== -1 ? lineEnd : markdownContent.length;
+                }
+            }
+        }
+
+        // Move to parent element
+        currentElement = currentElement.parentElement;
+        attempts++;
+    }
+
+    // Last resort: append to end
+    return markdownContent.length;
+}
+
+// Insert image after element in preview
+async function insertImageAfterElement(imagePath, imageName, element) {
+    if (!ta || !element) {
+        return;
+    }
+
+    const markdownContent = ta.value;
+    const position = findMarkdownPositionFromElement(element, markdownContent);
+
+    if (position === -1) {
+        // Fallback: append to end
+        const nameWithoutExt = imageName.replace(/\.[^/.]+$/, '');
+        const imageMarkdown = `\n\n![${nameWithoutExt}](${imagePath} "${imageName}")\n`;
+        ta.value = markdownContent + imageMarkdown;
+        ta.setSelectionRange(ta.value.length, ta.value.length);
+    } else {
+        const textBefore = markdownContent.substring(0, position);
+        const textAfter = markdownContent.substring(position);
+
+        const nameWithoutExt = imageName.replace(/\.[^/.]+$/, '');
+        const imageMarkdown = `\n\n![${nameWithoutExt}](${imagePath} "${imageName}")\n`;
+
+        const newText = textBefore + imageMarkdown + textAfter;
+        ta.value = newText;
+
+        const newCursorPos = position + imageMarkdown.length;
+        ta.setSelectionRange(newCursorPos, newCursorPos);
+    }
+
+    ta.focus();
+    updatePreview();
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 // Setup recording functionality
