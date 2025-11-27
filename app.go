@@ -6,6 +6,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"io/fs"
 	"log"
@@ -27,17 +31,23 @@ import (
 	"karte/internal/site"
 	syncpkg "karte/internal/sync"
 
+	"github.com/chai2010/webp"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"gopkg.in/yaml.v3"
 )
 
-var supportedImageExt = map[string]struct{}{
-	".jpg":  {},
-	".jpeg": {},
-	".png":  {},
-	".gif":  {},
-}
+var (
+	supportedImageExt = map[string]struct{}{
+		".jpg":  {},
+		".jpeg": {},
+		".png":  {},
+		".gif":  {},
+		".webp": {},
+	}
+	backupImageExtCandidates = []string{".jpg", ".jpeg", ".png", ".gif"}
+)
 
 // App struct
 type App struct {
@@ -133,10 +143,12 @@ type FileItem struct {
 
 // ImageItem represents an image file in the gallery
 type ImageItem struct {
-	Path    string    `json:"path"`
-	Name    string    `json:"name"`
-	Size    int64     `json:"size"`
-	ModTime time.Time `json:"modTime"`
+	Path         string    `json:"path"`
+	Name         string    `json:"name"`
+	Size         int64     `json:"size"`
+	ModTime      time.Time `json:"modTime"`
+	MetadataPath string    `json:"metadataPath,omitempty"`
+	OriginalPath string    `json:"originalPath,omitempty"`
 }
 
 // GraphNode represents a node in the graph
@@ -525,18 +537,23 @@ func (a *App) GetImageList() []ImageItem {
 		if info.IsDir() {
 			return nil
 		}
-		if isSupportedImageExt(info.Name()) {
-			// Generate path relative to dataDir so that it starts with "data/image/..."
-			rel, _ := filepath.Rel(a.dataDir, p)
-			imageItem := ImageItem{
-				Path:    filepath.ToSlash(rel),
-				Name:    info.Name(),
-				Size:    info.Size(),
-				ModTime: info.ModTime(),
-			}
-			images = append(images, imageItem)
-			a.logInfo(fmt.Sprintf("Found image: %s", imageItem.Path))
+		if strings.ToLower(filepath.Ext(info.Name())) != ".webp" {
+			return nil
 		}
+
+		rel, _ := filepath.Rel(a.dataDir, p)
+		rel = filepath.ToSlash(rel)
+		metadataPath := strings.TrimSuffix(rel, ".webp") + ".yaml"
+		imageItem := ImageItem{
+			Path:         rel,
+			Name:         info.Name(),
+			Size:         info.Size(),
+			ModTime:      info.ModTime(),
+			MetadataPath: metadataPath,
+			OriginalPath: a.findOriginalImagePath(rel),
+		}
+		images = append(images, imageItem)
+		a.logInfo(fmt.Sprintf("Found image: %s", imageItem.Path))
 		return nil
 	})
 
@@ -552,6 +569,63 @@ func (a *App) GetImageList() []ImageItem {
 
 	a.logInfo(fmt.Sprintf("Found %d image files", len(images)))
 	return images
+}
+
+// GetImageMetadata returns the YAML metadata associated with the provided image.
+func (a *App) GetImageMetadata(imagePath string) (string, error) {
+	relImagePath, _, err := a.resolveImagePath(imagePath)
+	if err != nil {
+		return "", err
+	}
+	metaRelPath := metadataPathFromImage(relImagePath)
+	metaAbsPath := filepath.Join(a.dataDir, filepath.FromSlash(metaRelPath))
+
+	if _, err := os.Stat(metaAbsPath); os.IsNotExist(err) {
+		return "{}\n", nil
+	} else if err != nil {
+		return "", fmt.Errorf("stat metadata: %w", err)
+	}
+
+	data, err := os.ReadFile(metaAbsPath)
+	if err != nil {
+		return "", fmt.Errorf("read metadata: %w", err)
+	}
+	return string(data), nil
+}
+
+// SaveImageMetadata writes YAML metadata for the image, validating the format beforehand.
+func (a *App) SaveImageMetadata(imagePath, yamlContent string) (bool, error) {
+	if imagePath == "" {
+		return false, fmt.Errorf("image path is required")
+	}
+
+	relImagePath, _, err := a.resolveImagePath(imagePath)
+	if err != nil {
+		return false, err
+	}
+
+	if strings.TrimSpace(yamlContent) == "" {
+		yamlContent = "{}\n"
+	}
+
+	var validation interface{}
+	if err := yaml.Unmarshal([]byte(yamlContent), &validation); err != nil {
+		return false, fmt.Errorf("invalid YAML: %w", err)
+	}
+
+	metaRelPath := metadataPathFromImage(relImagePath)
+	metaAbsPath := filepath.Join(a.dataDir, filepath.FromSlash(metaRelPath))
+
+	if err := os.MkdirAll(filepath.Dir(metaAbsPath), 0o755); err != nil {
+		return false, fmt.Errorf("prepare metadata directory: %w", err)
+	}
+
+	if err := os.WriteFile(metaAbsPath, []byte(yamlContent), 0o644); err != nil {
+		return false, fmt.Errorf("write metadata file: %w", err)
+	}
+
+	a.logInfo(fmt.Sprintf("Saved image metadata: %s", metaRelPath))
+	return true, nil
 }
 
 // CreateNewFile creates a new markdown file in the content directory
@@ -1085,6 +1159,60 @@ func sanitizeImageBaseName(name string) string {
 	return base
 }
 
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func (a *App) findOriginalImagePath(webpRelPath string) string {
+	if webpRelPath == "" {
+		return ""
+	}
+	base := strings.TrimSuffix(webpRelPath, ".webp")
+	for _, ext := range backupImageExtCandidates {
+		candidate := base + ext
+		abs := filepath.Join(a.dataDir, filepath.FromSlash(candidate))
+		if fileExists(abs) {
+			return filepath.ToSlash(candidate)
+		}
+	}
+	sourceCandidate := base + "_source.webp"
+	abs := filepath.Join(a.dataDir, filepath.FromSlash(sourceCandidate))
+	if fileExists(abs) {
+		return filepath.ToSlash(sourceCandidate)
+	}
+	return ""
+}
+
+func (a *App) resolveImagePath(imagePath string) (string, string, error) {
+	if imagePath == "" {
+		return "", "", fmt.Errorf("image path is empty")
+	}
+
+	if filepath.IsAbs(imagePath) {
+		rel, err := filepath.Rel(a.dataDir, imagePath)
+		if err != nil {
+			return "", "", fmt.Errorf("resolve image path: %w", err)
+		}
+		if strings.HasPrefix(rel, "..") {
+			return "", "", fmt.Errorf("image path resolves outside data directory")
+		}
+		return filepath.ToSlash(rel), imagePath, nil
+	}
+
+	cleanRel := filepath.ToSlash(filepath.Clean(imagePath))
+	if strings.HasPrefix(cleanRel, "..") {
+		return "", "", fmt.Errorf("image path resolves outside data directory")
+	}
+	abs := filepath.Join(a.dataDir, filepath.FromSlash(cleanRel))
+	return cleanRel, abs, nil
+}
+
+func metadataPathFromImage(imageRelPath string) string {
+	ext := filepath.Ext(imageRelPath)
+	return strings.TrimSuffix(imageRelPath, ext) + ".yaml"
+}
+
 // ImportAudioFile copies an audio file into karte_data/data/audio and triggers transcription.
 func (a *App) ImportAudioFile(src string) (string, error) {
 	if src == "" {
@@ -1149,51 +1277,92 @@ func (a *App) importImageFromReader(originalName string, src io.Reader) (string,
 	}
 
 	destDir := filepath.Join(a.dataDir, "data", "image")
-	if err := os.MkdirAll(destDir, 0755); err != nil {
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return "", fmt.Errorf("prepare image dir: %w", err)
 	}
 
-	base := sanitizeImageBaseName(strings.TrimSuffix(originalName, filepath.Ext(originalName)))
 	ext := strings.ToLower(filepath.Ext(originalName))
+	base := sanitizeImageBaseName(strings.TrimSuffix(originalName, ext))
 	timestamp := time.Now().Format("20060102-150405")
 	prefix := fmt.Sprintf("%s_%s", timestamp, base)
-	filename := prefix + ext
-	for i := 2; ; i++ {
-		_, err := os.Stat(filepath.Join(destDir, filename))
-		if os.IsNotExist(err) {
+
+	data, err := io.ReadAll(src)
+	if err != nil {
+		return "", fmt.Errorf("read image data: %w", err)
+	}
+
+	baseIndex := 1
+	originalSuffix := ""
+	if ext == ".webp" {
+		originalSuffix = "_source"
+	}
+
+	var originalFilename, webpFilename string
+	for {
+		baseName := prefix
+		if baseIndex > 1 {
+			baseName = fmt.Sprintf("%s_%02d", prefix, baseIndex)
+		}
+		originalFilename = baseName + originalSuffix + ext
+		webpFilename = baseName + ".webp"
+		if !fileExists(filepath.Join(destDir, originalFilename)) && !fileExists(filepath.Join(destDir, webpFilename)) {
 			break
 		}
-		filename = fmt.Sprintf("%s_%02d%s", prefix, i, ext)
+		baseIndex++
 	}
 
-	destPath := filepath.Join(destDir, filename)
-	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return "", fmt.Errorf("create image file: %w", err)
-	}
-	if _, err := io.Copy(out, src); err != nil {
-		out.Close()
-		return "", fmt.Errorf("write image file: %w", err)
-	}
-	if err := out.Close(); err != nil {
-		return "", fmt.Errorf("close image file: %w", err)
+	originalDestPath := filepath.Join(destDir, originalFilename)
+	if err := os.WriteFile(originalDestPath, data, 0o644); err != nil {
+		return "", fmt.Errorf("write original image file: %w", err)
 	}
 
-	relPath, err := filepath.Rel(a.dataDir, destPath)
+	img, format, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
-		relPath = destPath
+		return "", fmt.Errorf("decode image for webp conversion: %w", err)
 	}
-	relPath = filepath.ToSlash(relPath)
+
+	webpDestPath := filepath.Join(destDir, webpFilename)
+	webpFile, err := os.OpenFile(webpDestPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return "", fmt.Errorf("create webp image file: %w", err)
+	}
+
+	webpOptions := &webp.Options{Lossless: format == "png" || format == "gif"}
+	if !webpOptions.Lossless {
+		webpOptions.Quality = 90
+	}
+
+	if err := webp.Encode(webpFile, img, webpOptions); err != nil {
+		webpFile.Close()
+		return "", fmt.Errorf("encode webp image: %w", err)
+	}
+	if err := webpFile.Close(); err != nil {
+		return "", fmt.Errorf("close webp file: %w", err)
+	}
+
+	relOriginalPath, err := filepath.Rel(a.dataDir, originalDestPath)
+	if err != nil {
+		relOriginalPath = originalDestPath
+	}
+	relOriginalPath = filepath.ToSlash(relOriginalPath)
+
+	relWebPPath, err := filepath.Rel(a.dataDir, webpDestPath)
+	if err != nil {
+		relWebPPath = webpDestPath
+	}
+	relWebPPath = filepath.ToSlash(relWebPPath)
 
 	payload := map[string]interface{}{
-		"path":          relPath,
+		"path":          relWebPPath,
 		"original_name": originalName,
-		"saved_name":    filename,
+		"saved_name":    webpFilename,
+		"webp_path":     relWebPPath,
+		"original_path": relOriginalPath,
 	}
 	runtime.EventsEmit(a.ctx, "image-imported", payload)
-	a.logInfo(fmt.Sprintf("Image imported: %s -> %s", originalName, relPath))
+	a.logInfo(fmt.Sprintf("Image imported: %s -> webp=%s (original=%s)", originalName, relWebPPath, relOriginalPath))
 
-	return relPath, nil
+	return relWebPPath, nil
 }
 
 // ImportAudioBase64 saves audio content provided as base64 (used when native paths are not available).

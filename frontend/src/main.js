@@ -1,4 +1,4 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetImageList, StartRecording, StopRecording, IsRecording, LogJS } from '../wailsjs/wailsjs/go/main/App';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS } from '../wailsjs/wailsjs/go/main/App';
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
@@ -126,6 +126,16 @@ const mockFunctions = {
         ];
     },
 
+    async GetImageMetadata(path) {
+        console.log('Mock GetImageMetadata called:', path);
+        return 'title: mock image\nnotes: サンプルメタデータ';
+    },
+
+    async SaveImageMetadata(path, yaml) {
+        console.log('Mock SaveImageMetadata called:', path, yaml);
+        return true;
+    },
+
     async StartRecording() {
         console.log('Mock StartRecording called');
         return true;
@@ -168,9 +178,11 @@ const api = isBrowser ? mockFunctions : {
     GetAudioFileURL,
     GetImageFileURL,
     GetImageList,
+    GetImageMetadata,
     StartRecording,
     StopRecording,
     IsRecording,
+    SaveImageMetadata,
     LogJS
 };
 
@@ -213,6 +225,9 @@ let files = [];
 let graphModule = null;
 let lastMarpSlideIndex = 0;
 let statusClearTimer = null;
+let currentMetadataImagePath = null;
+let imageMetadataDirty = false;
+let imageMetadataLoading = false;
 
 // DOM elements
 const statusEl = document.getElementById('status');
@@ -244,6 +259,28 @@ const imagePreviewImg = document.getElementById('imagePreviewImg');
 const imagePreviewName = document.getElementById('imagePreviewName');
 const imagePreviewPath = document.getElementById('imagePreviewPath');
 const imagePreviewClose = document.getElementById('imagePreviewClose');
+const imageMetadataEditor = document.getElementById('imageMetadataEditor');
+const imageMetadataSaveBtn = document.getElementById('imageMetadataSaveBtn');
+const imageMetadataStatus = document.getElementById('imageMetadataStatus');
+
+if (imageMetadataEditor) {
+    imageMetadataEditor.disabled = true;
+    imageMetadataEditor.addEventListener('input', () => {
+        if (imageMetadataLoading) {
+            return;
+        }
+        imageMetadataDirty = true;
+        updateImageMetadataStatus('未保存の変更があります', 'warning');
+    });
+}
+
+if (imageMetadataSaveBtn) {
+    imageMetadataSaveBtn.disabled = true;
+    imageMetadataSaveBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        saveCurrentImageMetadata();
+    });
+}
 
 // Modal elements
 const filenameModal = document.getElementById('filenameModal');
@@ -261,7 +298,7 @@ const cancelCustomCssBtn = document.getElementById('cancelCustomCssBtn');
 const customCssStatus = document.getElementById('customCssStatus');
 
 const supportedAudioExt = ['.wav', '.mp3', '.m4a'];
-const supportedImageExt = ['.jpg', '.jpeg', '.png', '.gif'];
+const supportedImageExt = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
 
 // Conflict modal elements
 const conflictModal = document.getElementById('conflictModal');
@@ -1689,6 +1726,8 @@ async function showImagePreview(imagePath, imageName, imageURL = null) {
             setStatusMessage('画像の読み込みに失敗しました', 3000);
             closeImagePreview();
         };
+
+        await loadImageMetadataForPreview(imagePath);
     } catch (error) {
         console.error('Error showing image preview:', error);
         setStatusMessage('画像プレビューの表示に失敗しました', 3000);
@@ -1705,6 +1744,84 @@ function closeImagePreview() {
     imagePreviewModal.setAttribute('aria-hidden', 'true');
     if (imagePreviewImg) {
         imagePreviewImg.src = '';
+    }
+    resetImageMetadataUI();
+}
+
+function updateImageMetadataStatus(message = '', level = 'info') {
+    if (!imageMetadataStatus) {
+        return;
+    }
+    imageMetadataStatus.textContent = message || '';
+    imageMetadataStatus.classList.remove('success', 'error', 'warning');
+    if (message && level && level !== 'info') {
+        imageMetadataStatus.classList.add(level);
+    }
+}
+
+function resetImageMetadataUI() {
+    currentMetadataImagePath = null;
+    imageMetadataDirty = false;
+    imageMetadataLoading = false;
+    if (imageMetadataEditor) {
+        imageMetadataEditor.value = '';
+        imageMetadataEditor.disabled = true;
+    }
+    if (imageMetadataSaveBtn) {
+        imageMetadataSaveBtn.disabled = true;
+    }
+    updateImageMetadataStatus('');
+}
+
+async function loadImageMetadataForPreview(imagePath) {
+    if (!imagePath || !api.GetImageMetadata || !imageMetadataEditor) {
+        return;
+    }
+    currentMetadataImagePath = imagePath;
+    imageMetadataLoading = true;
+    imageMetadataEditor.disabled = true;
+    if (imageMetadataSaveBtn) {
+        imageMetadataSaveBtn.disabled = true;
+    }
+    updateImageMetadataStatus('メタデータを読み込み中…');
+    try {
+        const yamlText = await api.GetImageMetadata(imagePath);
+        imageMetadataEditor.value = yamlText || '{}\n';
+        imageMetadataEditor.disabled = false;
+        if (imageMetadataSaveBtn) {
+            imageMetadataSaveBtn.disabled = false;
+        }
+        imageMetadataDirty = false;
+        updateImageMetadataStatus('メタデータを読み込みました', 'success');
+    } catch (error) {
+        console.error('Failed to load image metadata:', error);
+        imageMetadataEditor.value = '{}\n';
+        updateImageMetadataStatus(`読み込み失敗: ${error?.message || error}`, 'error');
+    } finally {
+        imageMetadataLoading = false;
+    }
+}
+
+async function saveCurrentImageMetadata() {
+    if (!currentMetadataImagePath || !api.SaveImageMetadata || !imageMetadataEditor) {
+        return;
+    }
+    if (imageMetadataSaveBtn) {
+        imageMetadataSaveBtn.disabled = true;
+    }
+    updateImageMetadataStatus('保存中…');
+    try {
+        await api.SaveImageMetadata(currentMetadataImagePath, imageMetadataEditor.value);
+        imageMetadataDirty = false;
+        updateImageMetadataStatus('保存しました', 'success');
+        setStatusMessage('画像メタデータを保存しました。', 2500);
+    } catch (error) {
+        console.error('Failed to save image metadata:', error);
+        updateImageMetadataStatus(`保存に失敗: ${error?.message || error}`, 'error');
+    } finally {
+        if (imageMetadataSaveBtn) {
+            imageMetadataSaveBtn.disabled = false;
+        }
     }
 }
 
@@ -2324,7 +2441,7 @@ async function handleImageDrop(fileList) {
 
     const files = Array.from(fileList).filter((file) => isSupportedImageFile(file.name));
     if (files.length === 0) {
-        setStatusMessage('対応していない画像形式です (jpg/png/gif)', 3000);
+        setStatusMessage('対応していない画像形式です (jpg/png/gif/webp)', 3000);
         return;
     }
 

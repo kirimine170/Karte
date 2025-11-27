@@ -701,6 +701,62 @@
     color: var(--mute);
   }
 
+  .image-metadata-section {
+    margin-top: 16px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    text-align: left;
+  }
+
+  .image-metadata-header {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .image-metadata-textarea {
+    width: 100%;
+    min-height: 150px;
+    resize: vertical;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 13px;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--backgroundcolor-unhover);
+    color: var(--ink);
+  }
+
+  .image-metadata-textarea:disabled {
+    opacity: 0.65;
+  }
+
+  .image-metadata-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .image-metadata-status {
+    font-size: 12px;
+    color: var(--mute);
+  }
+
+  .image-metadata-status.success {
+    color: #22c55e;
+  }
+
+  .image-metadata-status.error {
+    color: #ef4444;
+  }
+
+  .image-metadata-status.warning {
+    color: #f97316;
+  }
+
   .asr-status {
     padding: 4px 8px;
     border-radius: 4px;
@@ -927,6 +983,15 @@
       <div class="image-preview-name" id="imagePreviewName"></div>
       <div class="image-preview-path" id="imagePreviewPath"></div>
     </div>
+    <div class="image-metadata-section">
+      <div class="image-metadata-header">メタデータ (YAML)</div>
+      <textarea id="imageMetadataEditor" class="image-metadata-textarea" spellcheck="false"
+        placeholder="例:&#10;title: サンプル&#10;tags: [sample, demo]"></textarea>
+      <div class="image-metadata-actions">
+        <button class="btn" id="imageMetadataSaveBtn">保存</button>
+        <span class="image-metadata-status" id="imageMetadataStatus"></span>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -935,7 +1000,7 @@
     <div class="drop-overlay__label">マルチメディアファイルをアップロード</div>
     <div class="drop-overlay__hint">
       <div>音声: WAV / MP3 / M4A</div>
-      <div>画像: JPG / PNG / GIF</div>
+      <div>画像: JPG / PNG / GIF / WebP</div>
     </div>
   </div>
 </div>
