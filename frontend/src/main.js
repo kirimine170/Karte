@@ -1,4 +1,4 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, GetCollaborativeConfig, ComputeDocID, PublishCollaborativeCursor, OutlineMarkdown, StartRecording, StopRecording, IsRecording, LogJS } from '../wailsjs/wailsjs/go/main/App';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, GetCollaborativeConfig, ComputeDocID, PublishCollaborativeCursor, PublishCollaborativeText, OutlineMarkdown, StartRecording, StopRecording, IsRecording, LogJS } from '../wailsjs/wailsjs/go/main/App';
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
@@ -180,6 +180,11 @@ const mockFunctions = {
     async PublishCollaborativeCursor(docPath, sectionId, cursor, active) {
         console.log('Mock PublishCollaborativeCursor called:', { docPath, sectionId, cursor, active });
         return true;
+    },
+
+    async PublishCollaborativeText(docPath, diff) {
+        console.log('Mock PublishCollaborativeText called:', { docPath, diff });
+        return true;
     }
 };
 
@@ -214,6 +219,7 @@ const api = isBrowser ? mockFunctions : {
     GetCollaborativeConfig,
     ComputeDocID,
     PublishCollaborativeCursor,
+    PublishCollaborativeText,
     OutlineMarkdown
 };
 
@@ -374,6 +380,9 @@ let collabSections = [];
 let collabPresence = new Map();
 let collabCursorTimer = null;
 const COLLAB_CURSOR_INTERVAL = 150;
+let lastPublishedText = '';
+let collabTextTimer = null;
+const COLLAB_TEXT_INTERVAL = 100;
 
 // Initialize the application
 let initCalled = false;
@@ -459,6 +468,7 @@ async function init() {
             EventsOn('audio-transcribe-progress', handleAudioTranscribeProgress);
             EventsOn('image-imported', handleImageImportedEvent);
             EventsOn('collab-cursor', handleCollaborativeEvent);
+            EventsOn('collab-text', handleCollaborativeTextEvent);
 
             // Initialize ASR status check
             updateASRStatus();
@@ -649,6 +659,8 @@ async function loadFile(path) {
         }
         ta.value = content;
         currentPath = path;
+        // Update lastPublishedText when file is loaded
+        lastPublishedText = content;
 
         // Update active file in sidebar
         document.querySelectorAll('.item').forEach(item => {
@@ -1402,6 +1414,10 @@ function setupEventListeners() {
         inputTimeout = setTimeout(() => {
             updatePreview();
         }, 300);
+        // Schedule collaborative text publish
+        if (collabEnabled) {
+            scheduleCollaborativeTextPublish();
+        }
     });
 
     // Setup editor drop handler for images
@@ -1753,6 +1769,43 @@ async function publishCollaborativeCursor(active = true) {
     }
 }
 
+function scheduleCollaborativeTextPublish() {
+    if (!collabEnabled) {
+        return;
+    }
+    if (collabTextTimer) {
+        clearTimeout(collabTextTimer);
+    }
+    collabTextTimer = setTimeout(() => {
+        collabTextTimer = null;
+        publishCollaborativeText();
+    }, COLLAB_TEXT_INTERVAL);
+}
+
+async function publishCollaborativeText() {
+    if (!collabEnabled || !api.PublishCollaborativeText || !currentPath || !ta) {
+        return;
+    }
+    try {
+        const currentText = ta.value || '';
+        if (currentText === lastPublishedText) {
+            return; // No changes
+        }
+
+        const diff = calculateTextDiff(lastPublishedText, currentText);
+        if (!diff) {
+            return; // No changes
+        }
+
+        jsLog('DEBUG', 'publishCollaborativeText: publishing diff', { currentPath, diff });
+        await api.PublishCollaborativeText(currentPath, diff);
+        lastPublishedText = currentText;
+    } catch (error) {
+        jsLog('ERROR', 'Failed to publish collaborative text:', error);
+        console.error('Failed to publish collaborative text:', error);
+    }
+}
+
 async function refreshCollaborativeOutline(path, content) {
     if (!collabEnabled) {
         jsLog('DEBUG', 'refreshCollaborativeOutline: collaborative editing disabled');
@@ -1823,6 +1876,80 @@ function handleCollaborativeEvent(payload) {
     renderCollaborativePresence();
 }
 
+function handleCollaborativeTextEvent(payload) {
+    if (!collabEnabled || !payload || payload.docId !== currentDocId) {
+        jsLog('DEBUG', 'handleCollaborativeTextEvent: skipping', { collabEnabled, hasPayload: !!payload, docId: payload?.docId, currentDocId });
+        return;
+    }
+    if (!payload.diff || !ta) {
+        jsLog('DEBUG', 'handleCollaborativeTextEvent: missing diff or textarea', { hasDiff: !!payload.diff, hasTa: !!ta });
+        return;
+    }
+
+    try {
+        // Save current cursor position
+        const cursorPos = ta.selectionStart || 0;
+        const cursorEnd = ta.selectionEnd || cursorPos;
+
+        // Apply diff to current text
+        const currentText = ta.value || '';
+        const newText = applyTextDiff(currentText, payload.diff);
+
+        // Update textarea
+        ta.value = newText;
+
+        // Try to restore cursor position
+        // If the diff was applied before the cursor, adjust cursor position
+        const diffPos = payload.diff.pos || 0;
+        let newCursorPos = cursorPos;
+        let newCursorEnd = cursorEnd;
+
+        if (payload.diff.op === 'insert') {
+            const insertLen = Array.from(payload.diff.text || '').length;
+            if (diffPos <= cursorPos) {
+                newCursorPos = cursorPos + insertLen;
+                newCursorEnd = cursorEnd + insertLen;
+            }
+        } else if (payload.diff.op === 'delete') {
+            const deleteLen = payload.diff.length || 0;
+            if (diffPos < cursorPos) {
+                newCursorPos = Math.max(diffPos, cursorPos - deleteLen);
+                newCursorEnd = Math.max(diffPos, cursorEnd - deleteLen);
+            } else if (diffPos === cursorPos && deleteLen > 0) {
+                // Cursor is at the deletion point, keep it there
+                newCursorPos = diffPos;
+                newCursorEnd = diffPos;
+            }
+        } else if (payload.diff.op === 'replace') {
+            const oldLen = Array.from(payload.diff.old || '').length;
+            const newLen = Array.from(payload.diff.new || '').length;
+            const diff = newLen - oldLen;
+            if (diffPos < cursorPos) {
+                newCursorPos = cursorPos + diff;
+                newCursorEnd = cursorEnd + diff;
+            } else if (diffPos === cursorPos && oldLen > 0) {
+                // Cursor is at the replacement point
+                newCursorPos = diffPos + newLen;
+                newCursorEnd = diffPos + newLen;
+            }
+        }
+
+        // Set cursor position
+        ta.setSelectionRange(newCursorPos, newCursorEnd);
+
+        // Update lastPublishedText to prevent re-sending
+        lastPublishedText = newText;
+
+        // Update preview
+        updatePreview();
+
+        jsLog('DEBUG', 'handleCollaborativeTextEvent: applied diff', { userName: payload.userName, diff: payload.diff, cursorPos, newCursorPos });
+    } catch (error) {
+        jsLog('ERROR', 'Failed to handle collaborative text event:', error);
+        console.error('Failed to handle collaborative text event:', error);
+    }
+}
+
 function renderCollaborativePresence() {
     if (!collabPresenceEl) {
         return;
@@ -1879,6 +2006,96 @@ function getRuneIndexFromSelection(codeUnitIndex) {
     }
     const slice = ta.value.slice(0, Math.max(0, codeUnitIndex));
     return Array.from(slice).length;
+}
+
+// Calculate text diff between old and new text
+function calculateTextDiff(oldText, newText) {
+    if (oldText === newText) {
+        return null; // No changes
+    }
+
+    // Simple diff algorithm: find the first difference and the last difference
+    const oldRunes = Array.from(oldText);
+    const newRunes = Array.from(newText);
+    const oldLen = oldRunes.length;
+    const newLen = newRunes.length;
+
+    // Find common prefix
+    let prefixLen = 0;
+    while (prefixLen < oldLen && prefixLen < newLen && oldRunes[prefixLen] === newRunes[prefixLen]) {
+        prefixLen++;
+    }
+
+    // Find common suffix
+    let suffixLen = 0;
+    while (suffixLen < oldLen - prefixLen && suffixLen < newLen - prefixLen &&
+        oldRunes[oldLen - 1 - suffixLen] === newRunes[newLen - 1 - suffixLen]) {
+        suffixLen++;
+    }
+
+    // Calculate the changed region
+    const oldStart = prefixLen;
+    const oldEnd = oldLen - suffixLen;
+    const newStart = prefixLen;
+    const newEnd = newLen - suffixLen;
+
+    const oldChanged = oldRunes.slice(oldStart, oldEnd).join('');
+    const newChanged = newRunes.slice(newStart, newEnd).join('');
+
+    if (oldChanged === '' && newChanged !== '') {
+        // Insert operation
+        return {
+            op: 'insert',
+            pos: prefixLen,
+            text: newChanged
+        };
+    } else if (oldChanged !== '' && newChanged === '') {
+        // Delete operation
+        return {
+            op: 'delete',
+            pos: prefixLen,
+            length: oldEnd - oldStart
+        };
+    } else {
+        // Replace operation
+        return {
+            op: 'replace',
+            pos: prefixLen,
+            old: oldChanged,
+            new: newChanged
+        };
+    }
+}
+
+// Apply text diff to text
+function applyTextDiff(text, diff) {
+    if (!diff) {
+        return text;
+    }
+
+    const runes = Array.from(text);
+    let result;
+
+    switch (diff.op) {
+        case 'insert':
+            result = [...runes];
+            result.splice(diff.pos, 0, ...Array.from(diff.text));
+            return result.join('');
+
+        case 'delete':
+            result = [...runes];
+            result.splice(diff.pos, diff.length);
+            return result.join('');
+
+        case 'replace':
+            result = [...runes];
+            const oldRunes = Array.from(diff.old);
+            result.splice(diff.pos, oldRunes.length, ...Array.from(diff.new));
+            return result.join('');
+
+        default:
+            return text;
+    }
 }
 
 // Setup image gallery

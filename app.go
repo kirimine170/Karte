@@ -550,6 +550,52 @@ func (a *App) PublishCollaborativeCursor(docPath, sectionID string, cursor int, 
 	return nil
 }
 
+func (a *App) PublishCollaborativeText(docPath string, diff map[string]interface{}) error {
+	if !a.config.Collaborative.Enabled {
+		a.logInfo("PublishCollaborativeText: collaborative editing is disabled")
+		return nil
+	}
+	a.mqttMu.Lock()
+	client := a.mqttClient
+	a.mqttMu.Unlock()
+	if client == nil || !client.IsConnected() {
+		a.logError("PublishCollaborativeText: MQTT client not connected")
+		return fmt.Errorf("collaborative client not connected")
+	}
+	user := strings.TrimSpace(a.config.Collaborative.UserName)
+	if user == "" {
+		a.logError("PublishCollaborativeText: userName is empty")
+		return fmt.Errorf("collaborative userName is empty; update config.json")
+	}
+	docID := computeDocID(docPath)
+	topic := fmt.Sprintf("karte/%s/doc/%s/content",
+		a.config.Collaborative.Workspace, docID)
+
+	// Add userName and timestamp to diff
+	payloadData := make(map[string]interface{})
+	for k, v := range diff {
+		payloadData[k] = v
+	}
+	payloadData["userName"] = user
+	payloadData["timestamp"] = time.Now().UnixMilli()
+
+	payload, err := json.Marshal(payloadData)
+	if err != nil {
+		a.logError(fmt.Sprintf("PublishCollaborativeText: failed to marshal payload: %v", err))
+		return fmt.Errorf("marshal collaborative text payload: %w", err)
+	}
+
+	a.logInfo(fmt.Sprintf("PublishCollaborativeText: publishing text diff docPath=%s docID=%s topic=%s", docPath, docID, topic))
+	token := client.Publish(topic, 1, false, payload)
+	token.Wait()
+	if token.Error() != nil {
+		a.logError(fmt.Sprintf("PublishCollaborativeText: publish failed: %v", token.Error()))
+		return token.Error()
+	}
+	a.logInfo(fmt.Sprintf("PublishCollaborativeText: published successfully topic=%s", topic))
+	return nil
+}
+
 func (a *App) OutlineMarkdown(content string) []collab.SectionOutline {
 	return collab.Outline(content)
 }
@@ -623,13 +669,24 @@ func (a *App) initCollaborative() {
 		a.logError(fmt.Sprintf("MQTT connection lost: %v", err))
 	})
 	opts.SetOnConnectHandler(func(c mqtt.Client) {
-		topic := fmt.Sprintf("karte/%s/doc/+/section/+/editor/+", a.config.Collaborative.Workspace)
-		token := c.Subscribe(topic, 1, a.handleCollaborativeMessage)
+		// Subscribe to cursor position topics
+		cursorTopic := fmt.Sprintf("karte/%s/doc/+/section/+/editor/+", a.config.Collaborative.Workspace)
+		token := c.Subscribe(cursorTopic, 1, a.handleCollaborativeMessage)
 		if token.Wait() && token.Error() != nil {
-			a.logError(fmt.Sprintf("Failed to subscribe collaborative topic: %v", token.Error()))
+			a.logError(fmt.Sprintf("Failed to subscribe collaborative cursor topic: %v", token.Error()))
 		} else {
-			a.logInfo(fmt.Sprintf("Collaborative presence subscribed to %s", topic))
+			a.logInfo(fmt.Sprintf("Collaborative presence subscribed to %s", cursorTopic))
 		}
+
+		// Subscribe to text content topics
+		textTopic := fmt.Sprintf("karte/%s/doc/+/content", a.config.Collaborative.Workspace)
+		token = c.Subscribe(textTopic, 1, a.handleCollaborativeTextMessage)
+		if token.Wait() && token.Error() != nil {
+			a.logError(fmt.Sprintf("Failed to subscribe collaborative text topic: %v", token.Error()))
+		} else {
+			a.logInfo(fmt.Sprintf("Collaborative text subscribed to %s", textTopic))
+		}
+
 		if err := a.publishCollaborativeOnlineStatus(true); err != nil {
 			a.logError(fmt.Sprintf("Failed to publish online status: %v", err))
 		}
@@ -679,6 +736,54 @@ func (a *App) handleCollaborativeMessage(_ mqtt.Client, msg mqtt.Message) {
 	}
 
 	runtime.EventsEmit(a.ctx, "collab-cursor", event)
+}
+
+func (a *App) handleCollaborativeTextMessage(_ mqtt.Client, msg mqtt.Message) {
+	topicParts := strings.Split(msg.Topic(), "/")
+	if len(topicParts) < 5 {
+		return
+	}
+	docID := topicParts[3]
+
+	if len(msg.Payload()) == 0 {
+		return
+	}
+
+	var payloadData map[string]interface{}
+	if err := json.Unmarshal(msg.Payload(), &payloadData); err != nil {
+		a.logError(fmt.Sprintf("Failed to decode collaborative text payload: %v", err))
+		return
+	}
+
+	userName, ok := payloadData["userName"].(string)
+	if !ok {
+		a.logError("handleCollaborativeTextMessage: userName not found or invalid")
+		return
+	}
+
+	// Skip own messages
+	if userName == strings.TrimSpace(a.config.Collaborative.UserName) {
+		return
+	}
+
+	// Extract diff from payload
+	diff := make(map[string]interface{})
+	for k, v := range payloadData {
+		if k != "userName" && k != "timestamp" {
+			diff[k] = v
+		}
+	}
+
+	event := map[string]interface{}{
+		"docId":     docID,
+		"userName":  userName,
+		"diff":      diff,
+		"timestamp": payloadData["timestamp"],
+		"updatedAt": time.Now().UnixMilli(),
+	}
+
+	a.logInfo(fmt.Sprintf("handleCollaborativeTextMessage: received text diff docID=%s userName=%s", docID, userName))
+	runtime.EventsEmit(a.ctx, "collab-text", event)
 }
 
 func (a *App) publishCollaborativeOnlineStatus(online bool) error {
