@@ -1,4 +1,4 @@
-# Karte v1.0
+# Karte v1.0(未リリース)
 
 Markdownを正本に、CSVを@importで取り込み、ライブプレビューできるデスクトップアプリケーション。
 
@@ -15,27 +15,88 @@ Karteは、Wailsフレームワークを使用して開発されたクロスプ�
 - **ネイティブUI**: 各プラットフォームのネイティブメニューとダイアログ（将来実装予定）
 - **クロスプラットフォーム**: Windows、macOS、Linuxで動作
 
-## インストール
-
-### 前提条件
-
-- Go 1.23以上
-- Node.js 16以上
-- Wails CLI v2
-
-### Wails CLIのインストール
+## クイックスタート
 
 ```bash
-go install github.com/wailsapp/wails/v2/cmd/wails@latest
+git clone https://github.com/kirimine170/Karte.git
+cd Karte
+go mod download
+npm install --prefix frontend
+wails dev
 ```
 
-### アプリケーションのビルド
+Wails CLI がまだ導入されていない場合は `go install github.com/wailsapp/wails/v2/cmd/wails@latest` を実行してください。
+
+## 開発環境
+
+### 対応プラットフォーム
+検証進捗状況
+- macOS
+  - [x] Apple Silicon
+  - [ ] Intel
+- Windows
+  - [x] Windows 11
+  - [ ] Windows 10
+- Linux
+  - [ ] Ubuntu 22.04 LTS
+  - [ ] その他Linuxは要検証
+
+### 必須ツール
+
+| 種別          | バージョン / 備考               |
+| ------------- | ------------------------------- |
+| Go            | 1.24 以上（`go.mod`に合わせる） |
+| Node.js / npm | Node 18 LTS 以上（npm同梱）     |
+| Wails CLI     | v2 系列                         |
+| Git           | 2.x                             |
+
+追加機能向け:
+
+- ffmpeg（ASR/音声取り込み用、macOSなら`brew install ffmpeg`）
+- PortAudio（リアルタイム録音機能が必要な場合。macOS: `brew install portaudio`）
+
+### セットアップ手順
+
+1. **リポジトリをクローン**
+   ```bash
+   git clone https://github.com/kirimine170/Karte.git
+   cd Karte
+   ```
+2. **Wails CLIをインストール**
+   ```bash
+   go install github.com/wailsapp/wails/v2/cmd/wails@latest
+   ```
+3. **環境チェック（推奨）**
+   ```bash
+   wails doctor
+   ```
+   Go / Node / npm / Wails CLI の組み合わせに問題がないかをここで確認します。
+4. **バックエンド依存を取得**
+   ```bash
+   go mod download
+   ```
+5. **フロントエンド依存をインストール**
+   ```bash
+   cd frontend
+   npm install
+   cd ..
+   ```
+6. **ASRを使う場合の追加準備（任意）**
+   - `ffmpeg`がPATHで利用可能であることを確認（`ffmpeg -version`）
+   - PortAudioをOS標準手段で導入
+7. **開発モードを起動**
+   ```bash
+   wails dev
+   ```
+   バックエンドとVite開発サーバ（フロントエンド）が同時起動し、ホットリロードできます。
+
+### 本番ビルド
 
 ```bash
-cd karte-desktop
-go mod tidy
 wails build
 ```
+
+ターゲットを限定する場合は `-platform` フラグを指定します（例: `wails build -platform darwin/universal`）。ビルド成果物は `build/bin` 以下に生成されます。
 
 ## 使い方
 
@@ -44,7 +105,6 @@ wails build
 開発中は以下のコマンドで開発モードを起動できます：
 
 ```bash
-cd karte-desktop
 wails dev
 ```
 
@@ -113,17 +173,18 @@ wails build -platform linux/amd64
 ## プロジェクト構成
 
 ```
-karte-desktop/
+Karte/
 ├── app.go                 # Wailsアプリケーションのメインロジック
-├── main.go               # アプリケーションエントリーポイント
-├── frontend/             # フロントエンド（HTML/CSS/JavaScript）
-│   ├── index.html       # メインUI
-│   └── src/main.js      # JavaScriptロジック
-├── internal/            # 内部パッケージ
-│   ├── site/           # Markdownレンダリング
-│   └── sync/           # ファイル同期（将来のgit統合用）
-├── build/              # ビルド出力
-└── wails.json         # Wails設定ファイル
+├── main.go                # アプリケーションエントリーポイント
+├── frontend/              # フロントエンド（Vite + Vanilla JS）
+│   ├── index.html         # メインUI
+│   ├── src/main.js        # UIロジック
+│   └── graph-d3.js        # D3描画
+├── internal/              # 内部パッケージ
+│   ├── site/              # Markdownレンダリング
+│   └── sync/              # ファイル同期（将来のgit統合用）
+├── build/                 # ビルド出力
+└── wails.json             # Wails設定ファイル
 ```
 
 ## ディレクトリ構造
