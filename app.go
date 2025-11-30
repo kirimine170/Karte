@@ -24,8 +24,10 @@ import (
 
 	"karte/internal/asr"
 	"karte/internal/audio"
+	"karte/internal/docid"
 	fm "karte/internal/frontmatter"
 	gitvcs "karte/internal/git"
+	"karte/internal/markdown"
 	"karte/internal/marp"
 	pdfexport "karte/internal/pdf"
 	"karte/internal/site"
@@ -153,7 +155,8 @@ type ImageItem struct {
 
 // GraphNode represents a node in the graph
 type GraphNode struct {
-	ID     string   `json:"id"`
+	ID     string   `json:"id"`              // Path-based ID (e.g., "doc:/path/to/file.md")
+	DocID  string   `json:"docId,omitempty"` // Document ID (logical identifier, persistent across renames)
 	Label  string   `json:"label"`
 	Kind   string   `json:"kind"`
 	Exists bool     `json:"exists"`
@@ -166,14 +169,18 @@ type GraphNode struct {
 // GraphEdge represents an edge in the graph
 type GraphEdge struct {
 	ID            string `json:"id"`
-	Source        string `json:"source"`
-	Target        string `json:"target"`
+	Source        string `json:"source"`                // Path-based source ID (backward compatibility)
+	Target        string `json:"target"`                // Path-based target ID (backward compatibility)
+	SourceDocID   string `json:"sourceDocId,omitempty"` // Document ID of source (logical identifier)
+	TargetDocID   string `json:"targetDocId,omitempty"` // Document ID of target (logical identifier)
 	Kind          string `json:"kind"`
 	Weight        int    `json:"weight"`
 	TargetHash    string `json:"targetHash,omitempty"`    // Hash of target file when link was created
 	SourceHash    string `json:"sourceHash,omitempty"`    // Hash of source file when link was created
 	LinkVersion   int    `json:"linkVersion,omitempty"`   // Version number when link was created
 	TargetUpdated bool   `json:"targetUpdated,omitempty"` // True if target file has been updated since link creation
+	ToVersionMode string `json:"toVersionMode,omitempty"` // "latest" or "pinned" (for future version management)
+	ToVersionID   string `json:"toVersionId,omitempty"`   // Version ID when pinned (content_hash)
 }
 
 // GraphData represents the complete graph structure
@@ -489,12 +496,19 @@ func (a *App) GetFileList() []FileItem {
 		}
 		if strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
 			// Generate path relative to dataDir so that it starts with "content/..."
-			rel, _ := filepath.Rel(a.dataDir, p)
+			rel, err := filepath.Rel(a.dataDir, p)
+			if err != nil {
+				a.logError(fmt.Sprintf("Failed to get relative path for %s: %v", p, err))
+				return nil
+			}
 			title := info.Name()
 
 			// Try to extract title from frontmatter
 			if b, err := os.ReadFile(p); err == nil {
 				title = fm.ExtractTitle(string(b), title)
+			} else {
+				a.logError(fmt.Sprintf("Failed to read file %s: %v", p, err))
+				// Continue with filename as title if read fails
 			}
 			fileItem := FileItem{
 				Path:  filepath.ToSlash(rel),
@@ -511,7 +525,10 @@ func (a *App) GetFileList() []FileItem {
 		return []FileItem{}
 	}
 
-	a.logInfo(fmt.Sprintf("Found %d markdown files", len(files)))
+	a.logInfo(fmt.Sprintf("GetFileList completed: Found %d markdown files", len(files)))
+	if len(files) > 0 {
+		a.logInfo(fmt.Sprintf("First file: %s", files[0].Path))
+	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files
 }
@@ -684,79 +701,144 @@ func (a *App) LoadFile(path string) (string, error) {
 		return "", fmt.Errorf("failed to read file: %v", err)
 	}
 
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Successfully loaded file, content length: %d", len(content)))
-	return string(content), nil
+	contentStr := string(content)
+
+	// Ensure doc_id exists (lazy assignment)
+	contentWithDocID, docID, err := a.ensureDocID(contentStr)
+	if err != nil {
+		a.logError(fmt.Sprintf("Failed to ensure doc_id for %s: %v", path, err))
+		// Continue with original content if doc_id generation fails
+	} else if docID != "" && contentWithDocID != contentStr {
+		// Save the updated content with doc_id if it was added
+		if err := os.WriteFile(absPath, []byte(contentWithDocID), 0644); err != nil {
+			a.logError(fmt.Sprintf("Failed to save file with doc_id: %v", err))
+		} else {
+			contentStr = contentWithDocID
+			a.logInfo(fmt.Sprintf("Assigned doc_id to file: %s -> %s", path, docID))
+		}
+	}
+
+	runtime.LogInfo(a.ctx, fmt.Sprintf("Successfully loaded file, content length: %d", len(contentStr)))
+	return contentStr, nil
 }
 
 // SaveFile saves content to a markdown file
 func (a *App) SaveFile(path, content string) error {
+	a.logInfo(fmt.Sprintf("SaveFile called for path: %s, content length: %d", path, len(content)))
+
 	absPath, ok := a.resolveContentPath(path)
 	if !ok {
+		a.logError(fmt.Sprintf("SaveFile: invalid path: %s", path))
 		return fmt.Errorf("invalid path: %s", path)
 	}
 
-	// Calculate hash before saving
+	// Calculate hash before saving (but don't read file content here to avoid conflicts)
 	var oldHash string
 	if existingContent, err := os.ReadFile(absPath); err == nil {
 		oldHash = gitvcs.CalculateHash(string(existingContent))
+		a.logInfo(fmt.Sprintf("SaveFile: existing file hash: %s (length: %d)", oldHash[:8], len(existingContent)))
+	} else {
+		a.logInfo(fmt.Sprintf("SaveFile: file does not exist yet or cannot be read"))
 	}
 
-	// Parse and format frontmatter before saving
-	frontMatter, markdownBody := fm.ParseFrontMatter(content)
+	// Ensure doc_id exists (lazy assignment) - do this first
+	contentWithDocID, docID, err := a.ensureDocID(content)
+	if err != nil {
+		a.logError(fmt.Sprintf("Failed to ensure doc_id for %s: %v", path, err))
+		// Continue with original content if doc_id generation fails
+		contentWithDocID = content
+	} else {
+		if docID != "" {
+			a.logInfo(fmt.Sprintf("File %s has doc_id: %s", path, docID))
+		}
+	}
+
+	a.logInfo(fmt.Sprintf("SaveFile: after ensureDocID, content length: %d (original: %d)", len(contentWithDocID), len(content)))
+
+	// Parse and format frontmatter after doc_id assignment
+	frontMatter, markdownBody := fm.ParseFrontMatter(contentWithDocID)
 	if frontMatter != nil {
 		// Format frontmatter with normalized tags
 		formattedFM := fm.FormatFrontMatter(frontMatter)
 		content = formattedFM + markdownBody
+		a.logInfo(fmt.Sprintf("SaveFile: formatted frontmatter for %s (title: %q, tags: %q, doc_id: %q, body length: %d)", path, frontMatter.Title, frontMatter.Tags, frontMatter.DocID, len(markdownBody)))
+	} else {
+		// No frontmatter, use content as-is
+		content = contentWithDocID
+		a.logInfo(fmt.Sprintf("SaveFile: no frontmatter for %s, using content as-is (length: %d)", path, len(content)))
 	}
 
 	// Detect conflict before saving
+	// IMPORTANT: Use the content from frontend (with user edits) as LocalContent
+	// We need to temporarily write it to disk so DetectConflict can read it
 	if a.vcs != nil {
 		relPath, err := filepath.Rel(a.dataDir, absPath)
 		if err == nil {
-			conflict, err := gitvcs.DetectConflict(a.vcs, a.dataDir, relPath)
-			if err != nil {
-				a.logError(fmt.Sprintf("Failed to detect conflict: %v", err))
-			} else if conflict != nil {
-				// Create backup before handling conflict
-				if err := a.createBackup(path, content); err != nil {
-					a.logError(fmt.Sprintf("Failed to create backup: %v", err))
-				}
-
-				// Try auto-merge for auto-resolvable or warning conflicts
-				if conflict.Severity == gitvcs.ConflictAutoResolvable || conflict.Severity == gitvcs.ConflictWarning {
-					merged, severity, err := gitvcs.AutoMergeMarkdown(conflict.BaseContent, conflict.LocalContent, conflict.RemoteContent)
-					if err == nil && severity != gitvcs.ConflictCritical {
-						// Auto-merge successful - use merged content
-						content = merged
-						runtime.EventsEmit(a.ctx, "auto-merge-success", map[string]interface{}{
-							"path":        path,
-							"merged_hash": gitvcs.CalculateHash(merged),
-						})
-						a.logInfo(fmt.Sprintf("Auto-merged conflict for file: %s", path))
-					} else {
-						// Auto-merge failed or still has conflicts - notify user
-						runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
-						if conflict.Severity == gitvcs.ConflictCritical {
-							return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
-						}
+			// Temporarily write the frontend content to disk for conflict detection
+			// This ensures DetectConflict uses the user's edited content, not the old file content
+			tempContent := content
+			if err := os.WriteFile(absPath, []byte(tempContent), 0644); err != nil {
+				a.logError(fmt.Sprintf("Failed to write temp content for conflict detection: %v", err))
+			} else {
+				// Now detect conflict - it will use the content we just wrote
+				conflict, err := gitvcs.DetectConflict(a.vcs, a.dataDir, relPath)
+				if err != nil {
+					a.logError(fmt.Sprintf("Failed to detect conflict: %v", err))
+				} else if conflict != nil {
+					// Create backup before handling conflict
+					if err := a.createBackup(path, content); err != nil {
+						a.logError(fmt.Sprintf("Failed to create backup: %v", err))
 					}
-				} else {
-					// Critical conflict - require manual resolution
-					runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
-					return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
+
+					// Try auto-merge for auto-resolvable or warning conflicts
+					// Use the frontend content as LocalContent (user's current edits)
+					if conflict.Severity == gitvcs.ConflictAutoResolvable || conflict.Severity == gitvcs.ConflictWarning {
+						// Use content (from frontend) as LocalContent instead of conflict.LocalContent
+						merged, severity, err := gitvcs.AutoMergeMarkdown(conflict.BaseContent, content, conflict.RemoteContent)
+						if err == nil && severity != gitvcs.ConflictCritical {
+							// Auto-merge successful - use merged content
+							content = merged
+							runtime.EventsEmit(a.ctx, "auto-merge-success", map[string]interface{}{
+								"path":        path,
+								"merged_hash": gitvcs.CalculateHash(merged),
+							})
+							a.logInfo(fmt.Sprintf("Auto-merged conflict for file: %s (using frontend content as LocalContent)", path))
+						} else {
+							// Auto-merge failed or still has conflicts - notify user
+							runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
+							if conflict.Severity == gitvcs.ConflictCritical {
+								return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
+							}
+						}
+					} else {
+						// Critical conflict - require manual resolution
+						runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
+						return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
+					}
 				}
 			}
 		}
 	}
 
 	// Save file
-	err := os.WriteFile(absPath, []byte(content), 0o644)
-	if err != nil {
+	a.logInfo(fmt.Sprintf("SaveFile: writing file %s (content length: %d)", absPath, len(content)))
+	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
+		a.logError(fmt.Sprintf("SaveFile: failed to write file %s: %v", absPath, err))
 		return fmt.Errorf("failed to write file: %v", err)
 	}
+	a.logInfo(fmt.Sprintf("SaveFile: successfully wrote file %s", absPath))
 
 	// Calculate new hash
 	newHash := gitvcs.CalculateHash(content)
+	oldHashShort := ""
+	newHashShort := ""
+	if len(oldHash) >= 8 {
+		oldHashShort = oldHash[:8]
+	}
+	if len(newHash) >= 8 {
+		newHashShort = newHash[:8]
+	}
+	a.logInfo(fmt.Sprintf("SaveFile: oldHash=%s, newHash=%s", oldHashShort, newHashShort))
 
 	// Commit to Git if content changed
 	if a.vcs != nil && oldHash != newHash {
@@ -799,6 +881,45 @@ func (a *App) createBackup(path, content string) error {
 
 	a.logInfo(fmt.Sprintf("Created backup: %s", backupPath))
 	return nil
+}
+
+// ensureDocID ensures that the content has a doc_id in frontmatter, generating one if needed
+// Returns the content with doc_id and the doc_id value
+func (a *App) ensureDocID(content string) (string, string, error) {
+	frontMatter, body := fm.ParseFrontMatter(content)
+
+	var docID string
+	if frontMatter != nil {
+		docID = frontMatter.DocID
+	}
+
+	// If doc_id doesn't exist, generate one
+	if docID == "" {
+		// Ensure .mdsys directory exists
+		mdsysDir := filepath.Join(a.dataDir, ".mdsys")
+		if err := os.MkdirAll(mdsysDir, 0755); err != nil {
+			return "", "", fmt.Errorf("failed to create .mdsys directory: %v", err)
+		}
+
+		seqFile := filepath.Join(mdsysDir, "doc_seq.json")
+		newDocID, err := docid.GenerateDocID(seqFile)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to generate doc_id: %v", err)
+		}
+		docID = newDocID
+
+		// Create frontmatter if it doesn't exist
+		if frontMatter == nil {
+			frontMatter = &fm.FrontMatter{}
+		}
+		frontMatter.DocID = docID
+
+		// Reconstruct content with new frontmatter
+		formattedFM := fm.FormatFrontMatter(frontMatter)
+		content = formattedFM + body
+	}
+
+	return content, docID, nil
 }
 
 // ResolveConflict resolves a file conflict using the specified strategy
@@ -1884,19 +2005,37 @@ func (a *App) GetGraphData() (*GraphData, error) {
 
 		var fileHash string
 		var fileContent string
+		var frontMatter *fm.FrontMatter
 
 		// ファイル内容を読み込み
 		var tags []string
 		var markdownBody string
 		if content, err := os.ReadFile(filepath.Join(a.dataDir, filePath)); err == nil {
 			fileContent = string(content)
+
+			// Ensure doc_id exists (lazy assignment)
+			contentWithDocID, docID, err := a.ensureDocID(fileContent)
+			if err != nil {
+				a.logError(fmt.Sprintf("Failed to ensure doc_id for %s: %v", filePath, err))
+				// Continue with original content if doc_id generation fails
+			} else if docID != "" && contentWithDocID != fileContent {
+				// Save the updated content with doc_id if it was added
+				absPath := filepath.Join(a.dataDir, filePath)
+				if err := os.WriteFile(absPath, []byte(contentWithDocID), 0644); err != nil {
+					a.logError(fmt.Sprintf("Failed to save file with doc_id: %v", err))
+				} else {
+					fileContent = contentWithDocID
+					a.logInfo(fmt.Sprintf("Assigned doc_id to file: %s -> %s", filePath, docID))
+				}
+			}
+
 			title = a.extractTitleFromContent(fileContent, title)
 			// タグを抽出
 			tags = fm.ExtractTags(fileContent)
 			// デバッグ: フロントマターのパース結果を確認
 			frontMatter, body := fm.ParseFrontMatter(fileContent)
 			if frontMatter != nil {
-				a.logInfo(fmt.Sprintf("File %s: frontmatter parsed - title: %q, tags: %q, theme: %q", filePath, frontMatter.Title, frontMatter.Tags, frontMatter.Theme))
+				a.logInfo(fmt.Sprintf("File %s: frontmatter parsed - title: %q, tags: %q, theme: %q, doc_id: %q", filePath, frontMatter.Title, frontMatter.Tags, frontMatter.Theme, frontMatter.DocID))
 				a.logInfo(fmt.Sprintf("File %s: extracted tags: %v", filePath, tags))
 			} else {
 				a.logInfo(fmt.Sprintf("File %s: no frontmatter found", filePath))
@@ -1909,9 +2048,16 @@ func (a *App) GetGraphData() (*GraphData, error) {
 			fileHash = gitvcs.CalculateHash(fileContent)
 		}
 
+		// doc_idを取得
+		var docID string
+		if frontMatter != nil {
+			docID = frontMatter.DocID
+		}
+
 		// ノードを作成
 		nodes[nodeID] = &GraphNode{
 			ID:     nodeID,
+			DocID:  docID,
 			Label:  title,
 			Kind:   "note",
 			Exists: true,
@@ -1951,6 +2097,21 @@ func (a *App) GetGraphData() (*GraphData, error) {
 					// エッジIDを生成
 					edgeID := fmt.Sprintf("e_%s_%s", strings.ReplaceAll(nodeID, "/", "_"), strings.ReplaceAll(targetID, "/", "_"))
 
+					// ターゲットノードのdoc_idを取得
+					var targetDocID string
+					if targetNode, exists := nodes[targetID]; exists {
+						targetDocID = targetNode.DocID
+					} else if strings.HasPrefix(targetID, "doc:/") {
+						// ターゲットファイルがまだ処理されていない場合、ファイルを読み込んでdoc_idを取得
+						targetPath := strings.TrimPrefix(targetID, "doc:/")
+						targetFilePath := filepath.Join(a.dataDir, "content", targetPath)
+						if targetContent, err := os.ReadFile(targetFilePath); err == nil {
+							if targetFM, _ := fm.ParseFrontMatter(string(targetContent)); targetFM != nil {
+								targetDocID = targetFM.DocID
+							}
+						}
+					}
+
 					// 既存のエッジがあるかチェックして、ターゲットの更新状況を判定
 					targetUpdated := false
 					storedTargetHash := currentTargetHash // デフォルトは現在のハッシュ
@@ -1970,11 +2131,14 @@ func (a *App) GetGraphData() (*GraphData, error) {
 						ID:            edgeID,
 						Source:        nodeID,
 						Target:        targetID,
+						SourceDocID:   docID,
+						TargetDocID:   targetDocID,
 						Kind:          link.Kind,
 						Weight:        edgeCounts[edgeKey],
 						SourceHash:    fileHash,
 						TargetHash:    storedTargetHash, // 以前のハッシュを保持（初回は現在のハッシュ）
 						TargetUpdated: targetUpdated,
+						ToVersionMode: "latest", // Default to latest for now
 					}
 					sourceHashShort := ""
 					if len(fileHash) >= 8 {
@@ -2204,6 +2368,40 @@ func (a *App) GetGraphData() (*GraphData, error) {
 				a.logInfo(fmt.Sprintf("Saved %d link records to %s", len(edgeList), linkInfoPath))
 			}
 		}
+	}
+
+	// doc_idからパスへのマッピングを保存
+	docMapPath := filepath.Join(a.dataDir, ".mdsys", "doc_map.json")
+	docMap := make(map[string]string)
+
+	// 既存のマッピングを読み込む
+	if data, err := os.ReadFile(docMapPath); err == nil {
+		if err := json.Unmarshal(data, &docMap); err != nil {
+			a.logError(fmt.Sprintf("Failed to parse doc_map.json: %v", err))
+			docMap = make(map[string]string)
+		}
+	}
+
+	// 各ノードのdoc_idとパスのマッピングを更新
+	for _, node := range nodeList {
+		if node.DocID != "" && strings.HasPrefix(node.ID, "doc:/") {
+			path := strings.TrimPrefix(node.ID, "doc:/")
+			contentPath := filepath.Join("content", path)
+			docMap[node.DocID] = contentPath
+		}
+	}
+
+	// マッピングを保存
+	if docMapJSON, err := json.MarshalIndent(docMap, "", "  "); err == nil {
+		if err := os.MkdirAll(filepath.Dir(docMapPath), 0755); err == nil {
+			if err := os.WriteFile(docMapPath, docMapJSON, 0644); err == nil {
+				a.logInfo(fmt.Sprintf("Saved %d doc_id mappings to %s", len(docMap), docMapPath))
+			} else {
+				a.logError(fmt.Sprintf("Failed to write doc_map.json: %v", err))
+			}
+		}
+	} else {
+		a.logError(fmt.Sprintf("Failed to marshal doc_map: %v", err))
 	}
 
 	// デバッグ用：ノードIDとエッジの詳細をログ出力
@@ -2580,6 +2778,222 @@ type LinkInfo struct {
 // extractTitleFromContent extracts title from frontmatter
 func (a *App) extractTitleFromContent(content, defaultTitle string) string {
 	return fm.ExtractTitle(content, defaultTitle)
+}
+
+// RenameFile renames a markdown file and updates all references to it
+func (a *App) RenameFile(oldPath, newPath string) error {
+	// Validate paths
+	oldAbsPath, ok := a.resolveContentPath(oldPath)
+	if !ok {
+		return fmt.Errorf("invalid old path: %s", oldPath)
+	}
+
+	newAbsPath, ok := a.resolveContentPath(newPath)
+	if !ok {
+		return fmt.Errorf("invalid new path: %s", newPath)
+	}
+
+	// Check if old file exists
+	if _, err := os.Stat(oldAbsPath); os.IsNotExist(err) {
+		return fmt.Errorf("file does not exist: %s", oldPath)
+	}
+
+	// Check if new file already exists
+	if _, err := os.Stat(newAbsPath); err == nil {
+		return fmt.Errorf("target file already exists: %s", newPath)
+	}
+
+	// Read old file to get doc_id
+	oldContent, err := os.ReadFile(oldAbsPath)
+	if err != nil {
+		return fmt.Errorf("failed to read old file: %v", err)
+	}
+
+	frontMatter, _ := fm.ParseFrontMatter(string(oldContent))
+	if frontMatter == nil || frontMatter.DocID == "" {
+		return fmt.Errorf("file does not have doc_id: %s", oldPath)
+	}
+
+	docID := frontMatter.DocID
+	a.logInfo(fmt.Sprintf("Renaming file %s -> %s (doc_id: %s)", oldPath, newPath, docID))
+
+	// Ensure new directory exists
+	if err := os.MkdirAll(filepath.Dir(newAbsPath), 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %v", err)
+	}
+
+	// Move file
+	if err := os.Rename(oldAbsPath, newAbsPath); err != nil {
+		return fmt.Errorf("failed to rename file: %v", err)
+	}
+
+	// Update doc_map.json
+	docMapPath := filepath.Join(a.dataDir, ".mdsys", "doc_map.json")
+	docMap := make(map[string]string)
+
+	// Read existing mapping
+	if data, err := os.ReadFile(docMapPath); err == nil {
+		if err := json.Unmarshal(data, &docMap); err != nil {
+			a.logError(fmt.Sprintf("Failed to parse doc_map.json: %v", err))
+			docMap = make(map[string]string)
+		}
+	}
+
+	// Update mapping
+	oldContentPath := filepath.ToSlash(oldPath)
+	newContentPath := filepath.ToSlash(newPath)
+	docMap[docID] = newContentPath
+	a.logInfo(fmt.Sprintf("Updated doc_map: %s -> %s", docID, newContentPath))
+
+	// Save mapping
+	if docMapJSON, err := json.MarshalIndent(docMap, "", "  "); err == nil {
+		if err := os.WriteFile(docMapPath, docMapJSON, 0644); err != nil {
+			a.logError(fmt.Sprintf("Failed to write doc_map.json: %v", err))
+		}
+	}
+
+	// Find all files that reference the old path
+	contentDir := filepath.Join(a.dataDir, "content")
+	var referencingFiles []string
+
+	err = filepath.Walk(contentDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || !strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
+			return nil
+		}
+
+		// Skip the renamed file itself
+		if p == newAbsPath {
+			return nil
+		}
+
+		content, err := os.ReadFile(p)
+		if err != nil {
+			return nil // Skip files we can't read
+		}
+
+		// Check if content references old path
+		contentStr := string(content)
+		oldPathBase := strings.TrimSuffix(oldPath, ".md")
+		oldPathBaseLower := strings.ToLower(oldPathBase)
+
+		// Check for wiki links and markdown links
+		wikiLinkRegex := regexp.MustCompile(`\[\[([^|\]]+)(?:\|([^\]]+))?\]\]`)
+		markdownLinkRegex := regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+
+		hasReference := false
+
+		// Check wiki links
+		matches := wikiLinkRegex.FindAllStringSubmatch(contentStr, -1)
+		for _, match := range matches {
+			if len(match) >= 2 {
+				title := strings.TrimSuffix(strings.ToLower(match[1]), ".md")
+				if title == oldPathBaseLower || title == strings.ToLower(oldPathBase) {
+					hasReference = true
+					break
+				}
+			}
+		}
+
+		// Check markdown links
+		if !hasReference {
+			matches = markdownLinkRegex.FindAllStringSubmatch(contentStr, -1)
+			for _, match := range matches {
+				if len(match) >= 3 {
+					url := match[2]
+					if strings.HasSuffix(strings.ToLower(url), ".md") {
+						urlBase := strings.TrimSuffix(strings.ToLower(url), ".md")
+						if urlBase == oldPathBaseLower ||
+							strings.HasSuffix(urlBase, "/"+oldPathBaseLower) ||
+							url == oldPath || url == oldContentPath {
+							hasReference = true
+							break
+						}
+					}
+				}
+			}
+		}
+
+		if hasReference {
+			relPath, err := filepath.Rel(a.dataDir, p)
+			if err == nil {
+				referencingFiles = append(referencingFiles, filepath.ToSlash(relPath))
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		a.logError(fmt.Sprintf("Error walking content directory: %v", err))
+	}
+
+	a.logInfo(fmt.Sprintf("Found %d files referencing %s", len(referencingFiles), oldPath))
+
+	// Update all referencing files
+	for _, refPath := range referencingFiles {
+		refAbsPath := filepath.Join(a.dataDir, refPath)
+		refContent, err := os.ReadFile(refAbsPath)
+		if err != nil {
+			a.logError(fmt.Sprintf("Failed to read referencing file %s: %v", refPath, err))
+			continue
+		}
+
+		// Replace links
+		updatedContent, err := markdown.ReplaceLinksInContent(string(refContent), oldPath, newPath)
+		if err != nil {
+			a.logError(fmt.Sprintf("Failed to replace links in %s: %v", refPath, err))
+			continue
+		}
+
+		// Save updated content
+		if err := os.WriteFile(refAbsPath, []byte(updatedContent), 0644); err != nil {
+			a.logError(fmt.Sprintf("Failed to save updated file %s: %v", refPath, err))
+			continue
+		}
+
+		a.logInfo(fmt.Sprintf("Updated references in %s", refPath))
+	}
+
+	// Rebuild index
+	if err := a.BuildSite(); err != nil {
+		a.logError(fmt.Sprintf("Failed to rebuild site: %v", err))
+	}
+
+	// Commit to Git if vcs is enabled
+	if a.vcs != nil {
+		// Commit the renamed file
+		relNewPath, err := filepath.Rel(a.dataDir, newAbsPath)
+		if err == nil {
+			commitMessage := fmt.Sprintf("Rename: %s -> %s", oldPath, newPath)
+			if err := a.vcs.CommitFile(relNewPath, commitMessage); err != nil {
+				a.logError(fmt.Sprintf("Failed to commit renamed file: %v", err))
+			}
+		}
+
+		// Commit referencing files
+		for _, refPath := range referencingFiles {
+			relRefPath, err := filepath.Rel(a.dataDir, filepath.Join(a.dataDir, refPath))
+			if err == nil {
+				commitMessage := fmt.Sprintf("Update references after rename: %s -> %s", oldPath, newPath)
+				if err := a.vcs.CommitFile(relRefPath, commitMessage); err != nil {
+					a.logError(fmt.Sprintf("Failed to commit updated reference: %v", err))
+				}
+			}
+		}
+	}
+
+	// Emit file changed event
+	runtime.EventsEmit(a.ctx, "file-renamed", map[string]interface{}{
+		"oldPath": oldPath,
+		"newPath": newPath,
+		"docId":   docID,
+	})
+
+	a.logInfo(fmt.Sprintf("Successfully renamed file %s -> %s", oldPath, newPath))
+	return nil
 }
 
 // extractLinks extracts various types of links from markdown content

@@ -1,4 +1,4 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS } from '../wailsjs/wailsjs/go/main/App';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS, RenameFile } from '../wailsjs/wailsjs/go/main/App';
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
@@ -183,7 +183,8 @@ const api = isBrowser ? mockFunctions : {
     StopRecording,
     IsRecording,
     SaveImageMetadata,
-    LogJS
+    LogJS,
+    RenameFile
 };
 
 // Logging helper function that writes to app.log via Go backend
@@ -549,6 +550,13 @@ function renderFileList() {
             console.log('File path:', file.path);
             loadFile(file.path);
         };
+
+        // Add right-click context menu for rename
+        a.oncontextmenu = (e) => {
+            e.preventDefault();
+            showRenameMenu(e, file);
+        };
+
         frag.appendChild(a);
     }
     tree.appendChild(frag);
