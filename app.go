@@ -1229,23 +1229,31 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 					a.logInfo(fmt.Sprintf("PreviewMarkdown: trying %d patterns to match link", len(linkPatterns)))
 
 					// Match <a> tags that link to this target and add warning
+					// Use a map to track which links already have warnings to avoid duplicates
+					warnedLinks := make(map[string]bool)
 					for _, pattern := range linkPatterns {
 						// Match <a> tag with href containing the pattern, but not already containing the warning
-						linkRegex := regexp.MustCompile(`(<a[^>]+href=["'][^"']*` + pattern + `[^"']*["'][^>]*>.*?</a>)`)
-						matchesBefore := strings.Count(html, pattern)
+						linkRegex := regexp.MustCompile(`(<a[^>]+href=["']([^"']*` + pattern + `[^"']*)["'][^>]*>.*?</a>)`)
 						html = linkRegex.ReplaceAllStringFunc(html, func(match string) string {
 							// Check if warning already added to this link
 							if strings.Contains(match, "version-warning") {
 								return match
+							}
+							// Extract href to check if we've already warned for this link
+							hrefMatch := regexp.MustCompile(`href=["']([^"']+)["']`)
+							if hrefSubmatch := hrefMatch.FindStringSubmatch(match); len(hrefSubmatch) > 1 {
+								href := hrefSubmatch[1]
+								if warnedLinks[href] {
+									// Already warned for this href, skip
+									return match
+								}
+								warnedLinks[href] = true
 							}
 							// Add warning after the closing </a> tag
 							warningCount++
 							a.logInfo(fmt.Sprintf("PreviewMarkdown: added warning to link matching pattern: %s", pattern))
 							return match + warningHTML
 						})
-						if matchesBefore > 0 {
-							a.logInfo(fmt.Sprintf("PreviewMarkdown: pattern %s matched %d times in HTML", pattern, matchesBefore))
-						}
 					}
 				}
 			}
