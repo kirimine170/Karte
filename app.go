@@ -1131,6 +1131,134 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 		return match
 	})
 
+	// Check for pinned version references and add warnings
+	// Extract doc_id from frontmatter
+	sourceDocID := ""
+	if frontMatter != nil {
+		sourceDocID = frontMatter.DocID
+	}
+	a.logInfo(fmt.Sprintf("PreviewMarkdown: sourceDocID=%s", sourceDocID))
+
+	// If we have a doc_id, check for pinned version references
+	if sourceDocID != "" {
+		// Get graph data to find edges
+		graphData, err := a.GetGraphData()
+		if err != nil {
+			a.logError(fmt.Sprintf("PreviewMarkdown: failed to get graph data: %v", err))
+		} else {
+			a.logInfo(fmt.Sprintf("PreviewMarkdown: got graph data with %d edges", len(graphData.Edges)))
+			// Get the actual file path from doc_id using doc_map.json
+			actualFilePath := ""
+			docMapPath := filepath.Join(a.dataDir, ".mdsys", "doc_map.json")
+			if docMapData, err := os.ReadFile(docMapPath); err == nil {
+				var docMap map[string]string
+				if err := json.Unmarshal(docMapData, &docMap); err == nil {
+					if path, exists := docMap[sourceDocID]; exists {
+						actualFilePath = path
+						a.logInfo(fmt.Sprintf("PreviewMarkdown: found file path for doc_id %s: %s", sourceDocID, actualFilePath))
+					} else {
+						a.logInfo(fmt.Sprintf("PreviewMarkdown: no file path found for doc_id %s in doc_map", sourceDocID))
+					}
+				}
+			}
+
+			// Extract links from markdown body to build a mapping
+			links := a.extractLinks(markdownBody)
+			a.logInfo(fmt.Sprintf("PreviewMarkdown: extracted %d links from markdown", len(links)))
+			// Create a map of target node IDs to original link targets for quick lookup
+			targetIDToLinkTarget := make(map[string]string) // targetID -> original link target (e.g., "file.md")
+			// Use actual file path if available, otherwise use content root
+			currentFilePath := actualFilePath
+			if currentFilePath == "" {
+				currentFilePath = "content/"
+			}
+			for _, link := range links {
+				if link.Kind == "wikilink" || link.Kind == "markdown_link" {
+					// Resolve link target using the actual file path
+					targetID := a.resolveLinkTarget(link, currentFilePath)
+					if targetID != "" {
+						targetIDToLinkTarget[targetID] = link.Target
+						a.logInfo(fmt.Sprintf("PreviewMarkdown: mapped link %s -> targetID %s (from file %s)", link.Target, targetID, currentFilePath))
+					} else {
+						a.logInfo(fmt.Sprintf("PreviewMarkdown: failed to resolve link %s from file %s", link.Target, currentFilePath))
+					}
+				}
+			}
+
+			// Find edges that reference pinned versions and have been updated
+			warningHTML := `<span class="version-warning" style="color: #ff6b6b; font-size: 0.9em; margin-left: 0.5em;">⚠️ 古いバージョンを参照しています</span>`
+			warningCount := 0
+			for _, edge := range graphData.Edges {
+				a.logInfo(fmt.Sprintf("PreviewMarkdown: checking edge: SourceDocID=%s, ToVersionMode=%s, TargetUpdated=%v", edge.SourceDocID, edge.ToVersionMode, edge.TargetUpdated))
+				if edge.SourceDocID == sourceDocID && edge.ToVersionMode == "pinned" && edge.TargetUpdated {
+					a.logInfo(fmt.Sprintf("PreviewMarkdown: found pinned updated edge: %s -> %s", edge.Source, edge.Target))
+					// This link references a pinned version that has been updated
+					// Find the corresponding HTML link and add warning
+					targetPath := strings.TrimPrefix(edge.Target, "doc:/")
+
+					// Get the original link target from the markdown
+					originalLinkTarget, hasLink := targetIDToLinkTarget[edge.Target]
+					if hasLink {
+						a.logInfo(fmt.Sprintf("PreviewMarkdown: found original link target: %s", originalLinkTarget))
+					} else {
+						a.logInfo(fmt.Sprintf("PreviewMarkdown: no original link target found for %s", edge.Target))
+					}
+
+					// Build patterns to match the href attribute in HTML
+					// The href might be the original link target, or a resolved path
+					linkPatterns := []string{}
+					if hasLink {
+						// Add the original link target (e.g., "file.md" or "../file.md")
+						linkPatterns = append(linkPatterns, regexp.QuoteMeta(originalLinkTarget))
+						// Also try with .html extension
+						if strings.HasSuffix(originalLinkTarget, ".md") {
+							linkPatterns = append(linkPatterns, regexp.QuoteMeta(strings.TrimSuffix(originalLinkTarget, ".md")+".html"))
+						}
+					}
+					// Add the resolved target path
+					linkPatterns = append(linkPatterns, regexp.QuoteMeta(targetPath))
+					if strings.HasSuffix(targetPath, ".md") {
+						linkPatterns = append(linkPatterns, regexp.QuoteMeta(strings.TrimSuffix(targetPath, ".md")+".html"))
+					}
+					// Also try with leading slash
+					linkPatterns = append(linkPatterns, regexp.QuoteMeta("/"+targetPath))
+					if strings.HasSuffix(targetPath, ".md") {
+						linkPatterns = append(linkPatterns, regexp.QuoteMeta("/"+strings.TrimSuffix(targetPath, ".md")+".html"))
+					}
+
+					a.logInfo(fmt.Sprintf("PreviewMarkdown: trying %d patterns to match link", len(linkPatterns)))
+
+					// Match <a> tags that link to this target and add warning
+					for _, pattern := range linkPatterns {
+						// Match <a> tag with href containing the pattern, but not already containing the warning
+						linkRegex := regexp.MustCompile(`(<a[^>]+href=["'][^"']*` + pattern + `[^"']*["'][^>]*>.*?</a>)`)
+						matchesBefore := strings.Count(html, pattern)
+						html = linkRegex.ReplaceAllStringFunc(html, func(match string) string {
+							// Check if warning already added to this link
+							if strings.Contains(match, "version-warning") {
+								return match
+							}
+							// Add warning after the closing </a> tag
+							warningCount++
+							a.logInfo(fmt.Sprintf("PreviewMarkdown: added warning to link matching pattern: %s", pattern))
+							return match + warningHTML
+						})
+						if matchesBefore > 0 {
+							a.logInfo(fmt.Sprintf("PreviewMarkdown: pattern %s matched %d times in HTML", pattern, matchesBefore))
+						}
+					}
+				}
+			}
+			if warningCount > 0 {
+				a.logInfo(fmt.Sprintf("PreviewMarkdown: added %d warnings total", warningCount))
+			} else {
+				a.logInfo("PreviewMarkdown: no warnings added (no matching edges or links)")
+			}
+		}
+	} else {
+		a.logInfo("PreviewMarkdown: no sourceDocID, skipping version warning check")
+	}
+
 	// Debug: log a sample of the generated HTML to check for KaTeX processing
 	if strings.Contains(html, "katex-inline") || strings.Contains(html, "katex-block") {
 		// Extract a sample of KaTeX content
@@ -2006,6 +2134,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 		var fileHash string
 		var fileContent string
 		var frontMatter *fm.FrontMatter
+		var docIDFromEnsure string // ensureDocIDで取得したdocIDを保持
 
 		// ファイル内容を読み込み
 		var tags []string
@@ -2018,14 +2147,17 @@ func (a *App) GetGraphData() (*GraphData, error) {
 			if err != nil {
 				a.logError(fmt.Sprintf("Failed to ensure doc_id for %s: %v", filePath, err))
 				// Continue with original content if doc_id generation fails
-			} else if docID != "" && contentWithDocID != fileContent {
-				// Save the updated content with doc_id if it was added
-				absPath := filepath.Join(a.dataDir, filePath)
-				if err := os.WriteFile(absPath, []byte(contentWithDocID), 0644); err != nil {
-					a.logError(fmt.Sprintf("Failed to save file with doc_id: %v", err))
-				} else {
-					fileContent = contentWithDocID
-					a.logInfo(fmt.Sprintf("Assigned doc_id to file: %s -> %s", filePath, docID))
+			} else {
+				docIDFromEnsure = docID // ensureDocIDで取得したdocIDを保持
+				if docID != "" && contentWithDocID != fileContent {
+					// Save the updated content with doc_id if it was added
+					absPath := filepath.Join(a.dataDir, filePath)
+					if err := os.WriteFile(absPath, []byte(contentWithDocID), 0644); err != nil {
+						a.logError(fmt.Sprintf("Failed to save file with doc_id: %v", err))
+					} else {
+						fileContent = contentWithDocID
+						a.logInfo(fmt.Sprintf("Assigned doc_id to file: %s -> %s", filePath, docID))
+					}
 				}
 			}
 
@@ -2048,10 +2180,13 @@ func (a *App) GetGraphData() (*GraphData, error) {
 			fileHash = gitvcs.CalculateHash(fileContent)
 		}
 
-		// doc_idを取得
+		// doc_idを取得（frontMatterから取得、なければensureDocIDで取得したdocIDを使用）
 		var docID string
-		if frontMatter != nil {
+		if frontMatter != nil && frontMatter.DocID != "" {
 			docID = frontMatter.DocID
+		} else if docIDFromEnsure != "" {
+			// frontMatterにdocIDがない場合、ensureDocIDで取得したdocIDを使用
+			docID = docIDFromEnsure
 		}
 
 		// ノードを作成
@@ -2127,6 +2262,15 @@ func (a *App) GetGraphData() (*GraphData, error) {
 					}
 
 					// エッジを作成または更新
+					// リンク作成時は常にpinnedバージョンとして記録（リンク作成時のターゲットのバージョンを固定）
+					toVersionMode := "pinned"
+					toVersionID := storedTargetHash // リンク作成時のターゲットのハッシュをバージョンIDとして保存
+					if toVersionID == "" {
+						// 初回リンク作成時は現在のハッシュを使用
+						toVersionID = currentTargetHash
+						toVersionMode = "pinned"
+					}
+
 					edges[edgeID] = &GraphEdge{
 						ID:            edgeID,
 						Source:        nodeID,
@@ -2138,8 +2282,10 @@ func (a *App) GetGraphData() (*GraphData, error) {
 						SourceHash:    fileHash,
 						TargetHash:    storedTargetHash, // 以前のハッシュを保持（初回は現在のハッシュ）
 						TargetUpdated: targetUpdated,
-						ToVersionMode: "latest", // Default to latest for now
+						ToVersionMode: toVersionMode,
+						ToVersionID:   toVersionID,
 					}
+					a.logInfo(fmt.Sprintf("    Created edge with SourceDocID=%s, TargetDocID=%s, ToVersionMode=%s, TargetUpdated=%v", docID, targetDocID, toVersionMode, targetUpdated))
 					sourceHashShort := ""
 					if len(fileHash) >= 8 {
 						sourceHashShort = fileHash[:8]

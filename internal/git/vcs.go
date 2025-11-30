@@ -233,3 +233,63 @@ func (v *VCS) GetLatestCommitHash() (string, error) {
 
 	return ref.Hash().String(), nil
 }
+
+// GetFileByContentHash finds and returns the file content that matches the given content hash
+// It searches through the commit history to find the version of the file with the matching hash
+func (v *VCS) GetFileByContentHash(relativePath, targetHash string) (string, error) {
+	if v.repo == nil {
+		return "", fmt.Errorf("repository not initialized")
+	}
+
+	if targetHash == "" {
+		return "", fmt.Errorf("target hash is empty")
+	}
+
+	// Get HEAD commit to start searching from
+	ref, err := v.repo.Head()
+	if err != nil {
+		return "", fmt.Errorf("failed to get HEAD: %v", err)
+	}
+
+	// Iterate through commit history
+	cIter, err := v.repo.Log(&git.LogOptions{From: ref.Hash()})
+	if err != nil {
+		return "", fmt.Errorf("failed to get commit log: %v", err)
+	}
+	defer cIter.Close()
+
+	// Search through commits (from newest to oldest)
+	for {
+		c, err := cIter.Next()
+		if err != nil {
+			// End of iteration or error
+			break
+		}
+
+		// Get file from this commit
+		tree, err := c.Tree()
+		if err != nil {
+			continue // Skip this commit if tree can't be read
+		}
+
+		file, err := tree.File(relativePath)
+		if err != nil {
+			continue // File doesn't exist in this commit, continue
+		}
+
+		content, err := file.Contents()
+		if err != nil {
+			continue // Can't read content, continue
+		}
+
+		// Calculate hash of this version
+		contentHash := CalculateHash(content)
+		if contentHash == targetHash {
+			// Found matching version, return it
+			return content, nil
+		}
+	}
+
+	// No match found
+	return "", fmt.Errorf("file version with hash %s not found in commit history", targetHash)
+}
