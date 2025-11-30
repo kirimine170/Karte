@@ -30,6 +30,7 @@ import (
 	pdfexport "karte/internal/pdf"
 	"karte/internal/site"
 	syncpkg "karte/internal/sync"
+	"karte/internal/webpchunk"
 
 	"github.com/chai2010/webp"
 	"github.com/go-git/go-git/v5"
@@ -572,6 +573,7 @@ func (a *App) GetImageList() []ImageItem {
 }
 
 // GetImageMetadata returns the YAML metadata associated with the provided image.
+// If metadata file doesn't exist, it reads tags from WebP chunk and generates metadata.
 func (a *App) GetImageMetadata(imagePath string) (string, error) {
 	relImagePath, _, err := a.resolveImagePath(imagePath)
 	if err != nil {
@@ -580,17 +582,96 @@ func (a *App) GetImageMetadata(imagePath string) (string, error) {
 	metaRelPath := metadataPathFromImage(relImagePath)
 	metaAbsPath := filepath.Join(a.dataDir, filepath.FromSlash(metaRelPath))
 
-	if _, err := os.Stat(metaAbsPath); os.IsNotExist(err) {
-		return "{}\n", nil
-	} else if err != nil {
-		return "", fmt.Errorf("stat metadata: %w", err)
+	var metadataContent string
+	var metadataMap map[string]interface{}
+
+	// Try to read metadata file
+	if _, err := os.Stat(metaAbsPath); err == nil {
+		data, err := os.ReadFile(metaAbsPath)
+		if err != nil {
+			return "", fmt.Errorf("read metadata: %w", err)
+		}
+		metadataContent = string(data)
+
+		// Parse metadata to map
+		var validation interface{}
+		if yamlErr := yaml.Unmarshal(data, &validation); yamlErr == nil {
+			if mapVal, ok := validation.(map[string]interface{}); ok {
+				metadataMap = mapVal
+			} else {
+				metadataMap = make(map[string]interface{})
+			}
+		} else if jsonErr := json.Unmarshal(data, &validation); jsonErr == nil {
+			if mapVal, ok := validation.(map[string]interface{}); ok {
+				metadataMap = mapVal
+			} else {
+				metadataMap = make(map[string]interface{})
+			}
+		} else {
+			metadataMap = make(map[string]interface{})
+		}
+	} else {
+		// Metadata file doesn't exist, create empty map
+		metadataMap = make(map[string]interface{})
+		metadataContent = "{}\n"
 	}
 
-	data, err := os.ReadFile(metaAbsPath)
-	if err != nil {
-		return "", fmt.Errorf("read metadata: %w", err)
+	// Read tags from WebP chunk if it's a WebP file
+	imageAbsPath := filepath.Join(a.dataDir, filepath.FromSlash(relImagePath))
+	if strings.ToLower(filepath.Ext(relImagePath)) == ".webp" {
+		webpTags, err := webpchunk.ReadTagsFromWebP(imageAbsPath)
+		if err != nil {
+			// Log error but continue (metadata file may still have tags)
+			a.logError(fmt.Sprintf("Failed to read tags from WebP chunk: %v", err))
+		} else if len(webpTags) > 0 {
+			// Merge WebP tags with existing metadata tags
+			existingTags := a.extractTagsFromMetadata(metadataMap)
+			// Combine and deduplicate
+			tagMap := make(map[string]bool)
+			for _, tag := range existingTags {
+				tagMap[tag] = true
+			}
+			for _, tag := range webpTags {
+				tagMap[tag] = true
+			}
+			combinedTags := make([]string, 0, len(tagMap))
+			for tag := range tagMap {
+				combinedTags = append(combinedTags, tag)
+			}
+			// Update metadata map with combined tags
+			if len(combinedTags) > 0 {
+				metadataMap["tags"] = strings.Join(combinedTags, ", ")
+			}
+
+			// If metadata file didn't exist, generate new metadata with tags
+			if _, err := os.Stat(metaAbsPath); os.IsNotExist(err) {
+				// Generate YAML from map
+				yamlBytes, err := yaml.Marshal(metadataMap)
+				if err == nil {
+					metadataContent = string(yamlBytes)
+				}
+			} else {
+				// Update existing metadata content with tags
+				// Try to preserve original format (YAML or JSON)
+				if strings.TrimSpace(metadataContent) == "{}" || strings.TrimSpace(metadataContent) == "" {
+					// Empty metadata, generate YAML
+					yamlBytes, err := yaml.Marshal(metadataMap)
+					if err == nil {
+						metadataContent = string(yamlBytes)
+					}
+				} else {
+					// Try to update tags in existing content
+					// For simplicity, regenerate from map
+					yamlBytes, err := yaml.Marshal(metadataMap)
+					if err == nil {
+						metadataContent = string(yamlBytes)
+					}
+				}
+			}
+		}
 	}
-	return string(data), nil
+
+	return metadataContent, nil
 }
 
 // SaveImageMetadata writes YAML metadata for the image, validating the format beforehand.
@@ -608,9 +689,29 @@ func (a *App) SaveImageMetadata(imagePath, yamlContent string) (bool, error) {
 		yamlContent = "{}\n"
 	}
 
+	// Try to parse as YAML first, then JSON
 	var validation interface{}
-	if err := yaml.Unmarshal([]byte(yamlContent), &validation); err != nil {
-		return false, fmt.Errorf("invalid YAML: %w", err)
+	var metadataMap map[string]interface{}
+	yamlErr := yaml.Unmarshal([]byte(yamlContent), &validation)
+	if yamlErr != nil {
+		// Try JSON format
+		jsonErr := json.Unmarshal([]byte(yamlContent), &validation)
+		if jsonErr != nil {
+			return false, fmt.Errorf("invalid YAML/JSON: YAML error: %v, JSON error: %v", yamlErr, jsonErr)
+		}
+		// JSON parsed successfully, convert to map
+		if mapVal, ok := validation.(map[string]interface{}); ok {
+			metadataMap = mapVal
+		} else {
+			metadataMap = make(map[string]interface{})
+		}
+	} else {
+		// YAML parsed successfully
+		if mapVal, ok := validation.(map[string]interface{}); ok {
+			metadataMap = mapVal
+		} else {
+			metadataMap = make(map[string]interface{})
+		}
 	}
 
 	metaRelPath := metadataPathFromImage(relImagePath)
@@ -622,6 +723,19 @@ func (a *App) SaveImageMetadata(imagePath, yamlContent string) (bool, error) {
 
 	if err := os.WriteFile(metaAbsPath, []byte(yamlContent), 0o644); err != nil {
 		return false, fmt.Errorf("write metadata file: %w", err)
+	}
+
+	// Extract tags from metadata and save to WebP chunk
+	tags := a.extractTagsFromMetadata(metadataMap)
+	// Check if the image is a WebP file
+	imageAbsPath := filepath.Join(a.dataDir, filepath.FromSlash(relImagePath))
+	if strings.ToLower(filepath.Ext(relImagePath)) == ".webp" {
+		if err := webpchunk.WriteTagsToWebP(imageAbsPath, tags); err != nil {
+			// Log error but don't fail the operation (metadata file is already saved)
+			a.logError(fmt.Sprintf("Failed to write tags to WebP chunk: %v", err))
+		} else {
+			a.logInfo(fmt.Sprintf("Saved tags to WebP chunk: %v", tags))
+		}
 	}
 
 	a.logInfo(fmt.Sprintf("Saved image metadata: %s", metaRelPath))
@@ -1211,6 +1325,39 @@ func (a *App) resolveImagePath(imagePath string) (string, string, error) {
 func metadataPathFromImage(imageRelPath string) string {
 	ext := filepath.Ext(imageRelPath)
 	return strings.TrimSuffix(imageRelPath, ext) + ".yaml"
+}
+
+// extractTagsFromMetadata extracts tags from metadata map
+// Supports both string (comma-separated) and array formats
+func (a *App) extractTagsFromMetadata(metadataMap map[string]interface{}) []string {
+	if metadataMap == nil {
+		return []string{}
+	}
+
+	tagsValue, exists := metadataMap["tags"]
+	if !exists {
+		return []string{}
+	}
+
+	var tagsStr string
+	switch v := tagsValue.(type) {
+	case string:
+		tagsStr = v
+	case []interface{}:
+		// Convert array to comma-separated string
+		var tagStrs []string
+		for _, item := range v {
+			if str, ok := item.(string); ok {
+				tagStrs = append(tagStrs, str)
+			}
+		}
+		tagsStr = strings.Join(tagStrs, ",")
+	default:
+		return []string{}
+	}
+
+	// Normalize tags using frontmatter package
+	return fm.NormalizeTags(tagsStr)
 }
 
 // ImportAudioFile copies an audio file into karte_data/data/audio and triggers transcription.
@@ -2037,6 +2184,18 @@ func (a *App) GetGraphData() (*GraphData, error) {
 				path := strings.TrimPrefix(edge.Target, "img:/")
 				title := filepath.Base(path)
 
+				// Read tags from WebP file if it's a WebP image
+				var tags []string
+				imageAbsPath := filepath.Join(a.dataDir, filepath.FromSlash(path))
+				if strings.ToLower(filepath.Ext(path)) == ".webp" {
+					webpTags, err := webpchunk.ReadTagsFromWebP(imageAbsPath)
+					if err != nil {
+						a.logError(fmt.Sprintf("Failed to read tags from WebP chunk for %s: %v", path, err))
+					} else {
+						tags = webpTags
+					}
+				}
+
 				nodes[edge.Target] = &GraphNode{
 					ID:     edge.Target,
 					Label:  title,
@@ -2044,9 +2203,9 @@ func (a *App) GetGraphData() (*GraphData, error) {
 					Exists: true, // 画像は存在すると仮定
 					DegIn:  0,
 					DegOut: 0,
-					Tags:   []string{},
+					Tags:   tags,
 				}
-				a.logInfo(fmt.Sprintf("Created missing image node: %s", edge.Target))
+				a.logInfo(fmt.Sprintf("Created missing image node: %s (tags: %v)", edge.Target, tags))
 			}
 		}
 
@@ -2133,6 +2292,44 @@ func (a *App) GetGraphData() (*GraphData, error) {
 			edge.TargetHash = persistedEdge.TargetHash
 		}
 		// 新しいエッジの場合、現在のハッシュが既にedge.TargetHashに設定されている
+	}
+
+	// 画像ファイルを列挙して、画像ノードを作成または更新（タグを読み取る）
+	imageList := a.GetImageList()
+	for _, imageItem := range imageList {
+		imageNodeID := "img:/" + imageItem.Path
+		title := imageItem.Name
+
+		// Read tags from WebP file if it's a WebP image
+		var tags []string
+		imageAbsPath := filepath.Join(a.dataDir, filepath.FromSlash(imageItem.Path))
+		if strings.ToLower(filepath.Ext(imageItem.Path)) == ".webp" {
+			webpTags, err := webpchunk.ReadTagsFromWebP(imageAbsPath)
+			if err != nil {
+				a.logError(fmt.Sprintf("Failed to read tags from WebP chunk for %s: %v", imageItem.Path, err))
+			} else {
+				tags = webpTags
+			}
+		}
+
+		// Create or update image node
+		if existingNode, exists := nodes[imageNodeID]; exists {
+			// Update existing node with tags
+			existingNode.Tags = tags
+			a.logInfo(fmt.Sprintf("Updated image node tags: %s (tags: %v)", imageNodeID, tags))
+		} else {
+			// Create new image node
+			nodes[imageNodeID] = &GraphNode{
+				ID:     imageNodeID,
+				Label:  title,
+				Kind:   "asset:image",
+				Exists: true,
+				DegIn:  0,
+				DegOut: 0,
+				Tags:   tags,
+			}
+			a.logInfo(fmt.Sprintf("Created image node: %s (tags: %v)", imageNodeID, tags))
+		}
 	}
 
 	// スライスに変換
