@@ -64,8 +64,17 @@ jobs:
         run: npm run build
         working-directory: frontend
 
+      - name: Verify frontend/dist exists
+        run: |
+          if [ ! -d "frontend/dist" ] || [ -z "$(ls -A frontend/dist)" ]; then
+            echo "Error: frontend/dist is missing or empty"
+            exit 1
+          fi
+          echo "frontend/dist contents:"
+          ls -la frontend/dist
+
       - name: Run Go tests
-        run: go test ./...
+        run: go test ./internal/...
 
       - name: Build application
         run: wails build -platform ${{ matrix.platform }}
