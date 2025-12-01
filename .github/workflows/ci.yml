@@ -45,6 +45,15 @@ jobs:
         run: |
           ls -R
           ls -R frontend || true
+          - name: Verify frontend/dist exists
+          run: |
+          if [ ! -d "frontend/dist" ] || [ -z "$(ls -A frontend/dist)" ]; then
+          echo "Error: frontend/dist is missing or empty"
+          exit 1
+          fi
+          echo "frontend/dist contents:"
+          ls -la frontend/dist
+        
       - name: Generate Wails JS bindings
         run: wails generate module
         working-directory: .
@@ -64,14 +73,6 @@ jobs:
         run: npm run build
         working-directory: frontend
 
-      - name: Verify frontend/dist exists
-        run: |
-          if [ ! -d "frontend/dist" ] || [ -z "$(ls -A frontend/dist)" ]; then
-            echo "Error: frontend/dist is missing or empty"
-            exit 1
-          fi
-          echo "frontend/dist contents:"
-          ls -la frontend/dist
 
       - name: Run Go tests
         run: go test ./internal/...
