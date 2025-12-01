@@ -45,8 +45,8 @@ jobs:
         run: |
           ls -R
           ls -R frontend || true
-          - name: Verify frontend/dist exists
-          run: |
+      - name: Verify frontend/dist exists
+        run: |
           if [ ! -d "frontend/dist" ] || [ -z "$(ls -A frontend/dist)" ]; then
           echo "Error: frontend/dist is missing or empty"
           exit 1
