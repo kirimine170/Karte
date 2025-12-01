@@ -41,7 +41,10 @@ jobs:
 
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
-
+      - name: Debug dist contents
+        run: |
+          ls -R
+          ls -R frontend || true
       - name: Generate Wails JS bindings
         run: wails generate module
         working-directory: .
