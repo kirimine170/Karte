@@ -1,4 +1,8 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS, RenameFile, UpdateLinkToLatest } from '../wailsjs/wailsjs/go/main/App';
+import * as AppModule from '../wailsjs/wailsjs/go/main/App';
+const { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS } = AppModule;
+// RenameFile and UpdateLinkToLatest may not exist in generated bindings yet, so import them conditionally
+const RenameFile = AppModule.RenameFile || null;
+const UpdateLinkToLatest = AppModule.UpdateLinkToLatest || null;
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
@@ -153,6 +157,16 @@ const mockFunctions = {
 
     async LogJS(level, msg) {
         console.log(`[Mock LogJS] ${level}: ${msg}`);
+    },
+
+    async RenameFile(oldPath, newPath) {
+        console.log('Mock RenameFile called:', oldPath, '->', newPath);
+        return true;
+    },
+
+    async UpdateLinkToLatest(sourceDocID, targetDocID) {
+        console.log('Mock UpdateLinkToLatest called:', sourceDocID, targetDocID);
+        return true;
     }
 };
 
@@ -184,8 +198,8 @@ const api = isBrowser ? mockFunctions : {
     IsRecording,
     SaveImageMetadata,
     LogJS,
-    RenameFile,
-    UpdateLinkToLatest
+    RenameFile: RenameFile || (() => Promise.reject(new Error('RenameFile not available'))),
+    UpdateLinkToLatest: UpdateLinkToLatest || (() => Promise.reject(new Error('UpdateLinkToLatest not available')))
 };
 
 // Logging helper function that writes to app.log via Go backend
@@ -289,6 +303,12 @@ const filenameModal = document.getElementById('filenameModal');
 const filenameInput = document.getElementById('filenameInput');
 const createFileBtn = document.getElementById('createFileBtn');
 const cancelFileBtn = document.getElementById('cancelFileBtn');
+
+// Rename file modal elements
+const renameFileModal = document.getElementById('renameFileModal');
+const renameFileInput = document.getElementById('renameFileInput');
+const confirmRenameBtn = document.getElementById('confirmRenameBtn');
+const cancelRenameBtn = document.getElementById('cancelRenameBtn');
 
 // Custom CSS elements
 const customCssBtn = document.getElementById('customCssBtn');
@@ -561,12 +581,170 @@ function renderFileList() {
         // Add right-click context menu for rename
         a.oncontextmenu = (e) => {
             e.preventDefault();
+            console.log('Context menu (rename) on file:', file.path);
+            jsLog('INFO', 'rename: contextmenu-event', file.path);
             showRenameMenu(e, file);
         };
+
+        // Double-click to rename
+        a.ondblclick = (e) => {
+            e.preventDefault();
+            console.log('Double-click (rename) on file:', file.path);
+            jsLog('INFO', 'rename: dblclick-event', file.path);
+            showRenameMenu(e, file);
+        };
+
+        jsLog('DEBUG', 'rename: handlers-attached', file.path);
 
         frag.appendChild(a);
     }
     tree.appendChild(frag);
+}
+
+// ---- Rename (file name change) ----
+
+// Store the file to be renamed (used by modal handlers)
+let fileToRename = null;
+
+// Show rename file modal
+function showRenameFileModal(file) {
+    if (!file || !file.path) {
+        jsLog('ERROR', 'rename: invalid-file', 'file or file.path is missing');
+        console.error('showRenameFileModal: file or file.path is missing');
+        return;
+    }
+
+    fileToRename = file;
+    const oldPath = file.path; // e.g. "content/A.md"
+    const currentName = oldPath.replace(/^content\//, '');
+    // Remove .md extension for display (it will be added automatically)
+    const currentNameWithoutExt = currentName.replace(/\.md$/i, '');
+
+    jsLog('INFO', 'rename: show-modal', 'oldPath=' + oldPath, 'currentName=' + currentName, 'displayName=' + currentNameWithoutExt);
+    console.log('Showing rename modal for:', currentName, '(displaying without .md:', currentNameWithoutExt + ')');
+
+    if (renameFileInput) {
+        renameFileInput.value = currentNameWithoutExt;
+        renameFileModal.style.display = 'flex';
+        renameFileInput.focus();
+        renameFileInput.select(); // Select all text for easy editing
+    } else {
+        jsLog('ERROR', 'rename: modal-element-missing', 'renameFileInput not found');
+        console.error('renameFileInput element not found');
+    }
+}
+
+// Hide rename file modal
+function hideRenameFileModal() {
+    if (renameFileModal) {
+        renameFileModal.style.display = 'none';
+    }
+    fileToRename = null;
+}
+
+// Handle file rename from modal
+async function handleFileRename() {
+    if (!fileToRename || !fileToRename.path) {
+        jsLog('ERROR', 'rename: no-file-to-rename', 'fileToRename is missing');
+        console.error('handleFileRename: fileToRename is missing');
+        return;
+    }
+
+    const newName = renameFileInput ? renameFileInput.value.trim() : '';
+    const oldPath = fileToRename.path; // e.g. "content/A.md"
+    const currentName = oldPath.replace(/^content\//, '');
+    // Remove .md extension for comparison (since modal displays without .md)
+    const currentNameWithoutExt = currentName.replace(/\.md$/i, '');
+
+    jsLog('INFO', 'rename: handle-rename', 'oldPath=' + oldPath, 'currentName=' + currentName, 'newName=' + newName);
+
+    if (!newName) {
+        jsLog('INFO', 'rename: empty-input', 'User entered empty string');
+        statusEl.textContent = 'ファイル名が空です。';
+        return;
+    }
+
+    // Compare without extension (since .md will be added automatically)
+    if (newName === currentNameWithoutExt) {
+        jsLog('INFO', 'rename: no-change', currentNameWithoutExt, '->', newName);
+        statusEl.textContent = 'ファイル名が変更されていません。';
+        hideRenameFileModal();
+        return;
+    }
+
+    hideRenameFileModal();
+
+    try {
+        // Ensure extension is .md
+        let finalName = newName;
+        if (!finalName.toLowerCase().endsWith('.md')) {
+            // Remove any existing extension and add .md
+            const nameWithoutExt = finalName.replace(/\.[^.]*$/, '');
+            finalName = nameWithoutExt + '.md';
+            jsLog('INFO', 'rename: added-md-extension', 'original=' + newName, 'final=' + finalName);
+        }
+
+        // Ensure path starts with content/
+        const newPath = finalName.startsWith('content/')
+            ? finalName
+            : 'content/' + finalName;
+
+        const newLabel = newPath.replace(/^content\//, '');
+        statusEl.textContent = `Renaming ${currentName} → ${newLabel} ...`;
+        console.log('Calling RenameFile:', oldPath, '->', newPath);
+        jsLog('INFO', 'rename: call-api', oldPath, '->', newPath);
+
+        await api.RenameFile(oldPath, newPath);
+
+        statusEl.textContent = 'リネームしました: ' + newLabel;
+        jsLog('INFO', 'rename: success', oldPath, '->', newPath);
+
+        // Reload file list and graph
+        jsLog('INFO', 'rename: reloading-file-list');
+        await loadFileList();
+        // Explicitly render file list to ensure UI is updated
+        renderFileList();
+        jsLog('INFO', 'rename: file-list-rendered');
+
+        try {
+            await updateGraph();
+            jsLog('INFO', 'rename: graph-updated');
+        } catch (err) {
+            console.warn('Failed to update graph after rename:', err);
+            jsLog('WARN', 'rename: graph-update-failed', err?.message || String(err));
+        }
+
+        // Open the renamed file
+        jsLog('INFO', 'rename: opening-renamed-file', newPath);
+        currentPath = newPath;
+        await loadFile(newPath);
+
+        // Ensure sidebar is updated with active state after loading
+        renderFileList();
+        jsLog('INFO', 'rename: file-view-updated-complete');
+    } catch (error) {
+        console.error('Failed to rename file:', error);
+        statusEl.textContent = 'リネームに失敗しました: ' + (error?.message || error);
+        jsLog('ERROR', 'rename: failed', error?.message || String(error));
+    }
+}
+
+// Common interactive rename handler (now uses modal)
+async function renameFileInteractive(file) {
+    jsLog('INFO', 'rename: function-called', file?.path || 'no file');
+    console.log('renameFileInteractive called with file:', file);
+    showRenameFileModal(file);
+}
+
+// Simple context-menu handler (currently just prompts for new name)
+function showRenameMenu(e, file) {
+    jsLog('INFO', 'rename: showRenameMenu-called', file?.path || 'no file');
+    console.log('showRenameMenu called with file:', file, 'event:', e);
+
+    // For now we don't render a custom menu; we just reuse the interactive prompt.
+    // This keeps UIシンプル and avoids extra DOM elements.
+    jsLog('INFO', 'rename: calling-renameFileInteractive');
+    renameFileInteractive(file);
 }
 
 // Load a file
@@ -1323,6 +1501,34 @@ function setupEventListeners() {
                 handleFileCreation();
             } else if (e.key === 'Escape') {
                 hideFilenameModal();
+            }
+        });
+    }
+
+    // Rename file modal event listeners
+    if (confirmRenameBtn) {
+        confirmRenameBtn.onclick = handleFileRename;
+    }
+
+    if (cancelRenameBtn) {
+        cancelRenameBtn.onclick = hideRenameFileModal;
+    }
+
+    // Close rename modal when clicking outside
+    if (renameFileModal) {
+        renameFileModal.onclick = (e) => {
+            if (e.target === renameFileModal) {
+                hideRenameFileModal();
+            }
+        };
+    }
+
+    if (renameFileInput) {
+        renameFileInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                handleFileRename();
+            } else if (e.key === 'Escape') {
+                hideRenameFileModal();
             }
         });
     }

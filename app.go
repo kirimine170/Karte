@@ -1190,15 +1190,46 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 			for _, edge := range graphData.Edges {
 				a.logInfo(fmt.Sprintf("PreviewMarkdown: checking edge: SourceDocID=%s, ToVersionMode=%s, TargetUpdated=%v", edge.SourceDocID, edge.ToVersionMode, edge.TargetUpdated))
 				if edge.SourceDocID == sourceDocID && edge.ToVersionMode == "pinned" && edge.TargetUpdated {
-					a.logInfo(fmt.Sprintf("PreviewMarkdown: found pinned updated edge: %s -> %s", edge.Source, edge.Target))
+					a.logInfo(fmt.Sprintf("PreviewMarkdown: found pinned updated edge: %s -> %s (TargetDocID: %s)", edge.Source, edge.Target, edge.TargetDocID))
 					// This link references a pinned version that has been updated
 					// Find the corresponding HTML link and add warning
+
+					// Get the current target path from doc_map.json using TargetDocID (handles renames)
 					targetPath := strings.TrimPrefix(edge.Target, "doc:/")
+					if edge.TargetDocID != "" {
+						// Try to get the current path from doc_map.json
+						if docMapData, err := os.ReadFile(docMapPath); err == nil {
+							var targetDocMap map[string]string
+							if err := json.Unmarshal(docMapData, &targetDocMap); err == nil {
+								if currentPath, exists := targetDocMap[edge.TargetDocID]; exists {
+									// Use the current path from doc_map (handles renames)
+									targetPath = strings.TrimPrefix(currentPath, "content/")
+									a.logInfo(fmt.Sprintf("PreviewMarkdown: resolved target path from doc_map: %s -> %s (doc_id: %s)", edge.Target, targetPath, edge.TargetDocID))
+								}
+							}
+						}
+					}
 
 					// Get the original link target from the markdown
-					originalLinkTarget, hasLink := targetIDToLinkTarget[edge.Target]
-					if hasLink {
-						a.logInfo(fmt.Sprintf("PreviewMarkdown: found original link target: %s", originalLinkTarget))
+					// Try both old and new target IDs
+					originalLinkTarget := ""
+					hasLink := false
+
+					// First try with the edge.Target (might be old path after rename)
+					if linkTarget, ok := targetIDToLinkTarget[edge.Target]; ok {
+						originalLinkTarget = linkTarget
+						hasLink = true
+						a.logInfo(fmt.Sprintf("PreviewMarkdown: found original link target using edge.Target: %s -> %s", edge.Target, originalLinkTarget))
+					} else if edge.TargetDocID != "" {
+						// Try to find by constructing target ID from current path
+						currentTargetID := "doc:/" + targetPath
+						if linkTarget, ok := targetIDToLinkTarget[currentTargetID]; ok {
+							originalLinkTarget = linkTarget
+							hasLink = true
+							a.logInfo(fmt.Sprintf("PreviewMarkdown: found original link target using current path: %s -> %s", currentTargetID, originalLinkTarget))
+						} else {
+							a.logInfo(fmt.Sprintf("PreviewMarkdown: no original link target found for %s or %s", edge.Target, currentTargetID))
+						}
 					} else {
 						a.logInfo(fmt.Sprintf("PreviewMarkdown: no original link target found for %s", edge.Target))
 					}
@@ -2436,19 +2467,56 @@ func (a *App) GetGraphData() (*GraphData, error) {
 		if persistedEdge, exists := persistedLinks[edgeID]; exists && persistedEdge.TargetHash != "" {
 			// 永続化されたハッシュがある場合、それと比較
 			currentHash := ""
+
+			// まず、edge.Target（古いパス）で試す
 			if targetNode, exists := nodes[edge.Target]; exists {
 				currentHash = targetNode.Hash
+				a.logInfo(fmt.Sprintf("Target updated check for edge %s: found hash from nodes[%s]: %s", edgeID, edge.Target, currentHash[:8]))
 			} else if strings.HasPrefix(edge.Target, "doc:/") {
 				targetPath := strings.TrimPrefix(edge.Target, "doc:/")
 				targetFilePath := filepath.Join(a.dataDir, "content", targetPath)
 				if targetContent, err := os.ReadFile(targetFilePath); err == nil {
 					currentHash = gitvcs.CalculateHash(string(targetContent))
+					a.logInfo(fmt.Sprintf("Target updated check for edge %s: found hash from file %s: %s", edgeID, targetPath, currentHash[:8]))
+				} else {
+					a.logInfo(fmt.Sprintf("Target updated check for edge %s: file not found at %s (may be renamed)", edgeID, targetPath))
+				}
+			}
+
+			// edge.Targetでファイルが見つからない場合（リネーム後）、TargetDocIDを使って現在のパスを取得
+			if currentHash == "" && edge.TargetDocID != "" {
+				a.logInfo(fmt.Sprintf("Target updated check for edge %s: trying to resolve via TargetDocID %s", edgeID, edge.TargetDocID))
+				docMapPath := filepath.Join(a.dataDir, ".mdsys", "doc_map.json")
+				if docMapData, err := os.ReadFile(docMapPath); err == nil {
+					var docMap map[string]string
+					if err := json.Unmarshal(docMapData, &docMap); err == nil {
+						if currentPath, exists := docMap[edge.TargetDocID]; exists {
+							// doc_mapから取得したパスでファイルを読み込む
+							targetFilePath := filepath.Join(a.dataDir, currentPath)
+							if targetContent, err := os.ReadFile(targetFilePath); err == nil {
+								currentHash = gitvcs.CalculateHash(string(targetContent))
+								a.logInfo(fmt.Sprintf("Target updated check: resolved path via doc_map for doc_id %s: %s (hash: %s)", edge.TargetDocID, currentPath, currentHash[:8]))
+							} else {
+								a.logInfo(fmt.Sprintf("Target updated check: failed to read file at resolved path %s: %v", currentPath, err))
+							}
+						} else {
+							a.logInfo(fmt.Sprintf("Target updated check: doc_id %s not found in doc_map", edge.TargetDocID))
+						}
+					} else {
+						a.logError(fmt.Sprintf("Target updated check: failed to parse doc_map.json: %v", err))
+					}
+				} else {
+					a.logError(fmt.Sprintf("Target updated check: failed to read doc_map.json: %v", err))
 				}
 			}
 
 			if currentHash != "" && persistedEdge.TargetHash != currentHash {
 				edge.TargetUpdated = true
 				a.logInfo(fmt.Sprintf("Target updated detected for edge %s: old=%s, new=%s", edgeID, persistedEdge.TargetHash[:8], currentHash[:8]))
+			} else if currentHash == "" {
+				a.logInfo(fmt.Sprintf("Target updated check for edge %s: currentHash is empty, cannot determine if updated", edgeID))
+			} else {
+				a.logInfo(fmt.Sprintf("Target updated check for edge %s: hash unchanged (old=%s, new=%s)", edgeID, persistedEdge.TargetHash[:8], currentHash[:8]))
 			}
 			// 永続化されたハッシュを保持（リンク作成時のハッシュ）
 			edge.TargetHash = persistedEdge.TargetHash
@@ -2996,7 +3064,7 @@ func (a *App) RenameFile(oldPath, newPath string) error {
 		}
 	}
 
-	// Update mapping
+	// Update mapping (doc_id -> content path)
 	oldContentPath := filepath.ToSlash(oldPath)
 	newContentPath := filepath.ToSlash(newPath)
 	docMap[docID] = newContentPath
@@ -3009,7 +3077,44 @@ func (a *App) RenameFile(oldPath, newPath string) error {
 		}
 	}
 
-	// Find all files that reference the old path
+	// Collect files that reference this document based on links.json (doc_id ベース)
+	referencingSet := make(map[string]struct{})
+
+	linkInfoPath := filepath.Join(a.dataDir, ".mdsys", "links.json")
+	if linkData, err := os.ReadFile(linkInfoPath); err == nil {
+		var edges []GraphEdge
+		if err := json.Unmarshal(linkData, &edges); err == nil {
+			for _, edge := range edges {
+				// このドキュメントをターゲットとして参照しているエッジのみ対象
+				if edge.TargetDocID != "" && edge.TargetDocID == docID {
+					var refContentPath string
+					// SourceDocID から doc_map を引くのが理想
+					if edge.SourceDocID != "" {
+						if p, ok := docMap[edge.SourceDocID]; ok {
+							refContentPath = filepath.ToSlash(p)
+						}
+					}
+					// doc_map に無い場合は Source (doc:/...) からパスを組み立てる
+					if refContentPath == "" && strings.HasPrefix(edge.Source, "doc:/") {
+						sourcePath := strings.TrimPrefix(edge.Source, "doc:/")
+						refContentPath = filepath.ToSlash(filepath.Join("content", sourcePath))
+					}
+
+					// 自分自身（リネーム対象ファイル）は除外
+					if refContentPath != "" && refContentPath != newContentPath {
+						referencingSet[refContentPath] = struct{}{}
+					}
+				}
+			}
+			a.logInfo(fmt.Sprintf("RenameFile: doc_id-based references found: %d", len(referencingSet)))
+		} else {
+			a.logError(fmt.Sprintf("RenameFile: failed to parse links.json: %v", err))
+		}
+	} else {
+		a.logError(fmt.Sprintf("RenameFile: failed to read links.json: %v", err))
+	}
+
+	// 既存のパスベース探索で見つかったものもマージするためのスライス
 	contentDir := filepath.Join(a.dataDir, "content")
 	var referencingFiles []string
 
@@ -3076,7 +3181,7 @@ func (a *App) RenameFile(oldPath, newPath string) error {
 		if hasReference {
 			relPath, err := filepath.Rel(a.dataDir, p)
 			if err == nil {
-				referencingFiles = append(referencingFiles, filepath.ToSlash(relPath))
+				referencingSet[filepath.ToSlash(relPath)] = struct{}{}
 			}
 		}
 
@@ -3087,7 +3192,12 @@ func (a *App) RenameFile(oldPath, newPath string) error {
 		a.logError(fmt.Sprintf("Error walking content directory: %v", err))
 	}
 
-	a.logInfo(fmt.Sprintf("Found %d files referencing %s", len(referencingFiles), oldPath))
+	// マップから最終的なスライスを構築
+	for p := range referencingSet {
+		referencingFiles = append(referencingFiles, p)
+	}
+
+	a.logInfo(fmt.Sprintf("Found %d files referencing %s (doc_id: %s)", len(referencingFiles), oldPath, docID))
 
 	// Update all referencing files
 	for _, refPath := range referencingFiles {

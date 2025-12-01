@@ -553,7 +553,7 @@
     line-height: 1.6;
   }
 
-  .drop-overlay__hint > div {
+  .drop-overlay__hint>div {
     margin: 2px 0;
   }
 
@@ -1014,6 +1014,19 @@
     <div class="modal-buttons">
       <button id="createFileBtn" class="btn">作成</button>
       <button id="cancelFileBtn" class="btn btn-secondary">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<!-- Rename file modal -->
+<div id="renameFileModal" class="modal" style="display: none;">
+  <div class="modal-content">
+    <h3>ファイル名を変更</h3>
+    <p>新しいファイル名を入力してください（content/ は不要、.md拡張子は自動で追加されます）:</p>
+    <input type="text" id="renameFileInput" placeholder="例: new-filename" />
+    <div class="modal-buttons">
+      <button id="confirmRenameBtn" class="btn">変更</button>
+      <button id="cancelRenameBtn" class="btn btn-secondary">キャンセル</button>
     </div>
   </div>
 </div>
