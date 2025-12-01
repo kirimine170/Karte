@@ -1186,7 +1186,6 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 			}
 
 			// Find edges that reference pinned versions and have been updated
-			warningHTML := `<span class="version-warning" style="color: #ff6b6b; font-size: 0.9em; margin-left: 0.5em;">⚠️ 古いバージョンを参照しています</span>`
 			warningCount := 0
 			for _, edge := range graphData.Edges {
 				a.logInfo(fmt.Sprintf("PreviewMarkdown: checking edge: SourceDocID=%s, ToVersionMode=%s, TargetUpdated=%v", edge.SourceDocID, edge.ToVersionMode, edge.TargetUpdated))
@@ -1250,6 +1249,10 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 								warnedLinks[href] = true
 							}
 							// Add warning after the closing </a> tag
+							// Create warning HTML with update button for this specific edge
+							warningHTML := fmt.Sprintf(
+								`<span class="version-warning" style="color: #ff6b6b; font-size: 0.9em; margin-left: 0.5em;">⚠️ 古いバージョンを参照しています <button class="update-to-latest-btn" data-source-doc-id="%s" data-target-doc-id="%s" style="margin-left: 0.5em; padding: 2px 8px; font-size: 0.85em; background: #4CAF50; color: white; border: none; border-radius: 3px; cursor: pointer;" onclick="updateLinkToLatest(this)">最新版に更新</button></span>`,
+								edge.SourceDocID, edge.TargetDocID)
 							warningCount++
 							a.logInfo(fmt.Sprintf("PreviewMarkdown: added warning to link matching pattern: %s", pattern))
 							return match + warningHTML
@@ -3147,6 +3150,74 @@ func (a *App) RenameFile(oldPath, newPath string) error {
 	})
 
 	a.logInfo(fmt.Sprintf("Successfully renamed file %s -> %s", oldPath, newPath))
+	return nil
+}
+
+// UpdateLinkToLatest updates a link to reference the latest version instead of a pinned version
+func (a *App) UpdateLinkToLatest(sourceDocID, targetDocID string) error {
+	a.logInfo(fmt.Sprintf("UpdateLinkToLatest: sourceDocID=%s, targetDocID=%s", sourceDocID, targetDocID))
+
+	// Load links.json
+	linkInfoPath := filepath.Join(a.dataDir, ".mdsys", "links.json")
+	var edges []GraphEdge
+
+	// Read existing links
+	if linkData, err := os.ReadFile(linkInfoPath); err == nil {
+		if err := json.Unmarshal(linkData, &edges); err != nil {
+			a.logError(fmt.Sprintf("Failed to parse links.json: %v", err))
+			return fmt.Errorf("failed to parse links.json: %v", err)
+		}
+	} else {
+		return fmt.Errorf("failed to read links.json: %v", err)
+	}
+
+	// Find and update the matching edge
+	found := false
+	for i := range edges {
+		if edges[i].SourceDocID == sourceDocID && edges[i].TargetDocID == targetDocID {
+			edges[i].ToVersionMode = "latest"
+			edges[i].TargetUpdated = false
+			// Update ToVersionID to current target hash
+			if strings.HasPrefix(edges[i].Target, "doc:/") {
+				targetPath := strings.TrimPrefix(edges[i].Target, "doc:/")
+				targetFilePath := filepath.Join(a.dataDir, "content", targetPath)
+				if targetContent, err := os.ReadFile(targetFilePath); err == nil {
+					currentHash := gitvcs.CalculateHash(string(targetContent))
+					edges[i].ToVersionID = currentHash
+					edges[i].TargetHash = currentHash
+				}
+			}
+			found = true
+			a.logInfo(fmt.Sprintf("Updated edge %s -> %s to latest version", edges[i].Source, edges[i].Target))
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("link not found: sourceDocID=%s, targetDocID=%s", sourceDocID, targetDocID)
+	}
+
+	// Save updated links
+	if linkInfoJSON, err := json.MarshalIndent(edges, "", "  "); err == nil {
+		if err := os.MkdirAll(filepath.Dir(linkInfoPath), 0755); err == nil {
+			if err := os.WriteFile(linkInfoPath, linkInfoJSON, 0644); err == nil {
+				a.logInfo(fmt.Sprintf("Saved updated link records to %s", linkInfoPath))
+			} else {
+				return fmt.Errorf("failed to write links.json: %v", err)
+			}
+		} else {
+			return fmt.Errorf("failed to create directory: %v", err)
+		}
+	} else {
+		return fmt.Errorf("failed to marshal links: %v", err)
+	}
+
+	// Emit event to refresh preview
+	runtime.EventsEmit(a.ctx, "link-updated", map[string]interface{}{
+		"sourceDocID": sourceDocID,
+		"targetDocID": targetDocID,
+	})
+
 	return nil
 }
 

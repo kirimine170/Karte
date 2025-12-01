@@ -1,4 +1,4 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS, RenameFile } from '../wailsjs/wailsjs/go/main/App';
+import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS, RenameFile, UpdateLinkToLatest } from '../wailsjs/wailsjs/go/main/App';
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 
@@ -184,7 +184,8 @@ const api = isBrowser ? mockFunctions : {
     IsRecording,
     SaveImageMetadata,
     LogJS,
-    RenameFile
+    RenameFile,
+    UpdateLinkToLatest
 };
 
 // Logging helper function that writes to app.log via Go backend
@@ -356,6 +357,12 @@ async function init() {
                 console.log('File changed:', path);
                 updatePreview();
                 updateGraph();
+            });
+
+            // Link updated event (when link is updated to latest version)
+            EventsOn('link-updated', (data) => {
+                console.log('Link updated:', data);
+                updatePreview();
             });
 
             // Conflict detection events
@@ -755,6 +762,8 @@ async function updatePreview() {
             // Setup drop handlers after iframe loads (for Marp)
             pv.addEventListener('load', () => {
                 setupPreviewImageDrop();
+                // Make updateLinkToLatest available in iframe context
+                setupUpdateLinkToLatestHandler();
             }, { once: true });
 
             // Handle audio player even for Marp presentations
@@ -787,6 +796,8 @@ async function updatePreview() {
         // Setup drop handlers after iframe loads
         pv.addEventListener('load', () => {
             setupPreviewImageDrop();
+            // Make updateLinkToLatest available in iframe context
+            setupUpdateLinkToLatestHandler();
         }, { once: true });
 
         // Handle audio player
@@ -3092,6 +3103,64 @@ if (resolveConflictBtn && cancelConflictBtn) {
     cancelConflictBtn.addEventListener('click', () => {
         hideConflictResolutionModal();
     });
+}
+
+// Update link to latest version (called from HTML onclick)
+async function updateLinkToLatest(button) {
+    const sourceDocID = button.getAttribute('data-source-doc-id');
+    const targetDocID = button.getAttribute('data-target-doc-id');
+
+    if (!sourceDocID || !targetDocID) {
+        console.error('Missing doc IDs for link update');
+        return;
+    }
+
+    try {
+        await api.UpdateLinkToLatest(sourceDocID, targetDocID);
+        // Preview will be updated automatically via link-updated event
+        setStatusMessage('リンクを最新版に更新しました', 2000);
+    } catch (error) {
+        console.error('Failed to update link to latest:', error);
+        setStatusMessage('リンクの更新に失敗しました: ' + error.message, 5000);
+    }
+}
+
+// Make updateLinkToLatest available globally for onclick handlers
+window.updateLinkToLatest = updateLinkToLatest;
+
+// Setup updateLinkToLatest handler in preview iframe
+function setupUpdateLinkToLatestHandler() {
+    if (!pv) {
+        return;
+    }
+
+    try {
+        const iframeWindow = pv.contentWindow;
+        const iframeDoc = pv.contentDocument || iframeWindow?.document;
+        if (!iframeWindow || !iframeDoc) {
+            // Retry after a short delay
+            setTimeout(() => setupUpdateLinkToLatestHandler(), 100);
+            return;
+        }
+
+        // Make updateLinkToLatest available in iframe context
+        iframeWindow.updateLinkToLatest = updateLinkToLatest;
+
+        // Also setup event listeners for buttons (as fallback if onclick doesn't work)
+        const updateButtons = iframeDoc.querySelectorAll('.update-to-latest-btn');
+        updateButtons.forEach(button => {
+            // Remove existing listeners to avoid duplicates
+            const newButton = button.cloneNode(true);
+            button.parentNode.replaceChild(newButton, button);
+
+            newButton.addEventListener('click', (e) => {
+                e.preventDefault();
+                updateLinkToLatest(newButton);
+            });
+        });
+    } catch (error) {
+        console.error('Failed to setup updateLinkToLatest handler in iframe:', error);
+    }
 }
 
 // Initialize when DOM is loaded
