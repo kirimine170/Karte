@@ -35,11 +35,24 @@ go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
 ### アプリケーションのビルド
 
+マルチプラットフォーム用に`cmd/buildmatrix`を用意しています。`build/targets.json`に定義されたターゲット（デフォルト: Windows/macOS/Linux）をまとめて、あるいは個別にビルドできます。
+
 ```bash
-cd karte-desktop
-go mod tidy
-wails build
+# 依存関係も整える場合
+go run ./cmd/buildmatrix --all --prep
+
+# 特定ターゲットのみ
+go run ./cmd/buildmatrix --targets windows
 ```
+
+主なオプション:
+
+- `--targets windows,linux` … `build/targets.json`内の名前で絞り込み
+- `--all` … 全ターゲットを順番にビルド
+- `--prep` … `go mod tidy`と`npm install`をビルド前に実行
+- `--clean` … 各ターゲットの出力ディレクトリ（`dist/<name>`）を削除してから再生成
+
+`build/targets.json`を編集すると、新しいターゲットの追加や環境変数（`GOOS`/`GOARCH`等）、出力先ディレクトリ、追加の`wails build`フラグを柔軟に設定できます。
 
 ## 使い方
 
@@ -54,20 +67,7 @@ wails dev
 
 ### 本番ビルド
 
-#### macOS
-```bash
-wails build -platform darwin/universal
-```
-
-#### Windows
-```bash
-wails build -platform windows/amd64
-```
-
-#### Linux
-```bash
-wails build -platform linux/amd64
-```
+本番向けは上記の`buildmatrix`コマンドを使用してください。ビルド結果はターゲットごとに`dist/<target name>`配下へ整理され、`build/bin`は毎回クリーンアップされるため、異なるOS成果物が混在しません。
 
 ### アプリケーションの使用
 

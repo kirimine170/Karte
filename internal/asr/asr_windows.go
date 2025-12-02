@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build windows
 
 package asr
 
@@ -7,11 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	sherpa "github.com/k2-fsa/sherpa-onnx-go-macos"
 )
 
-// Config models the JSON file stored under karte_data/data/asr/config.json.
+// Windows 向けの簡易 Config 定義（sherpa-onnx には依存しない）
+
 type Config struct {
 	Enabled    bool        `json:"enabled"`
 	SampleRate int         `json:"sampleRate"`
@@ -20,7 +19,6 @@ type Config struct {
 	Runtime    RuntimeSpec `json:"runtime"`
 }
 
-// ModelSpec describes the ONNX model files.
 type ModelSpec struct {
 	Encoder      string `json:"encoder,omitempty"`
 	Decoder      string `json:"decoder,omitempty"`
@@ -29,18 +27,16 @@ type ModelSpec struct {
 	Tokens       string `json:"tokens"`
 }
 
-// DecodeSpec adjusts the recognizer behavior.
 type DecodeSpec struct {
 	Method string `json:"method"`
 }
 
-// RuntimeSpec captures runtime hints (threads/provider).
 type RuntimeSpec struct {
 	Threads  int    `json:"threads"`
 	Provider string `json:"provider"`
 }
 
-// LoadConfigFromFile reads the JSON config if it exists.
+// LoadConfigFromFile は JSON を読み込むが、Windows では ASR を実装しない
 func LoadConfigFromFile(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -72,57 +68,15 @@ func (c *Config) applyDefaults() {
 	}
 }
 
-// Validate ensures the config is usable when enabled.
+// Windows では ASR をサポートしないため、Validate は最低限のチェックのみ行う
 func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
-	if !c.Enabled {
-		return nil
-	}
-	if c.Model.Tokens == "" {
-		return fmt.Errorf("model.tokens must be set")
-	}
-	if c.Model.ZipformerCTC == "" {
-		if c.Model.Encoder == "" || c.Model.Decoder == "" || c.Model.Joiner == "" {
-			return fmt.Errorf("encoder/decoder/joiner paths are required for transducer models")
-		}
-	}
 	return nil
 }
 
-func (c *Config) offlineRecognizerConfig() *sherpa.OfflineRecognizerConfig {
-	modelCfg := sherpa.OfflineModelConfig{
-		Tokens:     c.Model.Tokens,
-		NumThreads: c.Runtime.Threads,
-		Provider:   c.Runtime.Provider,
-	}
-
-	if c.Model.ZipformerCTC != "" {
-		modelCfg.ZipformerCtc = sherpa.OfflineZipformerCtcModelConfig{
-			Model: c.Model.ZipformerCTC,
-		}
-	} else {
-		modelCfg.Transducer = sherpa.OfflineTransducerModelConfig{
-			Encoder: c.Model.Encoder,
-			Decoder: c.Model.Decoder,
-			Joiner:  c.Model.Joiner,
-		}
-	}
-
-	return &sherpa.OfflineRecognizerConfig{
-		FeatConfig: sherpa.FeatureConfig{
-			SampleRate: c.SampleRate,
-			FeatureDim: 80,
-		},
-		ModelConfig:    modelCfg,
-		DecodingMethod: c.Decoding.Method,
-		MaxActivePaths: 4,
-		BlankPenalty:   0.0,
-	}
-}
-
-// EnsureModelPathsAbsolute rewrites model paths to be absolute relative to baseDir.
+// EnsureModelPathsAbsolute はパスを絶対パスに解決する（エディタ機能などで利用される可能性があるため）
 func (c *Config) EnsureModelPathsAbsolute(baseDir string) {
 	resolve := func(p string) string {
 		if p == "" {
@@ -139,3 +93,51 @@ func (c *Config) EnsureModelPathsAbsolute(baseDir string) {
 	c.Model.Joiner = resolve(c.Model.Joiner)
 	c.Model.ZipformerCTC = resolve(c.Model.ZipformerCTC)
 }
+
+// Windows 用の簡易 Service / RealtimeService スタブ
+
+type Service struct{}
+
+func NewService(cfg *Config) (*Service, error) {
+	return nil, fmt.Errorf("ASR is not supported on Windows build")
+}
+
+func (s *Service) Close() {}
+
+// TranscribeFile は Windows では未サポート
+func (s *Service) TranscribeFile(_ interface{}, _ string, _ func(string, int, int, float64)) (string, error) {
+	return "", fmt.Errorf("ASR transcription is not supported on Windows build")
+}
+
+// ProcessSamples も Windows では未サポート
+func (s *Service) ProcessSamples(_ []float32) (string, error) {
+	return "", fmt.Errorf("ASR process samples is not supported on Windows build")
+}
+
+// RealtimeService 向けのスタブ
+
+type RealtimeService struct{}
+
+type LogFunc func(format string, args ...interface{})
+
+func NewRealtimeService(cfg *Config) (*RealtimeService, error) {
+	return nil, fmt.Errorf("Realtime ASR is not supported on Windows build")
+}
+
+func NewRealtimeServiceWithLogger(cfg *Config, logFunc LogFunc) (*RealtimeService, error) {
+	return nil, fmt.Errorf("Realtime ASR is not supported on Windows build")
+}
+
+func (s *RealtimeService) Close() {}
+
+func (s *RealtimeService) ProcessAudio(_ []float32) (string, string, bool) {
+	return "", "", false
+}
+
+func (s *RealtimeService) Flush() string {
+	return ""
+}
+
+func (s *RealtimeService) Reset() {}
+
+
