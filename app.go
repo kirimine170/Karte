@@ -496,7 +496,10 @@ func (a *App) GetFileList() []FileItem {
 		if info.IsDir() {
 			return nil
 		}
-		if strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
+		lowerName := strings.ToLower(info.Name())
+		isMarkdown := strings.HasSuffix(lowerName, ".md")
+		isPdf := strings.HasSuffix(lowerName, ".pdf")
+		if isMarkdown || isPdf {
 			// Generate path relative to dataDir so that it starts with "content/..."
 			rel, err := filepath.Rel(a.dataDir, p)
 			if err != nil {
@@ -505,12 +508,17 @@ func (a *App) GetFileList() []FileItem {
 			}
 			title := info.Name()
 
-			// Try to extract title from frontmatter
-			if b, err := os.ReadFile(p); err == nil {
-				title = fm.ExtractTitle(string(b), title)
-			} else {
-				a.logError(fmt.Sprintf("Failed to read file %s: %v", p, err))
-				// Continue with filename as title if read fails
+			// Try to extract title from frontmatter for markdown files
+			if isMarkdown {
+				if b, err := os.ReadFile(p); err == nil {
+					title = fm.ExtractTitle(string(b), title)
+				} else {
+					a.logError(fmt.Sprintf("Failed to read file %s: %v", p, err))
+					// Continue with filename as title if read fails
+				}
+			} else if isPdf {
+				// For PDF files, use filename without extension as title
+				title = strings.TrimSuffix(title, filepath.Ext(title))
 			}
 			fileItem := FileItem{
 				Path:  filepath.ToSlash(rel),
@@ -527,7 +535,7 @@ func (a *App) GetFileList() []FileItem {
 		return []FileItem{}
 	}
 
-	a.logInfo(fmt.Sprintf("GetFileList completed: Found %d markdown files", len(files)))
+	a.logInfo(fmt.Sprintf("GetFileList completed: Found %d files (markdown and PDF)", len(files)))
 	if len(files) > 0 {
 		a.logInfo(fmt.Sprintf("First file: %s", files[0].Path))
 	}
@@ -799,6 +807,7 @@ func (a *App) CreateNewFile(filename string) (bool, error) {
 }
 
 // LoadFile loads the content of a markdown file
+// For PDF files, returns an empty string since PDFs are not editable
 func (a *App) LoadFile(path string) (string, error) {
 	runtime.LogInfo(a.ctx, fmt.Sprintf("LoadFile called with path: %s", path))
 
@@ -809,6 +818,12 @@ func (a *App) LoadFile(path string) (string, error) {
 	}
 
 	runtime.LogInfo(a.ctx, fmt.Sprintf("Resolved path: %s", absPath))
+
+	// Check if this is a PDF file
+	if strings.HasSuffix(strings.ToLower(path), ".pdf") {
+		runtime.LogInfo(a.ctx, fmt.Sprintf("PDF file detected, returning empty string"))
+		return "", nil
+	}
 
 	content, err := os.ReadFile(absPath)
 	if err != nil {
@@ -2100,6 +2115,108 @@ func (a *App) importAudioFromReader(originalName string, src io.Reader) (string,
 	return relPath, nil
 }
 
+// ImportPdfFile copies a PDF file into karte_data/content.
+func (a *App) ImportPdfFile(src string) (string, error) {
+	if src == "" {
+		return "", fmt.Errorf("source path is required")
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return "", fmt.Errorf("stat pdf: %w", err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("pdf path must be a file")
+	}
+	ext := strings.ToLower(filepath.Ext(src))
+	if ext != ".pdf" {
+		return "", fmt.Errorf("file is not a PDF: %s", ext)
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		return "", fmt.Errorf("open pdf: %w", err)
+	}
+	defer f.Close()
+	return a.importPdfFromReader(info.Name(), f)
+}
+
+// ImportPdfBase64 saves PDF content provided as base64 (used when native paths are not available).
+func (a *App) ImportPdfBase64(filename, base64Data string) (string, error) {
+	if filename == "" {
+		return "", fmt.Errorf("filename is required")
+	}
+	if base64Data == "" {
+		return "", fmt.Errorf("pdf data is empty")
+	}
+	data, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		return "", fmt.Errorf("decode pdf data: %w", err)
+	}
+	return a.importPdfFromReader(filename, bytes.NewReader(data))
+}
+
+func (a *App) importPdfFromReader(originalName string, src io.Reader) (string, error) {
+	if originalName == "" {
+		return "", fmt.Errorf("original name is required")
+	}
+	ext := strings.ToLower(filepath.Ext(originalName))
+	if ext != ".pdf" {
+		return "", fmt.Errorf("unsupported file format: %s", ext)
+	}
+
+	// Save PDF to content directory
+	contentDir := filepath.Join(a.dataDir, "content")
+	if err := os.MkdirAll(contentDir, 0o755); err != nil {
+		return "", fmt.Errorf("prepare content dir: %w", err)
+	}
+
+	base := strings.TrimSuffix(originalName, ext)
+	base = audio.SanitizeFileName(base)
+	if base == "" {
+		base = "document"
+	}
+	filename := base + ext
+
+	// Check if file already exists, add number suffix if needed
+	baseIndex := 1
+	for {
+		destPath := filepath.Join(contentDir, filename)
+		if _, err := os.Stat(destPath); os.IsNotExist(err) {
+			break
+		}
+		filename = fmt.Sprintf("%s_%02d%s", base, baseIndex, ext)
+		baseIndex++
+	}
+
+	destPath := filepath.Join(contentDir, filename)
+	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return "", fmt.Errorf("create pdf file: %w", err)
+	}
+	if _, err := io.Copy(out, src); err != nil {
+		out.Close()
+		return "", fmt.Errorf("write pdf file: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return "", fmt.Errorf("close pdf file: %w", err)
+	}
+
+	relPath, err := filepath.Rel(a.dataDir, destPath)
+	if err != nil {
+		relPath = destPath
+	}
+	relPath = filepath.ToSlash(relPath)
+
+	payload := map[string]interface{}{
+		"path":          relPath,
+		"original_name": originalName,
+		"saved_name":    filename,
+	}
+	runtime.EventsEmit(a.ctx, "pdf-imported", payload)
+	a.logInfo(fmt.Sprintf("PDF imported: %s -> %s", originalName, relPath))
+
+	return relPath, nil
+}
+
 func (a *App) startTranscriptionJob(absAudioPath, relAudioPath string) {
 	if ready := a.waitForASRReady(); !ready {
 		a.logInfo("ASR service not configured; skipping transcription")
@@ -3291,6 +3408,33 @@ func (a *App) GetImageFileURL(imagePath string) (string, error) {
 	return urlPath, nil
 }
 
+// GetPdfFileURL returns a URL for the PDF file that can be used in HTML embed/iframe elements.
+// The pdfPath should be relative to dataDir (e.g., "content/example.pdf").
+func (a *App) GetPdfFileURL(pdfPath string) (string, error) {
+	if pdfPath == "" {
+		return "", fmt.Errorf("pdf path is empty")
+	}
+
+	var absPath string
+	if filepath.IsAbs(pdfPath) {
+		absPath = pdfPath
+	} else {
+		absPath = filepath.Join(a.dataDir, filepath.FromSlash(pdfPath))
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("pdf file not found: %s", pdfPath)
+		}
+		return "", fmt.Errorf("failed to stat pdf file: %w", err)
+	}
+
+	urlPath := "/pdf/" + filepath.ToSlash(pdfPath)
+	a.logInfo(fmt.Sprintf("PDF file URL: %s (size: %d bytes)", urlPath, info.Size()))
+	return urlPath, nil
+}
+
 // createAudioHandler creates an HTTP handler that serves audio files.
 // This handler wraps the default asset handler and adds support for /audio/ paths.
 func (a *App) createAssetHandler() http.Handler {
@@ -3305,6 +3449,11 @@ func (a *App) createAssetHandler() http.Handler {
 		}
 		if strings.HasPrefix(r.URL.Path, "/image/") {
 			if a.serveMediaFile(w, r, "/image/", "image") {
+				return
+			}
+		}
+		if strings.HasPrefix(r.URL.Path, "/pdf/") {
+			if a.serveMediaFile(w, r, "/pdf/", "pdf") {
 				return
 			}
 		}
@@ -3689,6 +3838,59 @@ func (a *App) RenameFile(oldPath, newPath string) error {
 	})
 
 	a.logInfo(fmt.Sprintf("Successfully renamed file %s -> %s", oldPath, newPath))
+	return nil
+}
+
+// RenamePdfFile renames a PDF file under content/ without doc_id or link updates.
+// This is intentionally simpler than RenameFile, as PDFs are not part of the markdown link graph.
+func (a *App) RenamePdfFile(oldPath, newPath string) error {
+	// Basic validation: paths must be under content/ and have .pdf extension
+	if !strings.HasPrefix(oldPath, "content/") {
+		return fmt.Errorf("old path must be under content/: %s", oldPath)
+	}
+	if !strings.HasPrefix(newPath, "content/") {
+		return fmt.Errorf("new path must be under content/: %s", newPath)
+	}
+
+	oldExt := strings.ToLower(filepath.Ext(oldPath))
+	newExt := strings.ToLower(filepath.Ext(newPath))
+	if oldExt != ".pdf" || newExt != ".pdf" {
+		return fmt.Errorf("both old and new paths must have .pdf extension")
+	}
+
+	// Resolve to absolute paths safely
+	oldAbsPath, ok := a.resolveContentPath(oldPath)
+	if !ok {
+		return fmt.Errorf("invalid old path: %s", oldPath)
+	}
+
+	newAbsPath, ok := a.resolveContentPath(newPath)
+	if !ok {
+		return fmt.Errorf("invalid new path: %s", newPath)
+	}
+
+	// Check if old file exists
+	if _, err := os.Stat(oldAbsPath); os.IsNotExist(err) {
+		return fmt.Errorf("file does not exist: %s", oldPath)
+	}
+
+	// Check if new file already exists
+	if _, err := os.Stat(newAbsPath); err == nil {
+		return fmt.Errorf("target file already exists: %s", newPath)
+	}
+
+	a.logInfo(fmt.Sprintf("Renaming PDF %s -> %s", oldPath, newPath))
+
+	// Ensure new directory exists
+	if err := os.MkdirAll(filepath.Dir(newAbsPath), 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %v", err)
+	}
+
+	// Move file
+	if err := os.Rename(oldAbsPath, newAbsPath); err != nil {
+		return fmt.Errorf("failed to rename pdf file: %v", err)
+	}
+
 	return nil
 }
 

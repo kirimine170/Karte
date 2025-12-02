@@ -1,5 +1,5 @@
 import * as AppModule from '../wailsjs/wailsjs/go/main/App';
-const { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS } = AppModule;
+const { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, ImportPdfFile, ImportPdfBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetPdfFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS, RenamePdfFile } = AppModule;
 // RenameFile and UpdateLinkToLatest may not exist in generated bindings yet, so import them conditionally
 const RenameFile = AppModule.RenameFile || null;
 const UpdateLinkToLatest = AppModule.UpdateLinkToLatest || null;
@@ -122,6 +122,26 @@ const mockFunctions = {
         return `/image/${imagePath}`;
     },
 
+    async ImportPdfFile(path) {
+        console.log('Mock ImportPdfFile called:', path);
+        return `content/mock-${Date.now()}.pdf`;
+    },
+
+    async ImportPdfBase64(name, data) {
+        console.log('Mock ImportPdfBase64 called:', name, data.length);
+        return `content/mock-${Date.now()}.pdf`;
+    },
+
+    async GetPdfFileURL(pdfPath) {
+        console.log('Mock GetPdfFileURL called:', pdfPath);
+        return `/pdf/${pdfPath}`;
+    },
+
+    async RenamePdfFile(oldPath, newPath) {
+        console.log('Mock RenamePdfFile called:', oldPath, '->', newPath);
+        return true;
+    },
+
     async GetImageList() {
         console.log('Mock GetImageList called');
         return [
@@ -188,9 +208,12 @@ const api = isBrowser ? mockFunctions : {
     ImportAudioBase64,
     ImportImageFile,
     ImportImageBase64,
+    ImportPdfFile,
+    ImportPdfBase64,
     GetASRStatus,
     GetAudioFileURL,
     GetImageFileURL,
+    GetPdfFileURL,
     GetImageList,
     GetImageMetadata,
     StartRecording,
@@ -199,6 +222,7 @@ const api = isBrowser ? mockFunctions : {
     SaveImageMetadata,
     LogJS,
     RenameFile: RenameFile || (() => Promise.reject(new Error('RenameFile not available'))),
+    RenamePdfFile: RenamePdfFile || (() => Promise.reject(new Error('RenamePdfFile not available'))),
     UpdateLinkToLatest: UpdateLinkToLatest || (() => Promise.reject(new Error('UpdateLinkToLatest not available')))
 };
 
@@ -615,13 +639,19 @@ function showRenameFileModal(file) {
     }
 
     fileToRename = file;
-    const oldPath = file.path; // e.g. "content/A.md"
+    const oldPath = file.path; // e.g. "content/A.md" or "content/A.pdf"
     const currentName = oldPath.replace(/^content\//, '');
-    // Remove .md extension for display (it will be added automatically)
-    const currentNameWithoutExt = currentName.replace(/\.md$/i, '');
+    const isMarkdown = /\.md$/i.test(currentName);
+    const isPdf = /\.pdf$/i.test(currentName);
+
+    // Remove extension (.md or .pdf) for display
+    let currentNameWithoutExt = currentName;
+    if (isMarkdown || isPdf) {
+        currentNameWithoutExt = currentName.replace(/\.[^.]+$/, '');
+    }
 
     jsLog('INFO', 'rename: show-modal', 'oldPath=' + oldPath, 'currentName=' + currentName, 'displayName=' + currentNameWithoutExt);
-    console.log('Showing rename modal for:', currentName, '(displaying without .md:', currentNameWithoutExt + ')');
+    console.log('Showing rename modal for:', currentName, '(displaying without extension:', currentNameWithoutExt + ')');
 
     if (renameFileInput) {
         renameFileInput.value = currentNameWithoutExt;
@@ -651,10 +681,16 @@ async function handleFileRename() {
     }
 
     const newName = renameFileInput ? renameFileInput.value.trim() : '';
-    const oldPath = fileToRename.path; // e.g. "content/A.md"
+    const oldPath = fileToRename.path; // e.g. "content/A.md" or "content/A.pdf"
     const currentName = oldPath.replace(/^content\//, '');
-    // Remove .md extension for comparison (since modal displays without .md)
-    const currentNameWithoutExt = currentName.replace(/\.md$/i, '');
+    const isMarkdown = /\.md$/i.test(currentName);
+    const isPdf = /\.pdf$/i.test(currentName);
+
+    // Remove extension for comparison (since modal displays without extension)
+    let currentNameWithoutExt = currentName;
+    if (isMarkdown || isPdf) {
+        currentNameWithoutExt = currentName.replace(/\.[^.]+$/, '');
+    }
 
     jsLog('INFO', 'rename: handle-rename', 'oldPath=' + oldPath, 'currentName=' + currentName, 'newName=' + newName);
 
@@ -664,7 +700,7 @@ async function handleFileRename() {
         return;
     }
 
-    // Compare without extension (since .md will be added automatically)
+    // Compare without extension (since extension will be added automatically)
     if (newName === currentNameWithoutExt) {
         jsLog('INFO', 'rename: no-change', currentNameWithoutExt, '->', newName);
         statusEl.textContent = 'ファイル名が変更されていません。';
@@ -675,13 +711,16 @@ async function handleFileRename() {
     hideRenameFileModal();
 
     try {
-        // Ensure extension is .md
+        // Determine extension based on current file type
+        const targetExt = isPdf ? '.pdf' : '.md';
+
+        // Ensure extension is correct (.md or .pdf)
         let finalName = newName;
-        if (!finalName.toLowerCase().endsWith('.md')) {
-            // Remove any existing extension and add .md
+        if (!finalName.toLowerCase().endsWith(targetExt)) {
+            // Remove any existing extension and add targetExt
             const nameWithoutExt = finalName.replace(/\.[^.]*$/, '');
-            finalName = nameWithoutExt + '.md';
-            jsLog('INFO', 'rename: added-md-extension', 'original=' + newName, 'final=' + finalName);
+            finalName = nameWithoutExt + targetExt;
+            jsLog('INFO', 'rename: added-extension', 'original=' + newName, 'ext=' + targetExt, 'final=' + finalName);
         }
 
         // Ensure path starts with content/
@@ -691,10 +730,14 @@ async function handleFileRename() {
 
         const newLabel = newPath.replace(/^content\//, '');
         statusEl.textContent = `Renaming ${currentName} → ${newLabel} ...`;
-        console.log('Calling RenameFile:', oldPath, '->', newPath);
+        console.log('Calling rename API:', oldPath, '->', newPath);
         jsLog('INFO', 'rename: call-api', oldPath, '->', newPath);
 
-        await api.RenameFile(oldPath, newPath);
+        if (isPdf) {
+            await api.RenamePdfFile(oldPath, newPath);
+        } else {
+            await api.RenameFile(oldPath, newPath);
+        }
 
         statusEl.textContent = 'リネームしました: ' + newLabel;
         jsLog('INFO', 'rename: success', oldPath, '->', newPath);
@@ -755,8 +798,46 @@ async function loadFile(path) {
         console.log('Calling LoadFile with path:', path);
         const content = await api.LoadFile(path);
         console.log('LoadFile returned content, length:', content.length);
-        ta.value = content;
-        currentPath = path;
+
+        // Check if this is a PDF file
+        const isPdf = path.toLowerCase().endsWith('.pdf');
+
+        if (isPdf) {
+            // PDF閲覧モード: エディタを非表示、プレビューにPDFを表示
+            ta.value = '';
+            currentPath = path;
+
+            // Hide editor
+            if (ta) {
+                ta.style.display = 'none';
+            }
+            const row = document.querySelector('.row');
+            if (row) {
+                row.classList.add('pdf-mode');
+            }
+
+            // Update preview with PDF
+            await updatePreview();
+        } else {
+            // 通常のマークダウンファイル
+            ta.value = content;
+            currentPath = path;
+
+            // Show editor
+            if (ta) {
+                ta.style.display = '';
+            }
+            const row = document.querySelector('.row');
+            if (row) {
+                row.classList.remove('pdf-mode');
+            }
+
+            // Update preview
+            await updatePreview();
+
+            // Also update audio player directly (in case updatePreview didn't call it)
+            await updateAudioPlayer(content);
+        }
 
         // Update active file in sidebar
         document.querySelectorAll('.item').forEach(item => {
@@ -770,12 +851,6 @@ async function loadFile(path) {
                 break;
             }
         }
-
-        // Update preview
-        await updatePreview();
-
-        // Also update audio player directly (in case updatePreview didn't call it)
-        await updateAudioPlayer(content);
 
         statusEl.textContent = 'Loaded';
         console.log('File loaded successfully');
@@ -808,6 +883,43 @@ async function save() {
 // Update preview
 async function updatePreview() {
     try {
+        // Check if current file is a PDF
+        if (currentPath && currentPath.toLowerCase().endsWith('.pdf')) {
+            try {
+                const pdfUrl = await api.GetPdfFileURL(currentPath);
+                // Create HTML with embedded PDF
+                const pdfHtml = `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>PDF Viewer</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #525252;
+        }
+        embed {
+            width: 100%;
+            height: 100vh;
+            border: none;
+        }
+    </style>
+</head>
+<body>
+    <embed src="${pdfUrl}" type="application/pdf" />
+</body>
+</html>`;
+                pv.srcdoc = pdfHtml;
+                return;
+            } catch (error) {
+                console.error('Failed to load PDF:', error);
+                pv.srcdoc = `<html><body><p>PDFの読み込みに失敗しました: ${error.message}</p></body></html>`;
+                return;
+            }
+        }
+
         const content = ta.value;
         const caretIndex = typeof ta.selectionStart === 'number' ? ta.selectionStart : 0;
         const caretLine = getCaretLineNumber(content, caretIndex);
@@ -2587,6 +2699,7 @@ function setupDragAndDrop() {
 
         const hasAudio = files.some((file) => isSupportedAudioFile(file.name));
         const hasImage = files.some((file) => isSupportedImageFile(file.name));
+        const hasPdf = files.some((file) => isSupportedPdfFile(file.name));
 
         const tasks = [];
         if (hasAudio) {
@@ -2594,6 +2707,9 @@ function setupDragAndDrop() {
         }
         if (hasImage) {
             tasks.push(handleImageDrop(files));
+        }
+        if (hasPdf) {
+            tasks.push(handlePdfDrop(files));
         }
 
         if (tasks.length === 0) {
@@ -2615,6 +2731,11 @@ function isSupportedAudioFile(name = '') {
 function isSupportedImageFile(name = '') {
     const lower = (name || '').toLowerCase();
     return supportedImageExt.some((ext) => lower.endsWith(ext));
+}
+
+function isSupportedPdfFile(name = '') {
+    const lower = (name || '').toLowerCase();
+    return lower.endsWith('.pdf');
 }
 
 async function handleAudioDrop(fileList) {
@@ -2693,6 +2814,48 @@ async function handleImageDrop(fileList) {
     setStatusMessage('画像ファイルを保存しました。', 3000);
     // Reload image gallery after import
     await loadImageGallery();
+}
+
+async function handlePdfDrop(fileList) {
+    if (!fileList || fileList.length === 0) {
+        return;
+    }
+    if (!api.ImportPdfFile) {
+        console.warn('ImportPdfFile API is unavailable in this environment');
+        return;
+    }
+
+    const files = Array.from(fileList).filter((file) => isSupportedPdfFile(file.name));
+    if (files.length === 0) {
+        setStatusMessage('対応していないファイル形式です (pdf)', 3000);
+        return;
+    }
+
+    for (const file of files) {
+        try {
+            setStatusMessage(`PDFを取り込み中: ${file.name}`);
+            if (file.path) {
+                const pdfPath = await api.ImportPdfFile(file.path);
+                // Load the imported PDF file
+                await loadFile(pdfPath);
+            } else if (api.ImportPdfBase64 && file.arrayBuffer) {
+                const buffer = await file.arrayBuffer();
+                const base64 = arrayBufferToBase64(buffer);
+                const pdfPath = await api.ImportPdfBase64(file.name || `document-${Date.now()}.pdf`, base64);
+                // Load the imported PDF file
+                await loadFile(pdfPath);
+            } else {
+                console.warn('Cannot access data for dropped PDF:', file.name);
+                setStatusMessage('PDFデータにアクセスできませんでした', 4000);
+            }
+        } catch (error) {
+            console.error('ImportPdfFile failed', error);
+            setStatusMessage(`PDF取り込みに失敗: ${error?.message || error}`, 4000);
+        }
+    }
+
+    await loadFileList();
+    setStatusMessage('PDFファイルを保存しました。', 3000);
 }
 
 function arrayBufferToBase64(buffer) {
