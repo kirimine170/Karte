@@ -56,6 +56,15 @@ jobs:
         run: npm ci
         working-directory: frontend
 
+      - name: Prepare placeholder dist
+        run: |
+          mkdir -p frontend/dist
+          touch frontend/dist/.placeholder
+
+      - name: Generate Wails JS bindings
+        run: wails generate module
+        working-directory: .
+
       - name: Build frontend assets
         run: npm run build
         working-directory: frontend
@@ -72,10 +81,6 @@ jobs:
           fi
           echo "frontend/dist contents:"
           ls -la frontend/dist/
-
-      - name: Generate Wails JS bindings
-        run: wails generate module
-        working-directory: .
 
       - name: Run Go tests
         run: go test ./internal/...
