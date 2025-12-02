@@ -35,8 +35,7 @@ import (
 	"karte/internal/site"
 	syncpkg "karte/internal/sync"
 	"karte/internal/webpchunk"
-
-	"github.com/chai2010/webp"
+	"karte/internal/webputil"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -2025,12 +2024,8 @@ func (a *App) importImageFromReader(originalName string, src io.Reader) (string,
 		return "", fmt.Errorf("create webp image file: %w", err)
 	}
 
-	webpOptions := &webp.Options{Lossless: format == "png" || format == "gif"}
-	if !webpOptions.Lossless {
-		webpOptions.Quality = 90
-	}
-
-	if err := webp.Encode(webpFile, img, webpOptions); err != nil {
+	lossless := format == "png" || format == "gif"
+	if err := webputil.EncodeWebP(webpFile, img, lossless); err != nil {
 		webpFile.Close()
 		return "", fmt.Errorf("encode webp image: %w", err)
 	}
