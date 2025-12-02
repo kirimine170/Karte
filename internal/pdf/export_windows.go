@@ -10,8 +10,13 @@ import (
 	"regexp"
 	"strings"
 
+	_ "embed"
+
 	fpdf "github.com/jung-kurt/gofpdf"
 )
+
+//go:embed fonts/NotoSansJP-Regular.ttf
+var font []byte
 
 // ExportHTMLToPDF generates a PDF at outPath using gofpdf with UTF-8 font embedding.
 // プレビューHTMLをそのままのレイアウトで出力することはできませんが、内容はテキストとして安全に出力します。
@@ -23,13 +28,14 @@ func ExportHTMLToPDF(htmlStr string, outPath string) error {
 		return fmt.Errorf("failed to create output dir: %v", err)
 	}
 
-	fontPath, err := resolveJPFontPath()
-	if err != nil {
-		return err
-	}
+	// fontPath, err := resolveJPFontPath()
+	// if err != nil {
+	// 	return err
+	// }
 
 	pdf := fpdf.New("P", "mm", "A4", "")
-	pdf.AddUTF8Font("Noto", "", fontPath)
+	// pdf.AddUTF8Font("Noto", "", fontPath)
+	pdf.AddUTF8FontFromBytes("Noto", "", font)
 	pdf.SetFont("Noto", "", 12)
 	pdf.SetAutoPageBreak(true, 15)
 	pdf.SetMargins(15, 15, 15)

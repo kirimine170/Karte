@@ -29,6 +29,10 @@ Karteは、Wailsフレームワークを使用して開発されたクロスプ�
 go install github.com/wailsapp/wails/v2/cmd/wails@latest
 ```
 
+### 埋め込みフォントのインストール(For Windows)
+
+埋め込みフォントとして`internal/pdf/fonts/NotoSansJP-Regular.ttf`を配置する。
+
 ### アプリケーションのビルド
 
 ```bash
