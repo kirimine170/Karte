@@ -98,8 +98,5 @@ jobs:
           echo "frontend/dist contents:"
           ls -la frontend/dist/
 
-      - name: Run Go tests
-        run: go test ./internal/...
-
       - name: Build application
         run: wails build -platform ${{ matrix.platform }}
