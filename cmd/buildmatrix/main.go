@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -142,6 +143,15 @@ func runPrep(ctx context.Context) error {
 		return err
 	}
 
+	// macOS ホストで PortAudio が未インストールの場合は、できるだけ自動で入れておく
+	if runtime.GOOS == "darwin" {
+		fmt.Println("==> Checking PortAudio installation (macOS host)")
+		if err := ensurePortAudioOnDarwin(ctx); err != nil {
+			// ここで失敗してもビルド自体は続行する（環境によっては brew が無いなどがあるため）
+			fmt.Printf("WARN: failed to ensure PortAudio via brew: %v\n", err)
+		}
+	}
+
 	// package-lock.jsonが存在する場合はnpm ciを使用（厳密にpackage-lock.jsonを守る）
 	// 存在しない場合はnpm installを使用
 	packageLockPath := filepath.Join("frontend", "package-lock.json")
@@ -157,6 +167,21 @@ func runPrep(ctx context.Context) error {
 
 	fmt.Println("==> Running npm install (frontend)")
 	return runCommand(ctx, "frontend", nil, "npm", "install")
+}
+
+// ensurePortAudioOnDarwin は、macOS ホストで PortAudio が入っていなさそうな場合に
+// `brew install portaudio` を試みる。brew が無い / 失敗した場合は警告のみ。
+func ensurePortAudioOnDarwin(ctx context.Context) error {
+	// brew が存在するか確認
+	if err := exec.Command("brew", "--version").Run(); err != nil {
+		// brew が無ければ何もしない
+		fmt.Println("brew not found; skip automatic PortAudio installation")
+		return nil
+	}
+
+	fmt.Println("==> Ensuring PortAudio is installed via Homebrew (brew install portaudio)")
+	// 失敗してもエラーを返すだけで、呼び出し側でワーニング扱いにする
+	return runCommand(ctx, ".", nil, "brew", "install", "portaudio")
 }
 
 func runWailsBuild(ctx context.Context, t target) error {
