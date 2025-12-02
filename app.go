@@ -31,6 +31,7 @@ import (
 	"karte/internal/markdown"
 	"karte/internal/marp"
 	pdfexport "karte/internal/pdf"
+	"karte/internal/screenshot"
 	"karte/internal/site"
 	syncpkg "karte/internal/sync"
 	"karte/internal/webpchunk"
@@ -153,6 +154,28 @@ type ImageItem struct {
 	ModTime      time.Time `json:"modTime"`
 	MetadataPath string    `json:"metadataPath,omitempty"`
 	OriginalPath string    `json:"originalPath,omitempty"`
+}
+
+// CaptureScreenInteractive captures a screenshot using the platform-specific
+// implementation and stores it under karte_data/data/image as a WebP file.
+// It returns the image path relative to dataDir (e.g. "data/image/xxx.webp").
+func (a *App) CaptureScreenInteractive() (string, error) {
+	if a == nil {
+		return "", fmt.Errorf("app is not initialized")
+	}
+	if a.dataDir == "" {
+		return "", fmt.Errorf("dataDir is not initialized")
+	}
+
+	a.logInfo("CaptureScreenInteractive: start")
+	path, err := screenshot.CaptureScreenInteractive(a.dataDir)
+	if err != nil {
+		a.logError(fmt.Sprintf("CaptureScreenInteractive failed: %v", err))
+		return "", err
+	}
+
+	a.logInfo(fmt.Sprintf("CaptureScreenInteractive: saved screenshot to %s", path))
+	return path, nil
 }
 
 // GraphNode represents a node in the graph

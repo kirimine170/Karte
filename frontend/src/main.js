@@ -1,5 +1,5 @@
 import * as AppModule from '../wailsjs/wailsjs/go/main/App';
-const { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, ImportPdfFile, ImportPdfBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetPdfFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS, RenamePdfFile } = AppModule;
+const { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, ImportPdfFile, ImportPdfBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetPdfFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS, RenamePdfFile, CaptureScreenInteractive } = AppModule;
 // RenameFile and UpdateLinkToLatest may not exist in generated bindings yet, so import them conditionally
 const RenameFile = AppModule.RenameFile || null;
 const UpdateLinkToLatest = AppModule.UpdateLinkToLatest || null;
@@ -302,6 +302,7 @@ const imagePreviewClose = document.getElementById('imagePreviewClose');
 const imageMetadataEditor = document.getElementById('imageMetadataEditor');
 const imageMetadataSaveBtn = document.getElementById('imageMetadataSaveBtn');
 const imageMetadataStatus = document.getElementById('imageMetadataStatus');
+const captureScreenBtn = document.getElementById('captureScreenBtn');
 
 if (imageMetadataEditor) {
     imageMetadataEditor.disabled = true;
@@ -1820,6 +1821,39 @@ function setupPreviewImageDrop() {
 function setupImageGallery() {
     // Load initial gallery
     loadImageGallery();
+
+    // Setup capture screen button
+    if (captureScreenBtn) {
+        // Disable in pure browser mode (no backend)
+        if (isBrowser || !CaptureScreenInteractive) {
+            captureScreenBtn.disabled = true;
+            captureScreenBtn.title = 'スクリーンショットはデスクトップアプリでのみ利用できます';
+        } else {
+            captureScreenBtn.addEventListener('click', async () => {
+                if (captureScreenBtn.disabled) {
+                    return;
+                }
+                try {
+                    captureScreenBtn.disabled = true;
+                    setStatusMessage('スクリーンショットを取得中...', 0);
+                    const path = await CaptureScreenInteractive();
+                    if (path && typeof path === 'string') {
+                        console.log('Screenshot saved to:', path);
+                        setStatusMessage('スクリーンショットを保存しました', 3000);
+                    } else {
+                        setStatusMessage('スクリーンショットが保存されませんでした', 3000);
+                    }
+                    await loadImageGallery();
+                } catch (error) {
+                    console.error('Failed to capture screenshot:', error);
+                    const msg = (error && (error.message || String(error))) || 'スクリーンショットに失敗しました';
+                    setStatusMessage(msg, 5000);
+                } finally {
+                    captureScreenBtn.disabled = false;
+                }
+            });
+        }
+    }
 
     // Setup toggle button in top bar
     if (galleryToggle) {
