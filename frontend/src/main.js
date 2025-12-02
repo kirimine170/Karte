@@ -868,6 +868,13 @@ async function save() {
         return;
     }
 
+    // Prevent accidentally overwriting PDF files with text buffer
+    if (currentPath.toLowerCase().endsWith('.pdf')) {
+        console.warn('Save skipped: current file is a PDF:', currentPath);
+        statusEl.textContent = 'PDF閲覧中は保存できません';
+        return;
+    }
+
     try {
         statusEl.textContent = 'Saving...';
         console.log('Calling SaveFile with path:', currentPath, 'content length:', ta.value.length);
