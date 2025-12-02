@@ -77,6 +77,8 @@ func RenderSlideHTML(slideContent string) string {
 	var codeIsIndented bool
 	var codeLang string
 	var codeBuffer []string
+	var inBlockMath bool
+	var blockMathBuffer []string
 
 	// Remove HTML comments (like <!-- _class: lead -->) but keep them for class parsing
 	filteredLines := []string{}
@@ -113,6 +115,24 @@ func RenderSlideHTML(slideContent string) string {
 		codeIsIndented = false
 		codeLang = ""
 		codeBuffer = nil
+	}
+
+	flushBlockMath := func() {
+		if !inBlockMath {
+			return
+		}
+		// Join all lines in the block math buffer
+		mathContent := strings.Join(blockMathBuffer, "\n")
+		// Remove the opening and closing $$$ markers
+		mathContent = strings.TrimPrefix(mathContent, "$$$")
+		mathContent = strings.TrimSuffix(mathContent, "$$$")
+		mathContent = strings.TrimSpace(mathContent)
+		// Decode HTML entities if any
+		mathContent = html.UnescapeString(mathContent)
+		htmlLines = append(htmlLines, fmt.Sprintf(`<div class="katex-block">%s</div>`, mathContent))
+		// reset
+		inBlockMath = false
+		blockMathBuffer = nil
 	}
 
 	for i, line := range lines {
@@ -206,6 +226,49 @@ func RenderSlideHTML(slideContent string) string {
 		}
 		isOrderedMarker := func(s string) bool {
 			return regexp.MustCompile(`^\d+\.\s+`).MatchString(s)
+		}
+
+		// Block math start/end $$$ ... $$$
+		if strings.Contains(trimmed, "$$$") {
+			if inBlockMath {
+				// Closing block math - add this line and flush
+				blockMathBuffer = append(blockMathBuffer, line)
+				flushBlockMath()
+				continue
+			} else {
+				// Opening block math
+				closeAllLists()
+				if inTable && len(tableRows) > 0 {
+					htmlLines = append(htmlLines, processTableRows(tableRows))
+					tableRows = []string{}
+					inTable = false
+				}
+				// Check if it's a single-line block math ($$$...$$$)
+				if strings.Count(trimmed, "$$$") >= 2 {
+					// Single line block math
+					mathContent := trimmed
+					// Extract content between $$$ markers
+					mathRegex := regexp.MustCompile(`\$\$\$([\s\S]*?)\$\$\$`)
+					matches := mathRegex.FindStringSubmatch(mathContent)
+					if len(matches) > 1 {
+						mathContent = strings.TrimSpace(matches[1])
+						mathContent = html.UnescapeString(mathContent)
+						htmlLines = append(htmlLines, fmt.Sprintf(`<div class="katex-block">%s</div>`, mathContent))
+					}
+					continue
+				} else {
+					// Multi-line block math - start collecting
+					inBlockMath = true
+					blockMathBuffer = []string{line}
+					continue
+				}
+			}
+		}
+
+		// If inside block math, accumulate lines
+		if inBlockMath {
+			blockMathBuffer = append(blockMathBuffer, line)
+			continue
 		}
 
 		// Fenced code block start/end ```lang ... ```
@@ -349,6 +412,10 @@ func RenderSlideHTML(slideContent string) string {
 			if inCodeBlock {
 				flushCodeBlock()
 			}
+			// Close pending block math
+			if inBlockMath {
+				flushBlockMath()
+			}
 			closeAllLists()
 			if inTable && len(tableRows) > 0 {
 				htmlLines = append(htmlLines, processTableRows(tableRows))
@@ -356,7 +423,44 @@ func RenderSlideHTML(slideContent string) string {
 		}
 	}
 
-	return strings.Join(htmlLines, "\n")
+	htmlResult := strings.Join(htmlLines, "\n")
+
+	// Process block math: $$$...$$$ (can span multiple lines)
+	// Exclude code blocks
+	blockMathRegex := regexp.MustCompile(`\$\$\$([\s\S]*?)\$\$\$`)
+	htmlResult = blockMathRegex.ReplaceAllStringFunc(htmlResult, func(match string) string {
+		// Check if this match is inside a <pre><code> block
+		// Find the position of this match in the HTML
+		matchIndex := strings.Index(htmlResult, match)
+		if matchIndex == -1 {
+			return match
+		}
+		// Check if we're inside a code block
+		beforeMatch := htmlResult[:matchIndex]
+		// Count unclosed <pre> and <code> tags
+		preOpen := strings.Count(beforeMatch, "<pre>")
+		preClose := strings.Count(beforeMatch, "</pre>")
+		codeOpen := strings.Count(beforeMatch, "<code>")
+		codeClose := strings.Count(beforeMatch, "</code>")
+		if preOpen > preClose || codeOpen > codeClose {
+			// Inside code block, don't process
+			return match
+		}
+		// Extract math content
+		mathContent := blockMathRegex.FindStringSubmatch(match)[1]
+		// Decode HTML entities if any
+		mathContent = html.UnescapeString(mathContent)
+		// Trim whitespace
+		mathContent = strings.TrimSpace(mathContent)
+		return fmt.Sprintf(`<div class="katex-block">%s</div>`, mathContent)
+	})
+
+	// Remove <p> tags that wrap block math divs
+	// Pattern: <p><div class="katex-block">...</div></p>
+	pWrappedBlockMathRegex := regexp.MustCompile(`<p>\s*<div class="katex-block">([\s\S]*?)</div>\s*</p>`)
+	htmlResult = pWrappedBlockMathRegex.ReplaceAllString(htmlResult, `<div class="katex-block">$1</div>`)
+
+	return htmlResult
 }
 
 // processTableRows processes markdown table rows into HTML table
@@ -475,6 +579,95 @@ func processInlineFormatting(text string) string {
 		return fmt.Sprintf("<CODE_PLACEHOLDER>%s</CODE_PLACEHOLDER>", escapedContent)
 	})
 
+	// Links: [text](url) or [text](url "title")
+	// Process before HTML escaping to preserve link tags
+	// Match pattern: [text](url) or [text](url "title")
+	// Note: Must NOT match images (![alt](path)), so we check that the character before [ is not !
+	linkRegex := regexp.MustCompile(`([^!]|^)\[([^\]]+)\]\(([^)]+)\)`)
+	text = linkRegex.ReplaceAllStringFunc(text, func(match string) string {
+		parts := linkRegex.FindStringSubmatch(match)
+		if len(parts) < 4 {
+			return match
+		}
+		prefix := parts[1] // Character before [ (should not be !)
+		linkText := parts[2]
+		urlAndTitle := parts[3] // This may contain url "title"
+
+		// Parse url and title from urlAndTitle
+		// Format: url or url "title"
+		var url, title string
+		titleMatch := regexp.MustCompile(`^(.+?)\s+"([^"]+)"$`).FindStringSubmatch(urlAndTitle)
+		if len(titleMatch) >= 3 {
+			// Has title
+			url = titleMatch[1]
+			title = titleMatch[2]
+		} else {
+			// No title, entire string is url
+			url = urlAndTitle
+			title = ""
+		}
+
+		// Escape link text and title for HTML attributes, but keep url unescaped for URL processing
+		escapedLinkText := html.EscapeString(linkText)
+		escapedTitle := html.EscapeString(title)
+
+		// Convert .md links to .html links for proper navigation
+		// If url ends with .md, replace with .html
+		if strings.HasSuffix(strings.ToLower(url), ".md") {
+			url = strings.TrimSuffix(url, ".md") + ".html"
+		}
+
+		// Build link tag with unescaped url (will be properly escaped in the final output)
+		// Use special markers to protect the url from HTML escaping
+		// Include prefix to preserve context
+		return prefix + fmt.Sprintf("<LINK_PLACEHOLDER>__LINK_URL_START__%s__LINK_URL_END____LINK_TEXT_START__%s__LINK_TEXT_END____LINK_TITLE_START__%s__LINK_TITLE_END__</LINK_PLACEHOLDER>", url, escapedLinkText, escapedTitle)
+	})
+
+	// Images: ![alt](path "title") or ![alt](path)
+	// Process before HTML escaping to preserve image tags
+	// Match pattern: ![alt](path) or ![alt](path "title")
+	// Note: path can contain spaces, but title is in quotes
+	imageRegex := regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
+	text = imageRegex.ReplaceAllStringFunc(text, func(match string) string {
+		parts := imageRegex.FindStringSubmatch(match)
+		if len(parts) < 3 {
+			return match
+		}
+		alt := parts[1]
+		pathAndTitle := parts[2] // This may contain path "title"
+
+		// Parse path and title from pathAndTitle
+		// Format: path or path "title"
+		var path, title string
+		titleMatch := regexp.MustCompile(`^(.+?)\s+"([^"]+)"$`).FindStringSubmatch(pathAndTitle)
+		if len(titleMatch) >= 3 {
+			// Has title
+			path = titleMatch[1]
+			title = titleMatch[2]
+		} else {
+			// No title, entire string is path
+			path = pathAndTitle
+			title = ""
+		}
+
+		// Escape alt and title for HTML attributes, but keep path unescaped for URL processing
+		escapedAlt := html.EscapeString(alt)
+		escapedTitle := html.EscapeString(title)
+
+		// Build img tag with unescaped path (will be properly escaped in the final output)
+		// Use special markers to protect the path from HTML escaping
+		return fmt.Sprintf("<IMAGE_PLACEHOLDER>__IMAGE_PATH_START__%s__IMAGE_PATH_END____IMAGE_ALT_START__%s__IMAGE_ALT_END____IMAGE_TITLE_START__%s__IMAGE_TITLE_END__</IMAGE_PLACEHOLDER>", path, escapedAlt, escapedTitle)
+	})
+
+	// Inline math: $...$ (but not inside code blocks)
+	// Process after code to avoid matching $ inside code
+	// Use special markers to protect LaTeX content from HTML escaping
+	text = regexp.MustCompile(`\$([^$\n]+?)\$`).ReplaceAllStringFunc(text, func(match string) string {
+		content := regexp.MustCompile(`\$([^$\n]+?)\$`).FindStringSubmatch(match)[1]
+		// Use markers to protect LaTeX content
+		return fmt.Sprintf("<KATEX_INLINE_PLACEHOLDER>__KATEX_CONTENT_START__%s__KATEX_CONTENT_END__</KATEX_INLINE_PLACEHOLDER>", content)
+	})
+
 	// Escape remaining HTML (this will escape placeholders too, but we'll fix that)
 	text = html.EscapeString(text)
 
@@ -485,6 +678,148 @@ func processInlineFormatting(text string) string {
 	text = strings.ReplaceAll(text, "&lt;/EM_PLACEHOLDER&gt;", "</em>")
 	text = strings.ReplaceAll(text, "&lt;CODE_PLACEHOLDER&gt;", "<code>")
 	text = strings.ReplaceAll(text, "&lt;/CODE_PLACEHOLDER&gt;", "</code>")
+
+	// Replace link placeholder (link tags should not be escaped)
+	// First, handle escaped placeholders
+	text = strings.ReplaceAll(text, "&lt;LINK_PLACEHOLDER&gt;", "<LINK_PLACEHOLDER>")
+	text = strings.ReplaceAll(text, "&lt;/LINK_PLACEHOLDER&gt;", "</LINK_PLACEHOLDER>")
+
+	// Extract and restore link tags
+	linkPlaceholderRegex := regexp.MustCompile(`<LINK_PLACEHOLDER>(.*?)</LINK_PLACEHOLDER>`)
+	text = linkPlaceholderRegex.ReplaceAllStringFunc(text, func(match string) string {
+		content := linkPlaceholderRegex.FindStringSubmatch(match)[1]
+		// Decode HTML entities in the content
+		content = strings.ReplaceAll(content, "&amp;", "&")
+		content = strings.ReplaceAll(content, "&lt;", "<")
+		content = strings.ReplaceAll(content, "&gt;", ">")
+		content = strings.ReplaceAll(content, "&quot;", "\"")
+		content = strings.ReplaceAll(content, "&#39;", "'")
+
+		// Extract url, linkText, and title from markers
+		urlMatch := regexp.MustCompile(`__LINK_URL_START__(.*?)__LINK_URL_END__`).FindStringSubmatch(content)
+		textMatch := regexp.MustCompile(`__LINK_TEXT_START__(.*?)__LINK_TEXT_END__`).FindStringSubmatch(content)
+		titleMatch := regexp.MustCompile(`__LINK_TITLE_START__(.*?)__LINK_TITLE_END__`).FindStringSubmatch(content)
+
+		if len(urlMatch) < 2 || len(textMatch) < 2 {
+			// Log error for debugging
+			fmt.Printf("[Marp] Failed to parse link placeholder: content=%q\n", content)
+			return match // Return original if parsing fails
+		}
+
+		linkURL := urlMatch[1]
+		linkText := textMatch[1]
+		linkTitle := ""
+		if len(titleMatch) >= 2 && titleMatch[1] != "" {
+			linkTitle = titleMatch[1]
+		}
+
+		// Decode any HTML entities that might have been encoded in the url
+		linkURL = strings.ReplaceAll(linkURL, "&amp;", "&")
+		linkURL = strings.ReplaceAll(linkURL, "&lt;", "<")
+		linkURL = strings.ReplaceAll(linkURL, "&gt;", ">")
+		linkURL = strings.ReplaceAll(linkURL, "&quot;", "\"")
+		linkURL = strings.ReplaceAll(linkURL, "&#34;", "\"")
+		linkURL = strings.ReplaceAll(linkURL, "&#39;", "'")
+		linkURL = strings.ReplaceAll(linkURL, "&amp;#34;", "\"")
+		linkURL = strings.ReplaceAll(linkURL, "&amp;#39;", "'")
+
+		// Escape url for HTML attribute (but keep it as a URL path)
+		escapedURL := html.EscapeString(linkURL)
+
+		// Build link tag
+		linkTag := fmt.Sprintf(`<a href="%s"`, escapedURL)
+		if linkTitle != "" {
+			linkTag += fmt.Sprintf(` title="%s"`, linkTitle)
+		}
+		linkTag += fmt.Sprintf(`>%s</a>`, linkText)
+
+		fmt.Printf("[Marp] Generated link tag: %s (url: %s, text: %s, title: %s)\n", linkTag, linkURL, linkText, linkTitle)
+
+		return linkTag
+	})
+
+	// Replace image placeholder (image tags should not be escaped)
+	// First, handle escaped placeholders
+	text = strings.ReplaceAll(text, "&lt;IMAGE_PLACEHOLDER&gt;", "<IMAGE_PLACEHOLDER>")
+	text = strings.ReplaceAll(text, "&lt;/IMAGE_PLACEHOLDER&gt;", "</IMAGE_PLACEHOLDER>")
+
+	// Extract and restore image tags
+	imagePlaceholderRegex := regexp.MustCompile(`<IMAGE_PLACEHOLDER>(.*?)</IMAGE_PLACEHOLDER>`)
+	text = imagePlaceholderRegex.ReplaceAllStringFunc(text, func(match string) string {
+		content := imagePlaceholderRegex.FindStringSubmatch(match)[1]
+		// Decode HTML entities in the content
+		content = strings.ReplaceAll(content, "&amp;", "&")
+		content = strings.ReplaceAll(content, "&lt;", "<")
+		content = strings.ReplaceAll(content, "&gt;", ">")
+		content = strings.ReplaceAll(content, "&quot;", "\"")
+		content = strings.ReplaceAll(content, "&#39;", "'")
+
+		// Extract path, alt, and title from markers
+		pathMatch := regexp.MustCompile(`__IMAGE_PATH_START__(.*?)__IMAGE_PATH_END__`).FindStringSubmatch(content)
+		altMatch := regexp.MustCompile(`__IMAGE_ALT_START__(.*?)__IMAGE_ALT_END__`).FindStringSubmatch(content)
+		titleMatch := regexp.MustCompile(`__IMAGE_TITLE_START__(.*?)__IMAGE_TITLE_END__`).FindStringSubmatch(content)
+
+		if len(pathMatch) < 2 || len(altMatch) < 2 {
+			// Log error for debugging
+			fmt.Printf("[Marp] Failed to parse image placeholder: content=%q\n", content)
+			return match // Return original if parsing fails
+		}
+
+		imgPath := pathMatch[1]
+		imgAlt := altMatch[1]
+		imgTitle := ""
+		if len(titleMatch) >= 2 && titleMatch[1] != "" {
+			imgTitle = titleMatch[1]
+		}
+
+		// Decode any HTML entities that might have been encoded in the path
+		// This handles cases where the path was partially escaped
+		imgPath = strings.ReplaceAll(imgPath, "&amp;", "&")
+		imgPath = strings.ReplaceAll(imgPath, "&lt;", "<")
+		imgPath = strings.ReplaceAll(imgPath, "&gt;", ">")
+		imgPath = strings.ReplaceAll(imgPath, "&quot;", "\"")
+		imgPath = strings.ReplaceAll(imgPath, "&#34;", "\"")
+		imgPath = strings.ReplaceAll(imgPath, "&#39;", "'")
+		imgPath = strings.ReplaceAll(imgPath, "&amp;#34;", "\"")
+		imgPath = strings.ReplaceAll(imgPath, "&amp;#39;", "'")
+
+		// Remove any title that might have been included in the path
+		// Pattern: path "title" -> path
+		titleInPathRegex := regexp.MustCompile(`^(.+?)\s+"[^"]*"$`)
+		if titleMatch := titleInPathRegex.FindStringSubmatch(imgPath); len(titleMatch) >= 2 {
+			imgPath = titleMatch[1]
+		}
+
+		// Escape path for HTML attribute (but keep it as a URL path)
+		escapedPath := html.EscapeString(imgPath)
+
+		// Build img tag
+		imgTag := fmt.Sprintf(`<img src="%s" alt="%s"`, escapedPath, imgAlt)
+		if imgTitle != "" {
+			imgTag += fmt.Sprintf(` title="%s"`, imgTitle)
+		}
+		imgTag += `>`
+
+		fmt.Printf("[Marp] Generated img tag: %s (path: %s, title: %s)\n", imgTag, imgPath, imgTitle)
+
+		return imgTag
+	})
+
+	// Replace KaTeX placeholder and decode the content
+	katexInlineRegex := regexp.MustCompile(`&lt;KATEX_INLINE_PLACEHOLDER&gt;(.*?)&lt;/KATEX_INLINE_PLACEHOLDER&gt;`)
+	text = katexInlineRegex.ReplaceAllStringFunc(text, func(match string) string {
+		content := katexInlineRegex.FindStringSubmatch(match)[1]
+		// Decode HTML entities in the content (between markers)
+		content = strings.ReplaceAll(content, "__KATEX_CONTENT_START__", "")
+		content = strings.ReplaceAll(content, "__KATEX_CONTENT_END__", "")
+		// Decode HTML entities
+		content = strings.ReplaceAll(content, "&amp;", "&")
+		content = strings.ReplaceAll(content, "&lt;", "<")
+		content = strings.ReplaceAll(content, "&gt;", ">")
+		content = strings.ReplaceAll(content, "&quot;", "\"")
+		content = strings.ReplaceAll(content, "&#39;", "'")
+		return fmt.Sprintf(`<span class="katex-inline">%s</span>`, content)
+	})
 
 	return text
 }
@@ -645,6 +980,7 @@ func RenderMarpHTML(slides []string, title string, header string, footer string,
 	<title>%s</title>
 	<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap">
 	<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Code+Pro&display=swap">
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.css">
 	<style>
 		* {
 			margin: 0;
@@ -848,6 +1184,27 @@ func RenderMarpHTML(slides []string, title string, header string, footer string,
 			background: rgba(0, 0, 0, 0.05);
 			padding: 0.2em 0.4em;
 			border-radius: 3px;
+		}
+		
+		/* Images */
+		.slide img {
+			max-width: 100%%;
+			max-height: 100%%;
+			width: auto;
+			height: auto;
+			object-fit: contain;
+			display: block;
+			margin: 0.5em auto;
+		}
+		
+		/* Image size classes - based on slide size (100%% = full slide) */
+		.slide img[style*="width:"] {
+			/* Custom width styles are preserved */
+		}
+		
+		/* Default image size is 80%% of slide width for better readability */
+		.slide img:not([style*="width:"]) {
+			max-width: 80%%;
 		}
 		
 		/* Block code */
@@ -1177,6 +1534,57 @@ func RenderMarpHTML(slides []string, title string, header string, footer string,
 		
 		// Initialize first slide
 		showSlide(0);
+	</script>
+	<script defer src="https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.js"></script>
+	<script>
+		// Helper function to decode HTML entities
+		function decodeHtmlEntities(text) {
+			const textarea = document.createElement('textarea');
+			textarea.innerHTML = text;
+			return textarea.value;
+		}
+		
+		// Initialize KaTeX for math rendering after KaTeX is loaded
+		window.addEventListener('DOMContentLoaded', function() {
+			// Wait for KaTeX to be available
+			function initKaTeX() {
+				if (typeof katex === 'undefined') {
+					setTimeout(initKaTeX, 50);
+					return;
+				}
+				
+				// Render inline math
+				document.querySelectorAll('.katex-inline').forEach(function(el) {
+					try {
+						// Use innerHTML to get the content, then decode HTML entities
+						const rawContent = el.innerHTML.trim();
+						const math = decodeHtmlEntities(rawContent);
+						katex.render(math, el, {
+							throwOnError: false,
+							displayMode: false
+						});
+					} catch (e) {
+						console.error('KaTeX inline rendering error:', e);
+					}
+				});
+				
+				// Render block math
+				document.querySelectorAll('.katex-block').forEach(function(el) {
+					try {
+						// Use innerHTML to get the content, then decode HTML entities
+						const rawContent = el.innerHTML.trim();
+						const math = decodeHtmlEntities(rawContent);
+						katex.render(math, el, {
+							throwOnError: false,
+							displayMode: true
+						});
+					} catch (e) {
+						console.error('KaTeX block rendering error:', e);
+					}
+				});
+			}
+			initKaTeX();
+		});
 	</script>
 </body>
 </html>`, html.EscapeString(title), themeCSS, baseWidth, baseHeight, aspectRatioCSS, aspectRatioWidth, aspectRatioHeight, aspectRatioWidth, aspectRatioHeight, strings.Join(slideHTMLs, "\n"), len(slides))

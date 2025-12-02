@@ -84,6 +84,32 @@ wails dev
    - ツールバーの「Theme」セレクターからテーマを選択
    - Light、Dark、High Contrastが利用可能
 
+5. **音声メモの取り込み**
+   - アプリ画面に WAV / MP3 / M4A をドラッグ＆ドロップすると `karte_data/data/audio/` に自動コピー
+   - 取り込み状況は右上ステータスに表示されます
+
+6. **文字起こし（ASR）**
+   - `karte_data/data/asr/config.json` を有効化してモデルパスを記入すると、取り込み直後に自動で文字起こし
+   - 生成された Markdown は `karte_data/content/transcripts/` 以下に保存され、音声ファイルへのリンクを含みます
+
+### ASR 設定手順
+
+1. **モデルファイルの配置**
+   - Encoder/Decoder/Joiner 形式の Transducer モデル、または Zipformer CTC モデルを `karte_data/data/asr/` などに配置
+
+2. **設定ファイルの編集**
+   - `karte_data/data/asr/config.json` に以下を設定
+     - `enabled`: `true`
+     - `model.tokens` および各モデルファイルパス（相対パス可）
+     - `sampleRate` は 16000 を推奨
+
+3. **依存コマンド**
+   - ffmpeg が PATH に必要です（例: `brew install ffmpeg`）
+
+4. **実行フロー**
+   - 音声ファイルをドロップすると `audio-imported` イベント→ASR開始
+   - 文字起こし完了時に `audio-transcribed` イベント経由で通知され、自動的に Markdown が開きます
+
 ## プロジェクト構成
 
 ```
