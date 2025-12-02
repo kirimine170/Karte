@@ -459,6 +459,14 @@
     display: none;
   }
 
+  .row.pdf-mode {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .row.pdf-mode textarea {
+    display: none;
+  }
+
   .btn {
     background: var(--accent);
     color: var(--browsername-color);
@@ -553,7 +561,7 @@
     line-height: 1.6;
   }
 
-  .drop-overlay__hint > div {
+  .drop-overlay__hint>div {
     margin: 2px 0;
   }
 
@@ -954,6 +962,10 @@
         <div class="image-gallery-container" id="imageGalleryContainer">
           <div class="image-gallery-header">
             <div class="image-gallery-title">画像ギャラリー</div>
+            <button id="captureScreenBtn" class="btn" style="font-size: 11px; padding: 4px 8px; margin-left: auto;"
+              title="画面キャプチャを撮ってギャラリーに保存">
+              画面キャプチャ
+            </button>
           </div>
           <div class="image-gallery-grid" id="imageGalleryGrid"></div>
           <div class="image-gallery-empty" id="imageGalleryEmpty" style="display: none;">
@@ -1014,6 +1026,19 @@
     <div class="modal-buttons">
       <button id="createFileBtn" class="btn">作成</button>
       <button id="cancelFileBtn" class="btn btn-secondary">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<!-- Rename file modal -->
+<div id="renameFileModal" class="modal" style="display: none;">
+  <div class="modal-content">
+    <h3>ファイル名を変更</h3>
+    <p>新しいファイル名を入力してください（content/ は不要、.md拡張子は自動で追加されます）:</p>
+    <input type="text" id="renameFileInput" placeholder="例: new-filename" />
+    <div class="modal-buttons">
+      <button id="confirmRenameBtn" class="btn">変更</button>
+      <button id="cancelRenameBtn" class="btn btn-secondary">キャンセル</button>
     </div>
   </div>
 </div>
