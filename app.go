@@ -544,7 +544,7 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 	header := ""
 	footer := ""
 	paginate := false
-	aspectRatio := "" // Default will be 16:9
+	aspectRatio := ""      // Default will be 16:9
 	marpTheme := "default" // Default Marp theme
 
 	if frontMatter != nil {
@@ -1185,7 +1185,9 @@ func (a *App) ExportPDF(html string) (string, error) {
 		return "", err
 	}
 	a.logInfo(fmt.Sprintf("PDF exported: %s", pdfPath))
-	return pdfPath, nil
+	url := strings.ReplaceAll(pdfPath, "\\", "/")
+	a.logInfo("url --- " + url)
+	return url, nil
 }
 
 // ---- Presenter multi-window APIs ----

@@ -900,9 +900,9 @@ async function exportPdf() {
         }
 
         if (!isBrowser) {
-            const pdfPath = await api.ExportPDF(html);
-            statusEl.textContent = 'PDF exported: ' + pdfPath;
-            BrowserOpenURL('file://' + pdfPath);
+            const pdfUrl = await api.ExportPDF(html);
+            statusEl.textContent = 'PDF exported: ' + pdfUrl;
+            BrowserOpenURL(pdfUrl);//HACK Previewが開けずInvalid URLを吐く
         } else {
             // In browser, open print dialog
             const win = window.open('about:blank', '_blank', 'noopener');
