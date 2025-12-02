@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1256,7 +1257,47 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 						linkPatterns = append(linkPatterns, regexp.QuoteMeta("/"+strings.TrimSuffix(targetPath, ".md")+".html"))
 					}
 
-					a.logInfo(fmt.Sprintf("PreviewMarkdown: trying %d patterns to match link", len(linkPatterns)))
+					// Also add URL-encoded versions of patterns for multibyte characters
+					urlEncodedPatterns := []string{}
+					for _, pattern := range linkPatterns {
+						urlEncodedPatterns = append(urlEncodedPatterns, pattern)
+						// Add URL-encoded version (for multibyte characters)
+						// Remove regex escaping first, then URL encode, then re-escape for regex
+						unescaped := strings.ReplaceAll(pattern, "\\", "")
+						urlEncoded := url.QueryEscape(unescaped)
+						if urlEncoded != unescaped {
+							urlEncodedPatterns = append(urlEncodedPatterns, regexp.QuoteMeta(urlEncoded))
+						}
+					}
+					linkPatterns = urlEncodedPatterns
+
+					a.logInfo(fmt.Sprintf("PreviewMarkdown: trying %d patterns to match link (including URL-encoded)", len(linkPatterns)))
+					// Debug: log first few patterns
+					if len(linkPatterns) > 0 {
+						maxLog := 3
+						if len(linkPatterns) < maxLog {
+							maxLog = len(linkPatterns)
+						}
+						for i := 0; i < maxLog; i++ {
+							a.logInfo(fmt.Sprintf("PreviewMarkdown: pattern %d: %s", i+1, linkPatterns[i]))
+						}
+					}
+
+					// Debug: extract all href attributes from HTML to see what we're matching against
+					hrefRegex := regexp.MustCompile(`href=["']([^"']+)["']`)
+					allHrefs := hrefRegex.FindAllStringSubmatch(html, -1)
+					a.logInfo(fmt.Sprintf("PreviewMarkdown: found %d href attributes in HTML", len(allHrefs)))
+					if len(allHrefs) > 0 {
+						maxLog := 3
+						if len(allHrefs) < maxLog {
+							maxLog = len(allHrefs)
+						}
+						for i := 0; i < maxLog; i++ {
+							if len(allHrefs[i]) > 1 {
+								a.logInfo(fmt.Sprintf("PreviewMarkdown: href %d: %s", i+1, allHrefs[i][1]))
+							}
+						}
+					}
 
 					// Match <a> tags that link to this target and add warning
 					// Use a map to track which links already have warnings to avoid duplicates
@@ -2492,12 +2533,22 @@ func (a *App) GetGraphData() (*GraphData, error) {
 					if err := json.Unmarshal(docMapData, &docMap); err == nil {
 						if currentPath, exists := docMap[edge.TargetDocID]; exists {
 							// doc_mapから取得したパスでファイルを読み込む
-							targetFilePath := filepath.Join(a.dataDir, currentPath)
+							// currentPathは "content/..." 形式なので、filepath.FromSlashで正規化してから結合
+							normalizedPath := filepath.FromSlash(currentPath)
+							targetFilePath := filepath.Join(a.dataDir, normalizedPath)
+							a.logInfo(fmt.Sprintf("Target updated check: attempting to read file at resolved path (doc_id=%s): %s -> %s", edge.TargetDocID, currentPath, targetFilePath))
 							if targetContent, err := os.ReadFile(targetFilePath); err == nil {
 								currentHash = gitvcs.CalculateHash(string(targetContent))
 								a.logInfo(fmt.Sprintf("Target updated check: resolved path via doc_map for doc_id %s: %s (hash: %s)", edge.TargetDocID, currentPath, currentHash[:8]))
 							} else {
-								a.logInfo(fmt.Sprintf("Target updated check: failed to read file at resolved path %s: %v", currentPath, err))
+								a.logError(fmt.Sprintf("Target updated check: failed to read file at resolved path %s (normalized: %s): %v", currentPath, targetFilePath, err))
+								// フォールバック: 直接パスを試す（マルチバイト文字の問題の可能性）
+								if targetContent2, err2 := os.ReadFile(filepath.Join(a.dataDir, currentPath)); err2 == nil {
+									currentHash = gitvcs.CalculateHash(string(targetContent2))
+									a.logInfo(fmt.Sprintf("Target updated check: succeeded with direct path join for doc_id %s: %s (hash: %s)", edge.TargetDocID, currentPath, currentHash[:8]))
+								} else {
+									a.logError(fmt.Sprintf("Target updated check: fallback also failed for %s: %v", currentPath, err2))
+								}
 							}
 						} else {
 							a.logInfo(fmt.Sprintf("Target updated check: doc_id %s not found in doc_map", edge.TargetDocID))
