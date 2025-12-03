@@ -490,10 +490,21 @@
   }
 
   .row.pdf-mode {
+    /* PDF表示時: エディタは非表示、プレビューとギャラリーを横に並べる */
     grid-template-columns: 1fr 1fr;
   }
 
-  .row.pdf-mode textarea {
+  .row.pdf-mode .editor-pane {
+    /* PDF表示時はエディタペイン全体を非表示 */
+    display: none;
+  }
+
+  .row.pdf-mode.gallery-hidden {
+    /* PDF表示時かつギャラリー非表示: プレビューのみ（全幅） */
+    grid-template-columns: 1fr;
+  }
+
+  .row.pdf-mode.gallery-hidden .image-gallery-container {
     display: none;
   }
 
