@@ -285,6 +285,11 @@ func packageTemplateIntoAppBundle(projectRoot, artifactDir string) error {
 		return fmt.Errorf("copy template into app bundle %s: %w", destTemplate, err)
 	}
 
+	// 一時的な templateDir を削除（Karte.app と同じ階層に残さない）
+	if err := os.RemoveAll(templateDir); err != nil {
+		return fmt.Errorf("remove temporary template dir %s: %w", templateDir, err)
+	}
+
 	return nil
 }
 
