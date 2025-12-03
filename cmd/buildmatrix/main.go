@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -58,6 +59,12 @@ func main() {
 		}
 	}
 
+	// プロジェクトルート（現在の作業ディレクトリを前提とする）
+	projectRoot, err := os.Getwd()
+	if err != nil {
+		log.Fatalf("failed to get working directory: %v", err)
+	}
+
 	for _, t := range selected {
 		fmt.Printf("==> Building %s (%s)\n", t.Name, t.Platform)
 
@@ -79,6 +86,13 @@ func main() {
 
 		if err := moveArtifacts(t.ArtifactDir); err != nil {
 			log.Fatalf("failed to move artifacts for %s: %v", t.Name, err)
+		}
+
+		// macOS 向けビルドでは、templateをコピーする
+		if isDarwinTarget(t.Name) {
+			if err := packageTemplateIntoAppBundle(projectRoot, t.ArtifactDir); err != nil {
+				log.Fatalf("failed to package karte_data_template for %s: %v", t.Name, err)
+			}
 		}
 
 		fmt.Printf("✅ %s artifacts stored in %s\n", t.Name, t.ArtifactDir)
@@ -209,6 +223,138 @@ func moveArtifacts(destDir string) error {
 		}
 	}
 	return os.RemoveAll(binDir)
+}
+
+// isDarwinTarget reports whether the target name represents a macOS build.
+// 現状の build/targets.json では "darwin", "darwin-arm64", "darwin-amd64" が対象。
+func isDarwinTarget(name string) bool {
+	return strings.HasPrefix(name, "darwin")
+}
+
+// packageTemplateIntoAppBundle replicates the packaging logic from the old package.sh:
+// - Copy templates/karte_data_template into the build artifact directory
+// - Overlay ASR models from karte_data/data/asr onto that template
+// - Copy the resulting karte_data_template into .app/Contents/Resources
+func packageTemplateIntoAppBundle(projectRoot, artifactDir string) error {
+	appBundle := filepath.Join(artifactDir, "Karte.app")
+	if fi, err := os.Stat(appBundle); err != nil || !fi.IsDir() {
+		// macOS 以外、もしくは .app が存在しない場合は何もしない
+		return nil
+	}
+
+	templateSource := filepath.Join(projectRoot, "templates", "karte_data_template")
+	templateDir := filepath.Join(artifactDir, "karte_data_template")
+
+	// テンプレートディレクトリをクリーンにしてコピー
+	if err := os.RemoveAll(templateDir); err != nil {
+		return fmt.Errorf("remove existing template dir %s: %w", templateDir, err)
+	}
+	if fi, err := os.Stat(templateSource); err == nil && fi.IsDir() {
+		if err := copyDir(templateSource, templateDir); err != nil {
+			return fmt.Errorf("copy template from %s to %s: %w", templateSource, templateDir, err)
+		}
+	} else {
+		// テンプレートが無い場合は最低限のディレクトリだけ作る
+		if err := os.MkdirAll(filepath.Join(templateDir, "data"), 0o755); err != nil {
+			return fmt.Errorf("create empty template dir %s: %w", templateDir, err)
+		}
+	}
+
+	// ASR モデルを karte_data からテンプレートへコピー（存在する場合のみ）
+	asrSource := filepath.Join(projectRoot, "karte_data", "data", "asr")
+	asrTarget := filepath.Join(templateDir, "data", "asr")
+	if fi, err := os.Stat(asrSource); err == nil && fi.IsDir() {
+		if err := os.MkdirAll(asrTarget, 0o755); err != nil {
+			return fmt.Errorf("create asr target dir %s: %w", asrTarget, err)
+		}
+		if err := copyDir(asrSource, asrTarget); err != nil {
+			return fmt.Errorf("copy ASR models from %s to %s: %w", asrSource, asrTarget, err)
+		}
+	}
+
+	// .app バンドルの Resources 以下に karte_data_template を配置
+	resourcesDir := filepath.Join(appBundle, "Contents", "Resources")
+	if err := os.MkdirAll(resourcesDir, 0o755); err != nil {
+		return fmt.Errorf("create Resources dir %s: %w", resourcesDir, err)
+	}
+	destTemplate := filepath.Join(resourcesDir, "karte_data_template")
+	if err := os.RemoveAll(destTemplate); err != nil {
+		return fmt.Errorf("remove existing %s: %w", destTemplate, err)
+	}
+	if err := copyDir(templateDir, destTemplate); err != nil {
+		return fmt.Errorf("copy template into app bundle %s: %w", destTemplate, err)
+	}
+
+	// 一時的な templateDir を削除（Karte.app と同じ階層に残さない）
+	if err := os.RemoveAll(templateDir); err != nil {
+		return fmt.Errorf("remove temporary template dir %s: %w", templateDir, err)
+	}
+
+	return nil
+}
+
+// copyDir recursively copies a directory tree.
+func copyDir(src, dst string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("source %s is not a directory", src)
+	}
+	if err := os.MkdirAll(dst, info.Mode()); err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+
+		if entry.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := copyFile(srcPath, dstPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// copyFile copies a single file, preserving its mode.
+func copyFile(src, dst string) error {
+	sf, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sf.Close()
+
+	info, err := sf.Stat()
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+
+	df, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+	if err != nil {
+		return err
+	}
+	defer df.Close()
+
+	if _, err := io.Copy(df, sf); err != nil {
+		return err
+	}
+	return nil
 }
 
 func runCommand(ctx context.Context, dir string, extraEnv map[string]string, name string, args ...string) error {
