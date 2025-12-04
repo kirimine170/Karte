@@ -29,9 +29,16 @@ Karteは、Wailsフレームワークを使用して開発されたクロスプ�
 go install github.com/wailsapp/wails/v2/cmd/wails@latest
 ```
 
-### 埋め込みフォントのインストール(For Windows)
+### Windows 向けの設定
+
+#### 埋め込みフォントの配置
 
 埋め込みフォントとして`internal/pdf/fonts/NotoSansJP-Regular.ttf`を配置する。
+
+#### wkhtmltopdf.exeの配置
+
+wkhtmltopdf.exeをインストールし、`C:\\Program Files\\wkhtmltopdf\\bin\\wkhtmltopdf.exe`に配置する。  
+Download wkhtmltopdf [Downloadlink](https://wkhtmltopdf.org/downloads.html)
 
 ### アプリケーションのビルド
 
