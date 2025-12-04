@@ -1,0 +1,22 @@
+# .github/labeler.yml
+## ディレクトリ単位でラベルを設定できるものがあれば追加．
+
+"area/frontend":
+  - "frontend/**"
+  - "wails/**"
+
+"area/backend":
+  - "backend/**"
+  - "internal/**"
+
+"area/asr":
+  - "data/asr/**"
+  - "internal/asr/**"
+
+"area/ocr":
+  - "data/ocr/**"
+  - "internal/ocr/**"
+
+"area/devops":
+  - ".github/**"
+  - "scripts/**"
