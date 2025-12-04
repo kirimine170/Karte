@@ -9,13 +9,25 @@
   color: a2eeef
   description: 機能追加・改善
 
+- name: type/task
+  color: fef2c0
+  description: メンテナンス・作業タスク（CI整備・テンプレ作成など）
+
+- name: type/research
+  color: c5def5
+  description: 技術検証・Spike（Markdown on MQTT などの検証）
+
+- name: type/design
+  color: f9d0c4
+  description: 仕様・設計検討（フォーマットやアーキテクチャの議論）
+
 - name: type/refactor
   color: cfd3d7
-  description: リファクタ
+  description: リファクタ（挙動を変えないコード整理）
 
 - name: type/docs
   color: 0366d6
-  description: ドキュメント
+  description: ドキュメント（README・設計資料など）
 
 # --- モジュール（area）---
 - name: area/frontend
