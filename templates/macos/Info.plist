@@ -61,6 +61,8 @@
         {{end}}
         <key>NSMicrophoneUsageDescription</key>
         <string>録音・文字起こし機能を利用するためにマイクへのアクセスが必要です。</string>
+        <key>NSScreenCaptureUsageDescription</key>
+        <string>画面キャプチャ・画像の切り抜き機能を利用するために画面録画へのアクセスが必要です。</string>
     </dict>
 </plist>
 
