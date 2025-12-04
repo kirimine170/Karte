@@ -1,22 +1,32 @@
 # .github/labeler.yml
 ## ディレクトリ単位でラベルを設定できるものがあれば追加．
 
-"area/frontend":
-  - "frontend/**"
-  - "wails/**"
+area/frontend:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "frontend/**"
+          - "wails/**"
 
-"area/backend":
-  - "backend/**"
-  - "internal/**"
+area/backend:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "backend/**"
+          - "internal/**"
 
-"area/asr":
-  - "data/asr/**"
-  - "internal/asr/**"
+area/asr:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "data/asr/**"
+          - "internal/asr/**"
 
-"area/ocr":
-  - "data/ocr/**"
-  - "internal/ocr/**"
+area/ocr:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "data/ocr/**"
+          - "internal/ocr/**"
 
-"area/devops":
-  - ".github/**"
-  - "scripts/**"
+area/devops:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+          - "scripts/**"
