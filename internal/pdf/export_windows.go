@@ -70,27 +70,6 @@ func ExportHTMLToPDF(htmlStr string, outPath string) error {
 	}
 
 	return nil
-
-	// ひとまずunused
-	// pdf := fpdf.New("P", "mm", "A4", "")
-	// // pdf.AddUTF8Font("Noto", "", fontPath)
-	// pdf.AddUTF8FontFromBytes("Noto", "", font)
-	// pdf.SetFont("Noto", "", 12)
-	// pdf.SetAutoPageBreak(true, 15)
-	// pdf.SetMargins(15, 15, 15)
-	// pdf.AddPage()
-
-	// //TODO 後で消す - PDF出力用のHTMLソースを見るためのもの。
-	// text := simplifyHTMLToText(htmlStr)
-	// if strings.TrimSpace(text) == "" {
-	// 	text = "(no content)"
-	// }
-	// pdf.MultiCell(0, 6, text, "", "", false)
-
-	// if err := pdf.OutputFileAndClose(outPath); err != nil {
-	// 	return fmt.Errorf("failed to write pdf: %v", err)
-	// }
-	// return nil
 }
 
 // resolveJPFontPath tries to find a Japanese TTF/OTF font for embedding.

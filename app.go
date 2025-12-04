@@ -1444,8 +1444,6 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 		return "", fmt.Errorf("failed to render markdown: %v", err)
 	}
 
-	//TODO ここで返しているパスの影響でpdfのパス解決ができていない?pdfをexportするためのライブラリを当たるべきかも
-	//TODO ていうかスタイルが反映されてない
 	// Convert image paths in HTML to URLs that can be served by the HTTP handler
 	// Match img src attributes that point to data/image/ files
 	imgPathRegex := regexp.MustCompile(`(<img[^>]+src=["'])([^"']+)(["'][^>]*>)`)
@@ -3324,7 +3322,6 @@ func (a *App) convertImageURLsToDataURIs(html string) string {
 			a.logInfo(fmt.Sprintf("PDF export: Converting image URL: %s -> path: %s", imgURL, imgPath))
 		} else if strings.HasPrefix(imgURL, "data/image/") {
 			// Process paths that start with data/image/ directly (e.g., from Marp mode)
-			//TODO 検証中 2025/12/04
 			a.logInfo(fmt.Sprintf("PDF export: Converting image path: %s", imgPath))
 		} else {
 			// Skip other URLs (e.g., http://, https://, data: URIs already)
