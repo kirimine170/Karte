@@ -36,6 +36,7 @@ import (
 	syncpkg "karte/internal/sync"
 	"karte/internal/webpchunk"
 	"karte/internal/webputil"
+
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -3243,6 +3244,11 @@ func (a *App) ExportPDF(html string) (string, error) {
 	if html == "" {
 		return "", fmt.Errorf("empty html")
 	}
+
+	// Convert image URLs to data URIs for PDF export
+	// WKWebView cannot access HTTP URLs, so we need to embed images as data URIs
+	html = a.convertImageURLsToDataURIs(html)
+
 	exportDir := filepath.Join(a.dataDir, "export")
 	if err := os.MkdirAll(exportDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create export dir: %v", err)
@@ -3250,14 +3256,138 @@ func (a *App) ExportPDF(html string) (string, error) {
 	base := fmt.Sprintf("export-%s.pdf", time.Now().Format("20060102-150405"))
 	pdfPath := filepath.Join(exportDir, base)
 	a.logInfo(fmt.Sprintf("ExportPDF start: out=%s html.len=%d", pdfPath, len(html)))
+
+	// Add panic recovery to catch any crashes
+	defer func() {
+		if r := recover(); r != nil {
+			a.logError(fmt.Sprintf("ExportPDF panic recovered: %v", r))
+		}
+	}()
+
+	a.logInfo("ExportPDF: Calling pdfexport.ExportHTMLToPDF...")
 	if err := pdfexport.ExportHTMLToPDF(html, pdfPath); err != nil {
 		a.logError(fmt.Sprintf("ExportPDF failed: %v", err))
-		return "", err
+		return "", fmt.Errorf("PDF export failed: %w", err)
 	}
-	a.logInfo(fmt.Sprintf("PDF exported: %s", pdfPath))
+	a.logInfo("ExportPDF: pdfexport.ExportHTMLToPDF returned successfully")
+
+	// Verify that the PDF file was actually created
+	if _, err := os.Stat(pdfPath); os.IsNotExist(err) {
+		a.logError(fmt.Sprintf("ExportPDF: PDF file was not created at %s", pdfPath))
+		return "", fmt.Errorf("PDF file was not created: %s", pdfPath)
+	}
+
+	// Get file info to verify it's not empty
+	info, err := os.Stat(pdfPath)
+	if err != nil {
+		a.logError(fmt.Sprintf("ExportPDF: Failed to stat PDF file: %v", err))
+		return "", fmt.Errorf("failed to stat PDF file: %w", err)
+	}
+	if info.Size() == 0 {
+		a.logError(fmt.Sprintf("ExportPDF: PDF file is empty (0 bytes) at %s", pdfPath))
+		return "", fmt.Errorf("PDF file is empty: %s", pdfPath)
+	}
+
+	a.logInfo(fmt.Sprintf("PDF exported: %s (size: %d bytes)", pdfPath, info.Size()))
 	url := strings.ReplaceAll(pdfPath, "\\", "/")
 	a.logInfo("url --- " + url)
 	return url, nil
+}
+
+// convertImageURLsToDataURIs converts image URLs in HTML to data URIs
+// This is necessary for PDF export because WKWebView cannot access HTTP URLs
+func (a *App) convertImageURLsToDataURIs(html string) string {
+	// Match img tags with src attributes
+	imgRegex := regexp.MustCompile(`(<img[^>]+src=["'])([^"']+)(["'][^>]*>)`)
+
+	return imgRegex.ReplaceAllStringFunc(html, func(match string) string {
+		parts := imgRegex.FindStringSubmatch(match)
+		if len(parts) < 4 {
+			return match
+		}
+
+		prefix := parts[1]
+		imgURL := parts[2]
+		suffix := parts[3]
+
+		var imgPath string
+
+		imgURL = strings.ReplaceAll(imgURL, "\\", "/")
+
+		// Process URLs that start with /image/
+		if strings.HasPrefix(imgURL, "/image/") {
+			// Extract the image path (remove /image/ prefix)
+			// URL format: /image/data/image/xxx.webp -> actual path: data/image/xxx.webp
+			imgPath = strings.TrimPrefix(imgURL, "/image/")
+			a.logInfo(fmt.Sprintf("PDF export: Converting image URL: %s -> path: %s", imgURL, imgPath))
+		} else if strings.HasPrefix(imgURL, "data/image/") {
+			// Process paths that start with data/image/ directly (e.g., from Marp mode)
+			a.logInfo(fmt.Sprintf("PDF export: Converting image path: %s", imgPath))
+		} else {
+			// Skip other URLs (e.g., http://, https://, data: URIs already)
+			return match
+		}
+
+		// Convert to absolute file path
+		var absPath string
+		if filepath.IsAbs(imgPath) {
+			absPath = imgPath
+		} else {
+			absPath = filepath.Join(a.dataDir, filepath.FromSlash(imgPath))
+		}
+
+		a.logInfo(fmt.Sprintf("PDF export: Resolved absolute path: %s", absPath))
+
+		// Read image file
+		imgData, err := os.ReadFile(absPath)
+		if err != nil {
+			a.logError(fmt.Sprintf("Failed to read image file for PDF export: %s, error: %v", absPath, err))
+			return match // Return original if file cannot be read
+		}
+
+		// Determine MIME type from file extension
+		ext := strings.ToLower(filepath.Ext(absPath))
+		var mimeType string
+		switch ext {
+		case ".jpg", ".jpeg":
+			mimeType = "image/jpeg"
+		case ".png":
+			mimeType = "image/png"
+		case ".gif":
+			mimeType = "image/gif"
+		case ".webp":
+			mimeType = "image/webp"
+		case ".svg":
+			mimeType = "image/svg+xml"
+		default:
+			// Try to detect MIME type from image data
+			_, format, err := image.DecodeConfig(bytes.NewReader(imgData))
+			if err == nil {
+				switch format {
+				case "jpeg":
+					mimeType = "image/jpeg"
+				case "png":
+					mimeType = "image/png"
+				case "gif":
+					mimeType = "image/gif"
+				default:
+					mimeType = "image/png" // Default fallback
+				}
+			} else {
+				mimeType = "image/png" // Default fallback
+			}
+		}
+
+		// Encode to base64
+		base64Data := base64.StdEncoding.EncodeToString(imgData)
+
+		// Create data URI
+		dataURI := fmt.Sprintf("data:%s;base64,%s", mimeType, base64Data)
+
+		a.logInfo(fmt.Sprintf("Converted image URL to data URI: %s -> data:%s (size: %d bytes)", imgURL, mimeType, len(imgData)))
+
+		return prefix + dataURI + suffix
+	})
 }
 
 // ---- Presenter multi-window APIs ----
@@ -4016,7 +4146,9 @@ func (a *App) extractLinks(content string) []LinkInfo {
 	imgLinkRegex := regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
 	matches = imgLinkRegex.FindAllStringSubmatch(content, -1)
 	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d image links", len(matches)))
+	// imgLinkTrimRegex := regexp.MustCompile(`\s*".*?"`)
 	for _, match := range matches {
+		// src := imgLinkTrimRegex.ReplaceAllString(match[2], "")
 		src := match[2]
 		links = append(links, LinkInfo{Target: src, Kind: "img"})
 		runtime.LogInfo(a.ctx, fmt.Sprintf("  Image link: %s", src))
