@@ -46,5 +46,5 @@ body:
     attributes:
       label: 評価軸
       description: 何を基準に良し悪しを決めるか（例：互換性、簡潔さ、拡張性など）
-      validations:
-        required: false
+    validations:
+      required: false
