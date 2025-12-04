@@ -1,0 +1,51 @@
+# .github/ISSUE_TEMPLATE/3-task.yml
+name: "タスク / Maintenance task"
+description: "CI 整備やテンプレ作成などの雑多な作業チケット"
+title: "[Task]: "
+labels:
+  - type/task
+  - status/triage
+
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: 概要
+      placeholder: 例）issue のラベル自動付与を設定する
+    validations:
+      required: true
+
+  - type: textarea
+    id: detail
+    attributes:
+      label: 作業内容の詳細
+      description: 何をどうするか、分かる範囲で書いてください
+      placeholder: |
+        ・.github/workflows/xxx を追加
+        ・labels.yml を同期
+    validations:
+      required: true
+
+  - type: textarea
+    id: checklist
+    attributes:
+      label: TODO / チェックリスト
+      description: 箇条書きで作業ステップを書くと便利です
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 主な対象
+      options:
+        - devops
+        - frontend
+        - backend
+        - docs
+        - other
+    validations:
+      required: false
