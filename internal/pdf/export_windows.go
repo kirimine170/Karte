@@ -6,13 +6,12 @@ import (
 	"fmt"
 	"html"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	_ "embed"
-
-	fpdf "github.com/jung-kurt/gofpdf"
 )
 
 //go:embed fonts/NotoSansJP-Regular.ttf
@@ -28,29 +27,70 @@ func ExportHTMLToPDF(htmlStr string, outPath string) error {
 		return fmt.Errorf("failed to create output dir: %v", err)
 	}
 
-	// fontPath, err := resolveJPFontPath()
-	// if err != nil {
-	// 	return err
-	// }
-
-	pdf := fpdf.New("P", "mm", "A4", "")
-	// pdf.AddUTF8Font("Noto", "", fontPath)
-	pdf.AddUTF8FontFromBytes("Noto", "", font)
-	pdf.SetFont("Noto", "", 12)
-	pdf.SetAutoPageBreak(true, 15)
-	pdf.SetMargins(15, 15, 15)
-	pdf.AddPage()
-
-	text := simplifyHTMLToText(htmlStr)
-	if strings.TrimSpace(text) == "" {
-		text = "(no content)"
+	tmpDir, err := os.MkdirTemp("", "karte-pdf-tmp")
+	if err != nil {
+		panic("PANIC! - Coudln't make tmp directory")
 	}
-	pdf.MultiCell(0, 6, text, "", "", false)
+	defer os.RemoveAll(tmpDir)
 
-	if err := pdf.OutputFileAndClose(outPath); err != nil {
-		return fmt.Errorf("failed to write pdf: %v", err)
+	tmpHTML := filepath.Join(tmpDir, "input.html")
+	if err := os.WriteFile(tmpHTML, []byte(htmlStr), 0o644); err != nil {
+		panic("PANIC! - Failed to write tmp html")
 	}
+
+	wkhtmlPath := "C:\\Program Files\\wkhtmltopdf\\bin\\wkhtmltopdf.exe"
+
+	args := []string{
+		"--encoding", "utf-8",
+		"--print-media-type",
+		"--enable-local-file-access",
+		// 必要であればここにマージンや DPI などのオプションを追加:
+		// "--margin-top", "10mm",
+		// "--margin-bottom", "15mm",
+		// "--dpi", "300",
+		tmpHTML,
+		outPath,
+	}
+
+	cmd := exec.Command(wkhtmlPath, args...)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// 典型的な失敗要因:
+		// - wkhtmltopdf.exe がインストールされていない / PATH にない
+		// - HTML が巨大すぎる / 一部 CSS が原因でクラッシュ など
+		return fmt.Errorf("wkhtmltopdf failed: %v, output: %s", err, string(out))
+	}
+
+	// --- 7. PDF ファイルの存在チェック（念のため） -------------------------
+	if st, err := os.Stat(outPath); err != nil {
+		return fmt.Errorf("pdf not created: %v", err)
+	} else if st.Size() == 0 {
+		return fmt.Errorf("pdf created but empty: %s", outPath)
+	}
+
 	return nil
+
+	// ひとまずunused
+	// pdf := fpdf.New("P", "mm", "A4", "")
+	// // pdf.AddUTF8Font("Noto", "", fontPath)
+	// pdf.AddUTF8FontFromBytes("Noto", "", font)
+	// pdf.SetFont("Noto", "", 12)
+	// pdf.SetAutoPageBreak(true, 15)
+	// pdf.SetMargins(15, 15, 15)
+	// pdf.AddPage()
+
+	// //TODO 後で消す - PDF出力用のHTMLソースを見るためのもの。
+	// text := simplifyHTMLToText(htmlStr)
+	// if strings.TrimSpace(text) == "" {
+	// 	text = "(no content)"
+	// }
+	// pdf.MultiCell(0, 6, text, "", "", false)
+
+	// if err := pdf.OutputFileAndClose(outPath); err != nil {
+	// 	return fmt.Errorf("failed to write pdf: %v", err)
+	// }
+	// return nil
 }
 
 // resolveJPFontPath tries to find a Japanese TTF/OTF font for embedding.

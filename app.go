@@ -1444,6 +1444,8 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 		return "", fmt.Errorf("failed to render markdown: %v", err)
 	}
 
+	//TODO ここで返しているパスの影響でpdfのパス解決ができていない?pdfをexportするためのライブラリを当たるべきかも
+	//TODO ていうかスタイルが反映されてない
 	// Convert image paths in HTML to URLs that can be served by the HTTP handler
 	// Match img src attributes that point to data/image/ files
 	imgPathRegex := regexp.MustCompile(`(<img[^>]+src=["'])([^"']+)(["'][^>]*>)`)
@@ -3249,6 +3251,13 @@ func (a *App) ExportPDF(html string) (string, error) {
 	// WKWebView cannot access HTTP URLs, so we need to embed images as data URIs
 	html = a.convertImageURLsToDataURIs(html)
 
+	//TODO CHECK HTML SOURCE
+	byte_html := []byte(html)
+	err := os.WriteFile("test.txt", byte_html, 0644)
+	if err != nil {
+		a.logError(err.Error())
+	}
+
 	exportDir := filepath.Join(a.dataDir, "export")
 	if err := os.MkdirAll(exportDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create export dir: %v", err)
@@ -3294,6 +3303,7 @@ func (a *App) ExportPDF(html string) (string, error) {
 	return url, nil
 }
 
+// TODO 作業-2025/12/03
 // convertImageURLsToDataURIs converts image URLs in HTML to data URIs
 // This is necessary for PDF export because WKWebView cannot access HTTP URLs
 func (a *App) convertImageURLsToDataURIs(html string) string {
@@ -3312,6 +3322,8 @@ func (a *App) convertImageURLsToDataURIs(html string) string {
 
 		var imgPath string
 
+		imgURL = strings.ReplaceAll(imgURL, "\\", "/")
+
 		// Process URLs that start with /image/
 		if strings.HasPrefix(imgURL, "/image/") {
 			// Extract the image path (remove /image/ prefix)
@@ -3320,7 +3332,7 @@ func (a *App) convertImageURLsToDataURIs(html string) string {
 			a.logInfo(fmt.Sprintf("PDF export: Converting image URL: %s -> path: %s", imgURL, imgPath))
 		} else if strings.HasPrefix(imgURL, "data/image/") {
 			// Process paths that start with data/image/ directly (e.g., from Marp mode)
-			imgPath = imgURL
+			//TODO 検証中 2025/12/04
 			a.logInfo(fmt.Sprintf("PDF export: Converting image path: %s", imgPath))
 		} else {
 			// Skip other URLs (e.g., http://, https://, data: URIs already)
@@ -4145,7 +4157,9 @@ func (a *App) extractLinks(content string) []LinkInfo {
 	imgLinkRegex := regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
 	matches = imgLinkRegex.FindAllStringSubmatch(content, -1)
 	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d image links", len(matches)))
+	// imgLinkTrimRegex := regexp.MustCompile(`\s*".*?"`)
 	for _, match := range matches {
+		// src := imgLinkTrimRegex.ReplaceAllString(match[2], "")
 		src := match[2]
 		links = append(links, LinkInfo{Target: src, Kind: "img"})
 		runtime.LogInfo(a.ctx, fmt.Sprintf("  Image link: %s", src))
