@@ -39,5 +39,5 @@ body:
     attributes:
       label: 補足
       description: スクリーンショット案や図のイメージなど
-      validations:
-        required: false
+    validations:
+      required: false
