@@ -87,6 +87,9 @@
   body {
     min-height: 100%;
     height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
   }
 
   html {
@@ -94,10 +97,11 @@
   }
 
   body {
-    margin: 0;
     background: var(--bg);
     color: var(--ink);
     font: 13px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Meiryo", sans-serif;
+    display: flex;
+    flex-direction: column;
   }
 
   a {
@@ -131,22 +135,26 @@
   }
 
   .layout {
-    height: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
     display: grid;
     grid-template-columns: 260px 1fr;
-    height: calc(100% - 44px);
   }
 
   .side {
     border-right: 1px solid var(--line);
     padding: 12px;
-    background: var(--panel)
+    background: var(--panel);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
   }
 
   .search {
     display: flex;
     gap: 6px;
-    margin-bottom: 10px
+    margin-bottom: 10px;
+    flex-shrink: 0;
   }
 
   .search input {
@@ -160,8 +168,10 @@
   }
 
   .tree {
-    overflow: auto;
-    height: calc(100% - 44px)
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: auto;
   }
 
   .item {
@@ -183,10 +193,11 @@
   }
 
   .main {
-    display: grid;
-    grid-template-rows: 1fr;
-    gap: var(--gap);
-    padding: var(--gap2)
+    display: flex;
+    flex-direction: column;
+    padding: var(--gap2);
+    flex: 1 1 auto;
+    min-height: 0;
   }
 
   textarea {
@@ -217,7 +228,9 @@
   .row {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: var(--gap)
+    gap: var(--gap);
+    flex: 1 1 auto;
+    min-height: 0;
   }
 
   .btn {
