@@ -3251,13 +3251,6 @@ func (a *App) ExportPDF(html string) (string, error) {
 	// WKWebView cannot access HTTP URLs, so we need to embed images as data URIs
 	html = a.convertImageURLsToDataURIs(html)
 
-	//TODO CHECK HTML SOURCE
-	byte_html := []byte(html)
-	err := os.WriteFile("test.txt", byte_html, 0644)
-	if err != nil {
-		a.logError(err.Error())
-	}
-
 	exportDir := filepath.Join(a.dataDir, "export")
 	if err := os.MkdirAll(exportDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create export dir: %v", err)
@@ -3303,7 +3296,6 @@ func (a *App) ExportPDF(html string) (string, error) {
 	return url, nil
 }
 
-// TODO 作業-2025/12/03
 // convertImageURLsToDataURIs converts image URLs in HTML to data URIs
 // This is necessary for PDF export because WKWebView cannot access HTTP URLs
 func (a *App) convertImageURLsToDataURIs(html string) string {
