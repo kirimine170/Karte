@@ -1,0 +1,50 @@
+# .github/ISSUE_TEMPLATE/5-design.yml
+name: "仕様・設計検討 / Design"
+description: "フォーマットやアーキテクチャの検討"
+title: "[Design]: "
+labels:
+  - type/design
+  - status/triage
+
+body:
+  - type: input
+    id: topic
+    attributes:
+      label: 検討トピック
+      placeholder: 例）マルチメディアファイルの管理フォーマット
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: 前提・現状
+      description: 現状どうなっていて、どんな制約があるか
+      placeholder: |
+        現状:
+        - ...
+        制約:
+        - ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: options
+    attributes:
+      label: 検討中の案
+      description: 候補案を箇条書きで
+      placeholder: |
+        案A:
+        - ...
+        案B:
+        - ...
+    validations:
+      required: false
+
+  - type: textarea
+    id: decision_criteria
+    attributes:
+      label: 評価軸
+      description: 何を基準に良し悪しを決めるか（例：互換性、簡潔さ、拡張性など）
+      validations:
+        required: false

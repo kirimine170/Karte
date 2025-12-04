@@ -1,0 +1,58 @@
+# .github/ISSUE_TEMPLATE/4-research.yml
+name: "技術検証 / Research"
+description: "新しい技術やライブラリの検証・調査"
+title: "[Research]: "
+labels:
+  - type/research
+  - status/triage
+
+body:
+  - type: input
+    id: theme
+    attributes:
+      label: 検証テーマ
+      placeholder: 例）Markdown を MQTT で共有する仕組みの検証
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: 目的・ゴール
+      description: どこまで分かれば「完了」とできるか
+      placeholder: |
+        ・Karte の markdown 階層を MQTT topic にどうマッピングするかの案を 2〜3 個出す
+        ・簡単な PoC を作り、遅延や衝突の挙動を確認する
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: スコープ
+      description: 今回の Issue でやること / やらないこと
+      placeholder: |
+        やること:
+        - ...
+        やらないこと:
+        - 本番運用レベルの実装
+    validations:
+      required: false
+
+  - type: textarea
+    id: references
+    attributes:
+      label: 参考情報・リンク
+      description: 事前に見ておきたい記事や論文など
+      placeholder: 任意
+    validations:
+      required: false
+
+  - type: textarea
+    id: deliverables
+    attributes:
+      label: 成果物のイメージ
+      description: メモ / PoC コード / 図など
+      placeholder: 例）docs/mqtt-markdown-spike.md にメモを残す
+    validations:
+      required: false
