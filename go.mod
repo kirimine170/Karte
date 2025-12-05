@@ -6,10 +6,10 @@ require (
 	github.com/chai2010/webp v1.4.0
 	github.com/go-git/go-git/v5 v5.13.2
 	github.com/gordonklaus/portaudio v0.0.0-20250206071425-98a94950218b
-	github.com/jung-kurt/gofpdf v1.16.2
 	github.com/k2-fsa/sherpa-onnx-go-macos v1.12.17
 	github.com/wailsapp/wails/v2 v2.10.2
 	github.com/yuin/goldmark v1.7.4
+	golang.org/x/image v0.33.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
