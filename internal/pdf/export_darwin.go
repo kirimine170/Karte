@@ -46,6 +46,37 @@ static void logPDFExport(const char* logPath, const char* msg) {
     fclose(logFile);
 }
 
+// 検証用ログファイルに出力するヘルパー関数
+static void logPDFDebug(const char* logPath, const char* msg) {
+    if (logPath == NULL || strlen(logPath) == 0) {
+        return;
+    }
+
+    // 検証用ログファイルのパスを生成（元のログファイルと同じディレクトリに pdf-export-debug.log を作成）
+    NSString* logPathStr = [NSString stringWithUTF8String:logPath];
+    NSString* logDir = [logPathStr stringByDeletingLastPathComponent];
+    NSString* debugLogPath = [logDir stringByAppendingPathComponent:@"pdf-export-debug.log"];
+
+    FILE *debugLogFile = fopen([debugLogPath UTF8String], "a");
+    if (debugLogFile == NULL) {
+        return;
+    }
+
+    // タイムスタンプを生成
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);
+    char timestamp[64];
+    long offset = tm_info->tm_gmtoff;
+    int hours = (int)(offset / 3600);
+    int minutes = (int)((offset % 3600) / 60);
+    if (minutes < 0) minutes = -minutes;
+
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%S", tm_info);
+    fprintf(debugLogFile, "%s%+03d:%02d [DEBUG] %s\n", timestamp, hours, minutes, msg);
+    fflush(debugLogFile);
+    fclose(debugLogFile);
+}
+
 // メモリ使用量を取得してログに記録するヘルパー関数
 static void logMemoryUsage(const char* logPath) {
     struct task_basic_info info;
@@ -72,11 +103,43 @@ static void logMemoryUsage(const char* logPath) {
 
 - (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation {
     logPDFExport(self.logPath, "[PDF Export] Navigation started (provisional)");
+    logPDFDebug(self.logPath, "========== didStartProvisionalNavigation ==========");
+    logPDFDebug(self.logPath, [[NSString stringWithFormat:@"URL: %@", webView.URL ? webView.URL.absoluteString : @"nil"] UTF8String]);
+    logPDFDebug(self.logPath, [[NSString stringWithFormat:@"Title: %@", webView.title ? webView.title : @"nil"] UTF8String]);
+    logPDFDebug(self.logPath, [[NSString stringWithFormat:@"isLoading: %d", webView.loading ? 1 : 0] UTF8String]);
+    logPDFDebug(self.logPath, "========== END didStartProvisionalNavigation ==========");
 }
 
 - (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {
     logPDFExport(self.logPath, "[PDF Export] Navigation committed");
     logMemoryUsage(self.logPath);
+    logPDFDebug(self.logPath, "========== didCommitNavigation ==========");
+    logPDFDebug(self.logPath, [[NSString stringWithFormat:@"URL: %@", webView.URL ? webView.URL.absoluteString : @"nil"] UTF8String]);
+    logPDFDebug(self.logPath, [[NSString stringWithFormat:@"Title: %@", webView.title ? webView.title : @"nil"] UTF8String]);
+    logPDFDebug(self.logPath, [[NSString stringWithFormat:@"isLoading: %d", webView.loading ? 1 : 0] UTF8String]);
+
+    // DOM構造を確認するJavaScriptを実行
+    NSString* domCheckScript = @"(function() { \
+        return { \
+            readyState: document.readyState, \
+            htmlLength: document.documentElement ? document.documentElement.innerHTML.length : 0, \
+            bodyLength: document.body ? document.body.innerHTML.length : 0, \
+            hasHtmlTag: document.documentElement ? 1 : 0, \
+            hasBodyTag: document.body ? 1 : 0, \
+            title: document.title || '', \
+            url: window.location.href || '' \
+        }; \
+    })();";
+
+    [webView evaluateJavaScript:domCheckScript completionHandler:^(id result, NSError* error) {
+        if (error) {
+            logPDFDebug(self.logPath, [[NSString stringWithFormat:@"JavaScript evaluation error in didCommitNavigation: %@", error.localizedDescription] UTF8String]);
+        } else {
+            logPDFDebug(self.logPath, [[NSString stringWithFormat:@"DOM state in didCommitNavigation: %@", result] UTF8String]);
+        }
+    }];
+
+    logPDFDebug(self.logPath, "========== END didCommitNavigation ==========");
 }
 
 - (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
@@ -98,6 +161,40 @@ static void logMemoryUsage(const char* logPath) {
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     logPDFExport(self.logPath, "[PDF Export] Navigation finished - starting readiness check");
     logMemoryUsage(self.logPath);
+    logPDFDebug(self.logPath, "========== didFinishNavigation ==========");
+    logPDFDebug(self.logPath, [[NSString stringWithFormat:@"URL: %@", webView.URL ? webView.URL.absoluteString : @"nil"] UTF8String]);
+    logPDFDebug(self.logPath, [[NSString stringWithFormat:@"Title: %@", webView.title ? webView.title : @"nil"] UTF8String]);
+    logPDFDebug(self.logPath, [[NSString stringWithFormat:@"isLoading: %d", webView.loading ? 1 : 0] UTF8String]);
+
+    // DOM構造を詳細に確認するJavaScriptを実行
+    NSString* detailedDomCheckScript = @"(function() { \
+        var html = document.documentElement; \
+        var body = document.body; \
+        return { \
+            readyState: document.readyState, \
+            htmlLength: html ? html.innerHTML.length : 0, \
+            bodyLength: body ? body.innerHTML.length : 0, \
+            hasHtmlTag: html ? 1 : 0, \
+            hasBodyTag: body ? 1 : 0, \
+            title: document.title || '', \
+            url: window.location.href || '', \
+            htmlOuterHTML: html ? html.outerHTML.substring(0, 500) : '', \
+            bodyOuterHTML: body ? body.outerHTML.substring(0, 500) : '', \
+            imgCount: document.querySelectorAll('img').length, \
+            allElementsCount: document.querySelectorAll('*').length \
+        }; \
+    })();";
+
+    [webView evaluateJavaScript:detailedDomCheckScript completionHandler:^(id result, NSError* error) {
+        if (error) {
+            logPDFDebug(self.logPath, [[NSString stringWithFormat:@"JavaScript evaluation error in didFinishNavigation: %@", error.localizedDescription] UTF8String]);
+        } else {
+            logPDFDebug(self.logPath, [[NSString stringWithFormat:@"Detailed DOM state in didFinishNavigation: %@", result] UTF8String]);
+        }
+    }];
+
+    logPDFDebug(self.logPath, "========== END didFinishNavigation ==========");
+
     // ナビゲーション完了後にcheckReadyを実行
     if (self.checkReadyBlock) {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -161,6 +258,11 @@ static void logMemoryUsage(const char* logPath) {
 
 @end
 
+// WKWebView / Window / Delegate を強参照保持するための static 変数
+static NSWindow* sPDFWindow = nil;
+static WKWebView* sPDFWebView = nil;
+static PDFExportDelegate* sPDFDelegate = nil;
+
 static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, const char* logPathC) {
     @autoreleasepool {
         NSString* html = [NSString stringWithUTF8String:htmlC ? htmlC : ""];
@@ -173,7 +275,6 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
 
         // Execute on main thread asynchronously to avoid deadlock if caller is already on main thread
         dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-        __block NSString* tempFilePathForCleanup = nil; // クリーンアップ用に保持（@autoreleasepoolの外で定義）
         dispatch_async(dispatch_get_main_queue(), ^{
             @autoreleasepool {
                 __block BOOL finished = NO;
@@ -230,52 +331,128 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                     WKUserScript* userScript = [[WKUserScript alloc] initWithSource:scriptSource injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO];
                     [userContentController addUserScript:userScript];
 
-                    WKWebView* webview = [[WKWebView alloc] initWithFrame:NSMakeRect(0,0,800,1000) configuration:config];
+                    // 以前のインスタンスがあればクリーンアップ
+                    if (sPDFWebView) {
+                        sPDFWebView.navigationDelegate = nil;
+                        sPDFWebView.UIDelegate = nil;
+                        sPDFWebView = nil;
+                    }
+                    if (sPDFWindow) {
+                        [sPDFWindow close];
+                        sPDFWindow = nil;
+                    }
+                    sPDFDelegate = nil;
+
+                    // WKWebView / Window / Delegate を static 変数で強参照保持
+                    sPDFWebView = [[WKWebView alloc] initWithFrame:NSMakeRect(0,0,800,1000) configuration:config];
 
                     // デリゲートを設定
-                    PDFExportDelegate* delegate = [[PDFExportDelegate alloc] init];
-                    delegate.logPath = logPath;
-                    webview.navigationDelegate = delegate;
-                    webview.UIDelegate = delegate;
+                    sPDFDelegate = [[PDFExportDelegate alloc] init];
+                    sPDFDelegate.logPath = logPath;
+                    sPDFWebView.navigationDelegate = sPDFDelegate;
+                    sPDFWebView.UIDelegate = sPDFDelegate;
 
-                    NSWindow* window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,800,1000)
+                    sPDFWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,800,1000)
                                                                    styleMask:NSWindowStyleMaskTitled
                                                                      backing:NSBackingStoreBuffered
                                                                        defer:NO];
-                    [window setReleasedWhenClosed:NO];
-                    [window setOpaque:NO];
-                    [window setAlphaValue:0.0];
-                    [window setIgnoresMouseEvents:YES];
-                    [window setContentView:webview];
+                    [sPDFWindow setReleasedWhenClosed:NO];
+                    [sPDFWindow setOpaque:NO];
+                    [sPDFWindow setAlphaValue:0.0];
+                    [sPDFWindow setIgnoresMouseEvents:YES];
+                    [sPDFWindow setContentView:sPDFWebView];
+
+                    // ローカル変数としても参照を保持（既存コードとの互換性のため）
+                    WKWebView* webview = sPDFWebView;
+                    PDFExportDelegate* delegate = sPDFDelegate;
+                    NSWindow* window = sPDFWindow;
 
                     logPDFExport(logPath, "[PDF Export] Loading HTML into webview...");
 
-                    // デバッグ: HTML読み込み前の内容を確認
-                    logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] DEBUG: HTML to load - length=%lu", (unsigned long)[html length]] UTF8String]);
+                    // ========== 検証用: HTMLの詳細ダンプ ==========
+                    logPDFDebug(logPath, "========== HTML ANALYSIS START ==========");
+                    logPDFDebug(logPath, [[NSString stringWithFormat:@"HTML length: %lu bytes", (unsigned long)[html length]] UTF8String]);
 
-                    // HTMLの最初の500文字をログに出力
+                    // HTML構造の分析
+                    NSRange htmlTagRange = [html rangeOfString:@"<html" options:NSCaseInsensitiveSearch];
+                    NSRange bodyTagRange = [html rangeOfString:@"<body" options:NSCaseInsensitiveSearch];
+                    NSRange headTagRange = [html rangeOfString:@"<head" options:NSCaseInsensitiveSearch];
+                    NSRange doctypeRange = [html rangeOfString:@"<!doctype" options:NSCaseInsensitiveSearch];
+
+                    logPDFDebug(logPath, [[NSString stringWithFormat:@"HTML structure: <!doctype>=%lu, <html>=%lu, <head>=%lu, <body>=%lu",
+                        doctypeRange.location != NSNotFound ? (unsigned long)doctypeRange.location : 0,
+                        htmlTagRange.location != NSNotFound ? (unsigned long)htmlTagRange.location : 0,
+                        headTagRange.location != NSNotFound ? (unsigned long)headTagRange.location : 0,
+                        bodyTagRange.location != NSNotFound ? (unsigned long)bodyTagRange.location : 0] UTF8String]);
+
+                    // 画像タグの分析
+                    NSUInteger imgTagCount = 0;
+                    NSRange imgSearchRange = NSMakeRange(0, [html length]);
+                    while (imgSearchRange.location < [html length]) {
+                        NSRange imgRange = [html rangeOfString:@"<img" options:NSCaseInsensitiveSearch range:imgSearchRange];
+                        if (imgRange.location != NSNotFound) {
+                            imgTagCount++;
+                            imgSearchRange.location = imgRange.location + imgRange.length;
+                            imgSearchRange.length = [html length] - imgSearchRange.location;
+                        } else {
+                            break;
+                        }
+                    }
+                    logPDFDebug(logPath, [[NSString stringWithFormat:@"Image tags found: %lu", (unsigned long)imgTagCount] UTF8String]);
+
+                    // data:imageの分析
+                    NSUInteger dataImageCount = 0;
+                    NSRange dataImageSearchRange = NSMakeRange(0, [html length]);
+                    while (dataImageSearchRange.location < [html length]) {
+                        NSRange dataImageRange = [html rangeOfString:@"data:image" options:NSCaseInsensitiveSearch range:dataImageSearchRange];
+                        if (dataImageRange.location != NSNotFound) {
+                            dataImageCount++;
+                            // data:imageの最初の200文字を取得
+                            NSUInteger previewLength = MIN(200, [html length] - dataImageRange.location);
+                            NSString* dataImagePreview = [html substringWithRange:NSMakeRange(dataImageRange.location, previewLength)];
+                            logPDFDebug(logPath, [[NSString stringWithFormat:@"data:image[%lu] at position %lu: %@...",
+                                (unsigned long)dataImageCount, (unsigned long)dataImageRange.location, dataImagePreview] UTF8String]);
+                            dataImageSearchRange.location = dataImageRange.location + dataImageRange.length;
+                            dataImageSearchRange.length = [html length] - dataImageSearchRange.location;
+                        } else {
+                            break;
+                        }
+                    }
+                    logPDFDebug(logPath, [[NSString stringWithFormat:@"Total data:image occurrences: %lu", (unsigned long)dataImageCount] UTF8String]);
+
+                    // HTMLの最初と最後の部分をダンプ
+                    NSUInteger previewLength = MIN(2000, [html length]);
+                    NSString* htmlStart = [html substringToIndex:previewLength];
+                    logPDFDebug(logPath, [[NSString stringWithFormat:@"HTML start (first %lu chars):\n%@", (unsigned long)previewLength, htmlStart] UTF8String]);
+
+                    if ([html length] > 2000) {
+                        NSUInteger endStart = [html length] - MIN(1000, [html length] - previewLength);
+                        NSString* htmlEnd = [html substringFromIndex:endStart];
+                        logPDFDebug(logPath, [[NSString stringWithFormat:@"HTML end (last %lu chars):\n%@", (unsigned long)[htmlEnd length], htmlEnd] UTF8String]);
+                    }
+
+                    // 一時ファイルにHTMLを保存して検証
+                    NSString* tempDirForDebug = NSTemporaryDirectory();
+                    NSString* debugHTMLPath = [tempDirForDebug stringByAppendingPathComponent:[NSString stringWithFormat:@"karte-pdf-debug-%lu.html", (unsigned long)[[NSDate date] timeIntervalSince1970]]];
+                    NSError* writeError = nil;
+                    BOOL writeSuccess = [html writeToFile:debugHTMLPath atomically:YES encoding:NSUTF8StringEncoding error:&writeError];
+                    if (writeSuccess) {
+                        logPDFDebug(logPath, [[NSString stringWithFormat:@"HTML saved to temp file for verification: %@", debugHTMLPath] UTF8String]);
+                    } else {
+                        logPDFDebug(logPath, [[NSString stringWithFormat:@"Failed to save HTML to temp file: %@", writeError ? writeError.localizedDescription : @"unknown error"] UTF8String]);
+                    }
+
+                    logPDFDebug(logPath, "========== HTML ANALYSIS END ==========");
+
+                    // 既存のログにも簡易情報を出力
+                    logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] DEBUG: HTML to load - length=%lu", (unsigned long)[html length]] UTF8String]);
                     NSString* htmlPreview = [html length] > 500 ? [[html substringToIndex:500] stringByAppendingString:@"...(truncated)"] : html;
                     logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] DEBUG: HTML preview (first 500 chars):\n%@", htmlPreview] UTF8String]);
 
-                    // data:imageが含まれているかチェック
                     NSRange dataImageRange = [html rangeOfString:@"data:image" options:NSCaseInsensitiveSearch];
                     if (dataImageRange.location != NSNotFound) {
                         logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] DEBUG: HTML contains 'data:image' at position %lu", (unsigned long)dataImageRange.location] UTF8String]);
-
-                        // data:imageの出現回数をカウント
-                        NSUInteger count = 0;
-                        NSRange searchRange = NSMakeRange(0, [html length]);
-                        while (searchRange.location < [html length]) {
-                            NSRange foundRange = [html rangeOfString:@"data:image" options:NSCaseInsensitiveSearch range:searchRange];
-                            if (foundRange.location != NSNotFound) {
-                                count++;
-                                searchRange.location = foundRange.location + foundRange.length;
-                                searchRange.length = [html length] - searchRange.location;
-                            } else {
-                                break;
-                            }
-                        }
-                        logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] DEBUG: HTML contains 'data:image' %lu times", (unsigned long)count] UTF8String]);
+                        logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] DEBUG: HTML contains 'data:image' %lu times", (unsigned long)dataImageCount] UTF8String]);
                     } else {
                         logPDFExport(logPath, "[PDF Export] DEBUG: WARNING - HTML does NOT contain 'data:image'!");
                     }
@@ -283,46 +460,34 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                     logMemoryUsage(logPath); // 読み込み前のメモリ使用量
                     NSDate* loadStartTime = [NSDate date];
 
-                    // 一時ファイルにHTMLを保存してfile:// URLで読み込む（ナビゲーションデリゲートが呼ばれるようにする）
+                    // baseURLを一時ディレクトリに設定（Data URI画像の相対パス解決のため）
                     NSString* tempDir = NSTemporaryDirectory();
-                    NSString* tempFileName = [NSString stringWithFormat:@"karte-pdf-export-%lu.html", (unsigned long)[[NSDate date] timeIntervalSince1970]];
-                    NSString* tempFilePath = [tempDir stringByAppendingPathComponent:tempFileName];
-                    NSURL* fileURL = [NSURL fileURLWithPath:tempFilePath];
-                    tempFilePathForCleanup = tempFilePath; // クリーンアップ用に保持
+                    NSURL* baseURL = [NSURL fileURLWithPath:tempDir isDirectory:YES];
 
-                    NSError* writeError = nil;
-                    BOOL writeSuccess = [html writeToFile:tempFilePath atomically:YES encoding:NSUTF8StringEncoding error:&writeError];
-                    if (!writeSuccess || writeError) {
-                        logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] ERROR: Failed to write HTML to temp file: %@", writeError ? writeError.localizedDescription : @"unknown error"] UTF8String]);
-                        retErr = strdup("Failed to write HTML to temp file");
-                        finished = YES;
-                        dispatch_semaphore_signal(sem);
-                        return; // dispatch_asyncブロックから抜ける（値を返さない）
-                    }
+                    logPDFExport(logPath, "[PDF Export] Loading HTML into webview with loadHTMLString...");
+                    logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] DEBUG: baseURL=%@, html length=%lu", baseURL.absoluteString, (unsigned long)[html length]] UTF8String]);
 
-                    logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] DEBUG: HTML written to temp file: %@ (%lu bytes)", tempFilePath, (unsigned long)[html length]] UTF8String]);
-                    logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] DEBUG: Loading from file URL: %@", fileURL.absoluteString] UTF8String]);
+                    // ========== 検証用: WKWebView読み込み前の状態 ==========
+                    logPDFDebug(logPath, "========== WKWebView STATE BEFORE LOAD ==========");
+                    logPDFDebug(logPath, [[NSString stringWithFormat:@"WKWebView URL: %@", webview.URL ? webview.URL.absoluteString : @"nil"] UTF8String]);
+                    logPDFDebug(logPath, [[NSString stringWithFormat:@"WKWebView title: %@", webview.title ? webview.title : @"nil"] UTF8String]);
+                    logPDFDebug(logPath, [[NSString stringWithFormat:@"WKWebView isLoading: %d", webview.loading ? 1 : 0] UTF8String]);
+                    logPDFDebug(logPath, [[NSString stringWithFormat:@"WKWebView estimatedProgress: %.2f", webview.estimatedProgress] UTF8String]);
+                    logPDFDebug(logPath, [[NSString stringWithFormat:@"baseURL: %@", baseURL.absoluteString] UTF8String]);
+                    logPDFDebug(logPath, [[NSString stringWithFormat:@"html length: %lu bytes", (unsigned long)[html length]] UTF8String]);
+                    logPDFDebug(logPath, "========== END WKWebView STATE BEFORE LOAD ==========");
 
-                    // 一時ファイルのクリーンアップ用のブロック
-                    void (^cleanupTempFile)(void) = ^{
-                        NSFileManager* fileManager = [NSFileManager defaultManager];
-                        if ([fileManager fileExistsAtPath:tempFilePath]) {
-                            NSError* removeError = nil;
-                            BOOL removed = [fileManager removeItemAtPath:tempFilePath error:&removeError];
-                            if (removed) {
-                                logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] Cleaned up temp file: %@", tempFilePath] UTF8String]);
-                            } else {
-                                logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] WARNING: Failed to cleanup temp file: %@", removeError ? removeError.localizedDescription : @"unknown error"] UTF8String]);
-                            }
-                        }
-                    };
-
-                    // file:// URLで読み込む（ナビゲーションデリゲートが呼ばれる）
-                    logPDFExport(logPath, "[PDF Export] Loading HTML from file URL...");
-                    NSURLRequest* request = [NSURLRequest requestWithURL:fileURL];
-                    [webview loadRequest:request];
-                    logPDFExport(logPath, "[PDF Export] Load request sent to webview");
+                    [webview loadHTMLString:html baseURL:baseURL];
+                    logPDFExport(logPath, "[PDF Export] HTML loaded into webview (loadHTMLString)");
                     logMemoryUsage(logPath); // 読み込み後のメモリ使用量
+
+                    // ========== 検証用: WKWebView読み込み直後の状態 ==========
+                    logPDFDebug(logPath, "========== WKWebView STATE IMMEDIATELY AFTER LOAD ==========");
+                    logPDFDebug(logPath, [[NSString stringWithFormat:@"WKWebView URL: %@", webview.URL ? webview.URL.absoluteString : @"nil"] UTF8String]);
+                    logPDFDebug(logPath, [[NSString stringWithFormat:@"WKWebView title: %@", webview.title ? webview.title : @"nil"] UTF8String]);
+                    logPDFDebug(logPath, [[NSString stringWithFormat:@"WKWebView isLoading: %d", webview.loading ? 1 : 0] UTF8String]);
+                    logPDFDebug(logPath, [[NSString stringWithFormat:@"WKWebView estimatedProgress: %.2f", webview.estimatedProgress] UTF8String]);
+                    logPDFDebug(logPath, "========== END WKWebView STATE IMMEDIATELY AFTER LOAD ==========");
 
                     __block int attempts = 0;
                     __block NSDate* startTime = [NSDate date];
@@ -339,6 +504,14 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
 
                         logPDFExport(logPath, "[PDF Export] Evaluating JavaScript: checking readyState and image loading...");
                         fflush(stdout);
+
+                        // ========== 検証用: checkReady時のWKWebView状態 ==========
+                        logPDFDebug(logPath, [[NSString stringWithFormat:@"========== checkReady (attempts=%d) ==========", attempts] UTF8String]);
+                        logPDFDebug(logPath, [[NSString stringWithFormat:@"WKWebView URL: %@", webview.URL ? webview.URL.absoluteString : @"nil"] UTF8String]);
+                        logPDFDebug(logPath, [[NSString stringWithFormat:@"WKWebView title: %@", webview.title ? webview.title : @"nil"] UTF8String]);
+                        logPDFDebug(logPath, [[NSString stringWithFormat:@"WKWebView isLoading: %d", webview.loading ? 1 : 0] UTF8String]);
+                        logPDFDebug(logPath, [[NSString stringWithFormat:@"WKWebView estimatedProgress: %.2f", webview.estimatedProgress] UTF8String]);
+                        logPDFDebug(logPath, [[NSString stringWithFormat:@"Elapsed time: %.2f seconds", elapsed] UTF8String]);
 
                         // 画像の読み込み完了も確認するJavaScript
                         // document.querySelectorAll('img')を使用してData URIの画像も検出
@@ -392,6 +565,32 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                         [webview evaluateJavaScript:checkScript completionHandler:^(id _Nullable value, NSError * _Nullable error) {
                             logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] JavaScript completionHandler called (value=%@, error=%@)", value ? value : @"nil", error ? error.localizedDescription : @"nil"] UTF8String]);
                             fflush(stdout);
+
+                            // ========== 検証用: JavaScript評価結果の詳細ダンプ ==========
+                            logPDFDebug(logPath, "========== JavaScript Evaluation Result ==========");
+                            if (error) {
+                                logPDFDebug(logPath, [[NSString stringWithFormat:@"ERROR: %@ (code=%ld, domain=%@)", error.localizedDescription, (long)error.code, error.domain] UTF8String]);
+                                if (error.userInfo) {
+                                    logPDFDebug(logPath, [[NSString stringWithFormat:@"Error userInfo: %@", error.userInfo] UTF8String]);
+                                }
+                            } else {
+                                logPDFDebug(logPath, "JavaScript evaluation succeeded");
+                                if (value) {
+                                    // 結果をJSON形式で出力
+                                    NSError* jsonError = nil;
+                                    NSData* jsonData = [NSJSONSerialization dataWithJSONObject:value options:NSJSONWritingPrettyPrinted error:&jsonError];
+                                    if (jsonData && !jsonError) {
+                                        NSString* jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+                                        logPDFDebug(logPath, [[NSString stringWithFormat:@"Result JSON:\n%@", jsonString] UTF8String]);
+                                    } else {
+                                        logPDFDebug(logPath, [[NSString stringWithFormat:@"Result (raw): %@", value] UTF8String]);
+                                    }
+                                } else {
+                                    logPDFDebug(logPath, "Result is nil");
+                                }
+                            }
+                            logPDFDebug(logPath, "========== END JavaScript Evaluation Result ==========");
+
                             if (error) {
                                 logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] JavaScript evaluation error: %@ (code=%ld, domain=%@)", error.localizedDescription, (long)error.code, error.domain] UTF8String]);
                                 if (error.userInfo) {
@@ -492,15 +691,12 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                                                     logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] PDF file written successfully to: %@", outPath] UTF8String]);
                                                 }
                                             }
-                                            // 一時ファイルをクリーンアップ
-                                            cleanupTempFile();
                                             finished = YES;
                                             dispatch_semaphore_signal(sem);
                                         }];
                                     } else {
                                         NSString* msg = @"macOS 11+ required for WKWebView PDF";
                                         logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] ERROR: %@", msg] UTF8String]);
-                                        cleanupTempFile();
                                         retErr = strdup([msg UTF8String]);
                                         finished = YES;
                                         dispatch_semaphore_signal(sem);
@@ -508,7 +704,6 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                                 } @catch (NSException* ex) {
                                     NSString* msg = [NSString stringWithFormat:@"Exception: %@", ex.reason];
                                     logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] EXCEPTION: %@", msg] UTF8String]);
-                                    cleanupTempFile();
                                     retErr = strdup([msg UTF8String]);
                                     finished = YES;
                                     dispatch_semaphore_signal(sem);
@@ -544,7 +739,6 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                                                     logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] PDF file written successfully (forced) to: %@", outPath] UTF8String]);
                                                 }
                                             }
-                                            cleanupTempFile();
                                             finished = YES;
                                             dispatch_semaphore_signal(sem);
                                         }];
@@ -583,16 +777,16 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                             return;
                         }
                         logPDFExport(logPath, "[PDF Export] Fallback timer: forcing PDF creation...");
-                                    if (@available(macOS 11.0, *)) {
-                                        WKPDFConfiguration* pdfConfig = [WKPDFConfiguration new];
+                        if (@available(macOS 11.0, *)) {
+                            WKPDFConfiguration* pdfConfig = [WKPDFConfiguration new];
                                         logPDFExport(logPath, "[PDF Export] Fallback: Calling createPDFWithConfiguration...");
-                                        [webview createPDFWithConfiguration:pdfConfig completionHandler:^(NSData * _Nullable pdfData, NSError * _Nullable error2) {
+                            [webview createPDFWithConfiguration:pdfConfig completionHandler:^(NSData * _Nullable pdfData, NSError * _Nullable error2) {
                                             logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] Fallback: createPDF completionHandler called (finished=%d, pdfData=%@, error=%@)", finished, pdfData ? @"not nil" : @"nil", error2 ? error2.localizedDescription : @"nil"] UTF8String]);
-                                            if (finished) {
+                                if (finished) {
                                                 logPDFExport(logPath, "[PDF Export] Fallback: already finished, ignoring");
-                                                return;
-                                            }
-                                            if (error2 || !pdfData) {
+                                    return;
+                                }
+                                if (error2 || !pdfData) {
                                     NSString* msg = error2 ? [NSString stringWithFormat:@"PDF creation error (fallback): %@", error2.localizedDescription] : @"No PDF data (fallback)";
                                     logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] ERROR (fallback): %@", msg] UTF8String]);
                                     retErr = strdup([msg UTF8String]);
@@ -608,7 +802,6 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                                         logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] PDF file written successfully (fallback) to: %@", outPath] UTF8String]);
                                     }
                                 }
-                                cleanupTempFile();
                                 finished = YES;
                                 dispatch_semaphore_signal(sem);
                             }];
@@ -620,7 +813,6 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                         logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] Hard timeout timer fired (finished=%d)", finished] UTF8String]);
                         if (!finished) {
                             logPDFExport(logPath, "[PDF Export] ERROR: Timeout after 180 seconds");
-                            cleanupTempFile();
                             retErr = strdup("PDF export timeout after 180 seconds");
                             finished = YES;
                             dispatch_semaphore_signal(sem);
@@ -633,17 +825,6 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                 } @catch (NSException* ex) {
                     NSString* msg = [NSString stringWithFormat:@"Outer exception: %@", ex.reason];
                     logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] OUTER EXCEPTION: %@", msg] UTF8String]);
-                    // 一時ファイルのクリーンアップ
-                    if (tempFilePathForCleanup) {
-                        NSFileManager* fileManager = [NSFileManager defaultManager];
-                        if ([fileManager fileExistsAtPath:tempFilePathForCleanup]) {
-                            NSError* removeError = nil;
-                            [fileManager removeItemAtPath:tempFilePathForCleanup error:&removeError];
-                            if (removeError) {
-                                logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] WARNING: Failed to cleanup temp file: %@", removeError.localizedDescription] UTF8String]);
-                            }
-                        }
-                    }
                     retErr = strdup([msg UTF8String]);
                     finished = YES;
                     dispatch_semaphore_signal(sem);
