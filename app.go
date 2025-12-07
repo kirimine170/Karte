@@ -56,10 +56,10 @@ var (
 )
 
 const maxImageSizeForPDF = 10 * 1024 * 1024 // 10MB
-const maxImageWidthForPDF = 1920            // 最大横幅1920px
+const maxImageWidthForPDF = 800             // PDF表示用に最大横幅800px（Previewで開く速度を改善）
 const maxImageFileSizeForPDF = 300 * 1024   // 各画像の目標サイズ300KB
-const jpegQualityInitial = 65               // JPEG品質の初期値
-const jpegQualityMin = 50                   // JPEG品質の下限
+const jpegQualityInitial = 60               // JPEG品質の初期値（PDF表示用に最適化）
+const jpegQualityMin = 45                   // JPEG品質の下限（PDF表示用に最適化）
 
 // App struct
 type App struct {
