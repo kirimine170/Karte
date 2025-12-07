@@ -363,6 +363,10 @@ const transcriptionProgressEl = document.getElementById('transcriptionProgress')
 const transcriptionProgressBar = transcriptionProgressEl?.querySelector('.transcription-progress-bar');
 const transcriptionProgressFill = transcriptionProgressEl?.querySelector('.transcription-progress-fill');
 const transcriptionProgressText = transcriptionProgressEl?.querySelector('.transcription-progress-text');
+const pdfExportProgressEl = document.getElementById('pdfExportProgress');
+const pdfExportProgressBar = pdfExportProgressEl?.querySelector('.transcription-progress-bar');
+const pdfExportProgressFill = pdfExportProgressEl?.querySelector('.transcription-progress-fill');
+const pdfExportProgressText = pdfExportProgressEl?.querySelector('.transcription-progress-text');
 
 // Audio player elements
 const audioPlayerContainer = document.getElementById('audioPlayerContainer');
@@ -432,6 +436,28 @@ async function init() {
             EventsOn('audio-transcribed', handleAudioTranscribedEvent);
             EventsOn('audio-transcribe-progress', handleAudioTranscribeProgress);
             EventsOn('image-imported', handleImageImportedEvent);
+            EventsOn('pdf-export-progress', handlePDFExportProgress);
+            EventsOn('pdf-export-completed', (payload) => {
+                hidePDFExportProgress();
+                if (exportPdfBtn) {
+                    exportPdfBtn.disabled = false;
+                }
+                const pdfPath = payload.pdfPath || payload.PdfPath || '';
+                const size = payload.size || payload.Size || 0;
+                statusEl.textContent = `PDF exported: ${pdfPath} (${(size / 1024).toFixed(1)} KB)`;
+                if (pdfPath) {
+                    BrowserOpenURL(pdfPath);
+                }
+            });
+            EventsOn('pdf-export-error', (payload) => {
+                hidePDFExportProgress();
+                if (exportPdfBtn) {
+                    exportPdfBtn.disabled = false;
+                }
+                const error = payload.error || payload.Error || 'PDF export failed';
+                statusEl.textContent = error;
+                alert(error);
+            });
 
             // Initialize ASR status check
             updateASRStatus();
@@ -3052,6 +3078,91 @@ function hideTranscriptionProgress() {
     currentTranscriptionTotalSegments = 0;
 }
 
+// Handle PDF export progress
+let currentPDFExportTotalImages = 0;
+
+function handlePDFExportProgress(payload) {
+    if (!payload) {
+        return;
+    }
+
+    const currentImage = payload.currentImage || payload.CurrentImage || 0;
+    const totalImages = payload.totalImages || payload.TotalImages || 0;
+    const htmlSize = payload.htmlSize || payload.HtmlSize || 0;
+    const stage = payload.stage || payload.Stage || '';
+
+    // Start progress if this is a new export
+    if (totalImages !== currentPDFExportTotalImages) {
+        currentPDFExportTotalImages = totalImages;
+        showPDFExportProgress(totalImages, htmlSize);
+    }
+
+    // Update progress bar
+    if (pdfExportProgressFill && totalImages > 0) {
+        const progress = Math.min(100, (currentImage / totalImages) * 100);
+        pdfExportProgressFill.style.width = `${progress}%`;
+        pdfExportProgressFill.classList.remove('indeterminate');
+    } else if (pdfExportProgressFill && totalImages === 0) {
+        // Fallback to indeterminate if total images unknown
+        pdfExportProgressFill.classList.add('indeterminate');
+    }
+
+    // Update progress text
+    if (pdfExportProgressText) {
+        let stageText = '';
+        if (stage === 'converting-images') {
+            stageText = '画像を変換中';
+        } else if (stage === 'loading-webview') {
+            stageText = 'WebViewを読み込み中';
+        } else if (stage === 'generating-pdf') {
+            stageText = 'PDFを生成中';
+        } else {
+            stageText = '処理中';
+        }
+
+        if (totalImages > 0) {
+            pdfExportProgressText.textContent = `PDF出力中: ${stageText} (${currentImage}/${totalImages}枚の画像を処理済み)`;
+        } else {
+            pdfExportProgressText.textContent = `PDF出力中: ${stageText}`;
+        }
+    }
+}
+
+function showPDFExportProgress(totalImages, htmlSize) {
+    if (!pdfExportProgressEl || !pdfExportProgressFill) {
+        return;
+    }
+
+    pdfExportProgressEl.style.display = 'flex';
+
+    // Reset progress bar
+    if (totalImages > 0) {
+        pdfExportProgressFill.style.width = '0%';
+        pdfExportProgressFill.classList.remove('indeterminate');
+    } else {
+        pdfExportProgressFill.classList.add('indeterminate');
+    }
+
+    if (pdfExportProgressText) {
+        if (totalImages > 0) {
+            pdfExportProgressText.textContent = `PDF出力中: 画像を変換中 (0/${totalImages}枚の画像を処理済み)`;
+        } else {
+            pdfExportProgressText.textContent = 'PDF出力中: 処理中...';
+        }
+    }
+}
+
+function hidePDFExportProgress() {
+    if (!pdfExportProgressEl || !pdfExportProgressFill) {
+        return;
+    }
+
+    pdfExportProgressEl.style.display = 'none';
+    pdfExportProgressFill.classList.remove('indeterminate');
+    pdfExportProgressFill.style.width = '0%';
+    currentPDFExportTotalImages = 0;
+}
+
 function setStatusMessage(message, durationMs = 0) {
     if (!statusEl) {
         return;
@@ -3285,9 +3396,15 @@ async function exportPdf() {
         }
 
         if (!isBrowser) {
-            const pdfUrl = await api.ExportPDF(html);
-            statusEl.textContent = 'PDF exported: ' + pdfUrl;
-            BrowserOpenURL(pdfUrl);//HACK Previewが開けずInvalid URLを吐く
+            // 非同期でPDFエクスポートを開始
+            showPDFExportProgress(0, html.length);
+            try {
+                await api.ExportPDF(html);
+                // イベントで完了を待つ（exportPdfCompletedハンドラーで処理）
+            } catch (error) {
+                hidePDFExportProgress();
+                throw error;
+            }
         } else {
             // In browser, open print dialog
             const win = window.open('about:blank', '_blank', 'noopener');
@@ -3302,13 +3419,16 @@ async function exportPdf() {
         }
     } catch (error) {
         console.error('Export PDF failed:', error);
+        hidePDFExportProgress();
         const msg = (error && (error.message || String(error))) || 'Export PDF failed';
         statusEl.textContent = msg;
         alert(msg);
     }
     finally {
-        if (exportPdfBtn) {
-            exportPdfBtn.disabled = false;
+        // ボタンの有効化はイベントハンドラーで行う（非同期完了時）
+        // エラー時のみここで有効化
+        if (exportPdfBtn && !exportPdfBtn.disabled) {
+            // 既に有効化されている場合は何もしない
         }
     }
 }
