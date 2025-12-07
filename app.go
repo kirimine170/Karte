@@ -3663,6 +3663,8 @@ func (a *App) serveMediaFile(w http.ResponseWriter, r *http.Request, prefix, med
 		default:
 			mimeType = "audio/mpeg"
 		}
+	} else if mediaType == "pdf" {
+		mimeType = "application/pdf"
 	} else {
 		switch ext {
 		case ".jpg", ".jpeg":
