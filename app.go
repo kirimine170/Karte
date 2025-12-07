@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"image"
 	_ "image/gif"
-	"image/jpeg"
+	"image/png"
 	"io"
 	"io/fs"
 	"log"
@@ -58,8 +58,6 @@ var (
 const maxImageSizeForPDF = 10 * 1024 * 1024 // 10MB
 const maxImageWidthForPDF = 800             // PDF表示用に最大横幅800px（Previewで開く速度を改善）
 const maxImageFileSizeForPDF = 300 * 1024   // 各画像の目標サイズ300KB
-const jpegQualityInitial = 60               // JPEG品質の初期値（PDF表示用に最適化）
-const jpegQualityMin = 45                   // JPEG品質の下限（PDF表示用に最適化）
 
 // App struct
 type App struct {
@@ -3545,7 +3543,7 @@ func (a *App) convertImageURLsToDataURIs(html string, totalImages int) (string, 
 			a.logInfo(fmt.Sprintf("PDF export: Image size: %s (width: %d, height: %d, file size: %d bytes)", absPath, originalBounds.Dx(), originalBounds.Dy(), originalSize))
 		}
 
-		// Create optimized temporary JPEG file
+		// Create optimized temporary PNG file
 		imageStartTime := time.Now()
 		tmpFile, err := a.createOptimizedImageTempFile(img, absPath)
 		if err != nil {
@@ -3565,14 +3563,14 @@ func (a *App) convertImageURLsToDataURIs(html string, totalImages int) (string, 
 
 		// Encode to base64
 		base64Data := base64.StdEncoding.EncodeToString(tmpData)
-		dataURISize := len(base64Data) + len("data:image/jpeg;base64,") // Data URIの実際のサイズ
+		dataURISize := len(base64Data) + len("data:image/png;base64,") // Data URIの実際のサイズ
 		totalDataURISize += int64(dataURISize)
 
-		// Create data URI (always JPEG for optimized images)
-		dataURI := fmt.Sprintf("data:image/jpeg;base64,%s", base64Data)
+		// Create data URI (always PNG for optimized images)
+		dataURI := fmt.Sprintf("data:image/png;base64,%s", base64Data)
 		imageDuration := time.Since(imageStartTime)
 
-		a.logInfo(fmt.Sprintf("PDF export: Converted image %d/%d: %s -> data:image/jpeg (original: %d bytes, temp file: %d bytes, data URI: %d bytes, duration: %v)", currentImage, totalImages, imgURL, originalSize, len(tmpData), dataURISize, imageDuration))
+		a.logInfo(fmt.Sprintf("PDF export: Converted image %d/%d: %s -> data:image/png (original: %d bytes, temp file: %d bytes, data URI: %d bytes, duration: %v)", currentImage, totalImages, imgURL, originalSize, len(tmpData), dataURISize, imageDuration))
 
 		return prefix + dataURI + suffix
 	})
@@ -5285,9 +5283,9 @@ func resizeImageIfNeeded(img image.Image, maxWidth int) image.Image {
 	return resized
 }
 
-// createOptimizedImageTempFile creates an optimized JPEG temporary file from an image
+// createOptimizedImageTempFile creates an optimized PNG temporary file from an image
 // Returns the temporary file path and error
-// The image is resized if needed and encoded as JPEG with quality optimization
+// The image is resized if needed and encoded as PNG (lossless compression)
 func (a *App) createOptimizedImageTempFile(img image.Image, originalPath string) (string, error) {
 	// Resize if needed (longer edge <= 1920px)
 	originalBounds := img.Bounds()
@@ -5301,37 +5299,22 @@ func (a *App) createOptimizedImageTempFile(img image.Image, originalPath string)
 	if tmpDir == "" {
 		tmpDir = "."
 	}
-	tmpFile := filepath.Join(tmpDir, fmt.Sprintf("karte-pdf-img-%d-%d.jpg", time.Now().UnixNano(), os.Getpid()))
+	tmpFile := filepath.Join(tmpDir, fmt.Sprintf("karte-pdf-img-%d-%d.png", time.Now().UnixNano(), os.Getpid()))
 
-	// Try encoding with different quality levels to achieve target size
-	quality := jpegQualityInitial
-	var finalData []byte
-
-	for {
-		var jpegBuf bytes.Buffer
-		if err := jpeg.Encode(&jpegBuf, img, &jpeg.Options{Quality: quality}); err != nil {
-			return "", fmt.Errorf("failed to encode image to JPEG: %w", err)
-		}
-
-		finalData = jpegBuf.Bytes()
-		if len(finalData) <= maxImageFileSizeForPDF || quality <= jpegQualityMin {
-			// Target size achieved or reached minimum quality
-			break
-		}
-
-		// Reduce quality by 5 for next iteration
-		quality -= 5
-		if quality < jpegQualityMin {
-			quality = jpegQualityMin
-		}
+	// Encode as PNG (lossless compression)
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, img); err != nil {
+		return "", fmt.Errorf("failed to encode image to PNG: %w", err)
 	}
+
+	finalData := pngBuf.Bytes()
 
 	// Write to temporary file
 	if err := os.WriteFile(tmpFile, finalData, 0644); err != nil {
 		return "", fmt.Errorf("failed to write temporary file: %w", err)
 	}
 
-	a.logInfo(fmt.Sprintf("PDF export: Created optimized JPEG temp file: %s (size: %d bytes, quality: %d)", tmpFile, len(finalData), quality))
+	a.logInfo(fmt.Sprintf("PDF export: Created optimized PNG temp file: %s (size: %d bytes)", tmpFile, len(finalData)))
 
 	return tmpFile, nil
 }
