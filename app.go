@@ -57,9 +57,9 @@ var (
 
 const maxImageSizeForPDF = 10 * 1024 * 1024 // 10MB
 const maxImageWidthForPDF = 1920            // 最大横幅1920px
-const maxImageFileSizeForPDF = 500 * 1024   // 各画像の目標サイズ500KB
-const jpegQualityInitial = 75               // JPEG品質の初期値
-const jpegQualityMin = 60                   // JPEG品質の下限
+const maxImageFileSizeForPDF = 300 * 1024   // 各画像の目標サイズ300KB
+const jpegQualityInitial = 65               // JPEG品質の初期値
+const jpegQualityMin = 50                   // JPEG品質の下限
 
 // App struct
 type App struct {
@@ -3247,11 +3247,54 @@ func (a *App) ExportPreviewHTML(html string) (string, error) {
 }
 
 // ExportPDF renders given HTML as PDF to karte_data/export and returns the path
-func (a *App) ExportPDF(html string) (string, error) {
+func (a *App) ExportPDF(html string) error {
 	if html == "" {
-		return "", fmt.Errorf("empty html")
+		return fmt.Errorf("empty html")
 	}
 
+	// 非同期で実行
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				a.logError(fmt.Sprintf("ExportPDF panic recovered: %v", r))
+				runtime.EventsEmit(a.ctx, "pdf-export-error", map[string]interface{}{
+					"error": fmt.Sprintf("PDF export panic: %v", r),
+				})
+			}
+		}()
+
+		pdfPath, err := a.exportPDFInternal(html)
+		if err != nil {
+			a.logError(fmt.Sprintf("ExportPDF failed: %v", err))
+			runtime.EventsEmit(a.ctx, "pdf-export-error", map[string]interface{}{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		// ファイル情報を取得
+		info, err := os.Stat(pdfPath)
+		if err != nil {
+			a.logError(fmt.Sprintf("ExportPDF: Failed to stat PDF file: %v", err))
+			runtime.EventsEmit(a.ctx, "pdf-export-error", map[string]interface{}{
+				"error": fmt.Sprintf("Failed to stat PDF file: %v", err),
+			})
+			return
+		}
+
+		a.logInfo(fmt.Sprintf("PDF exported: %s (size: %d bytes)", pdfPath, info.Size()))
+		url := strings.ReplaceAll(pdfPath, "\\", "/")
+		runtime.EventsEmit(a.ctx, "pdf-export-completed", map[string]interface{}{
+			"pdfPath": url,
+			"size":    info.Size(),
+		})
+	}()
+
+	return nil
+}
+
+// exportPDFInternal performs the actual PDF export work
+func (a *App) exportPDFInternal(html string) (string, error) {
 	// Convert image URLs to data URIs for PDF export
 	// WKWebView cannot access HTTP URLs, so we need to embed images as data URIs
 	// Track temporary files for cleanup
@@ -3267,7 +3310,75 @@ func (a *App) ExportPDF(html string) (string, error) {
 		}
 	}()
 
-	html, tempFiles = a.convertImageURLsToDataURIs(html)
+	// 画像変換の進捗を追跡するため、まず画像の数をカウント
+	originalHTMLSize := len(html)
+	imgRegex := regexp.MustCompile(`(<img[^>]+src=["'])([^"']+)(["'][^>]*>)`)
+	matches := imgRegex.FindAllString(html, -1)
+	totalImages := 0
+	for _, match := range matches {
+		parts := imgRegex.FindStringSubmatch(match)
+		if len(parts) >= 4 {
+			imgURL := parts[2]
+			if strings.HasPrefix(imgURL, "/image/") || strings.HasPrefix(imgURL, "data/image/") {
+				totalImages++
+			}
+		}
+	}
+
+	a.logInfo(fmt.Sprintf("PDF export: Starting image conversion (original HTML size: %d bytes, images: %d)", originalHTMLSize, totalImages))
+
+	// 画像変換開始イベント
+	if totalImages > 0 {
+		runtime.EventsEmit(a.ctx, "pdf-export-progress", map[string]interface{}{
+			"currentImage": 0,
+			"totalImages":  totalImages,
+			"htmlSize":     len(html),
+			"stage":        "converting-images",
+		})
+	}
+
+	conversionStartTime := time.Now()
+	html, tempFiles = a.convertImageURLsToDataURIs(html, totalImages)
+	conversionDuration := time.Since(conversionStartTime)
+
+	// HTMLサイズの監視と警告
+	finalHTMLSize := len(html)
+	sizeIncrease := finalHTMLSize - originalHTMLSize
+	a.logInfo(fmt.Sprintf("PDF export: Image conversion completed (duration: %v, original HTML: %d bytes, final HTML: %d bytes, increase: %d bytes)", conversionDuration, originalHTMLSize, finalHTMLSize, sizeIncrease))
+
+	// デバッグ: 変換後のHTMLの内容を確認
+	imgTagCount := strings.Count(html, "<img")
+	dataImageCount := strings.Count(html, "data:image")
+	a.logInfo(fmt.Sprintf("PDF export: DEBUG - After conversion: img tags=%d, data:image occurrences=%d", imgTagCount, dataImageCount))
+
+	// HTMLの最初の2000文字をログに出力（画像部分が含まれる可能性が高い）
+	htmlPreview := html
+	if len(htmlPreview) > 2000 {
+		htmlPreview = htmlPreview[:2000] + "...(truncated)"
+	}
+	a.logInfo(fmt.Sprintf("PDF export: DEBUG - HTML preview (first 2000 chars):\n%s", htmlPreview))
+
+	// data:imageが含まれている部分を抽出してログに出力
+	dataImageRegex := regexp.MustCompile(`data:image[^"']+`)
+	dataImageMatches := dataImageRegex.FindAllString(html, 10) // 最初の10個
+	if len(dataImageMatches) > 0 {
+		for i, match := range dataImageMatches {
+			preview := match
+			if len(preview) > 200 {
+				preview = preview[:200] + "...(truncated)"
+			}
+			a.logInfo(fmt.Sprintf("PDF export: DEBUG - data:image[%d] preview: %s", i, preview))
+		}
+	} else {
+		a.logError("PDF export: DEBUG - No data:image found in converted HTML!")
+	}
+
+	if finalHTMLSize > 1024*1024 {
+		a.logError(fmt.Sprintf("PDF export: WARNING - HTML size exceeds 1MB (%d bytes)", finalHTMLSize))
+	}
+	if finalHTMLSize > 2*1024*1024 {
+		a.logError(fmt.Sprintf("PDF export: ERROR - HTML size exceeds 2MB (%d bytes), PDF generation may fail", finalHTMLSize))
+	}
 
 	exportDir := filepath.Join(a.dataDir, "export")
 	if err := os.MkdirAll(exportDir, 0755); err != nil {
@@ -3277,12 +3388,13 @@ func (a *App) ExportPDF(html string) (string, error) {
 	pdfPath := filepath.Join(exportDir, base)
 	a.logInfo(fmt.Sprintf("ExportPDF start: out=%s html.len=%d", pdfPath, len(html)))
 
-	// Add panic recovery to catch any crashes
-	defer func() {
-		if r := recover(); r != nil {
-			a.logError(fmt.Sprintf("ExportPDF panic recovered: %v", r))
-		}
-	}()
+	// WKWebView読み込み開始イベント
+	runtime.EventsEmit(a.ctx, "pdf-export-progress", map[string]interface{}{
+		"currentImage": totalImages,
+		"totalImages":  totalImages,
+		"htmlSize":     len(html),
+		"stage":        "loading-webview",
+	})
 
 	a.logInfo("ExportPDF: Calling pdfexport.ExportHTMLToPDF...")
 	if err := pdfexport.ExportHTMLToPDF(html, pdfPath, a.logFilePath); err != nil {
@@ -3290,6 +3402,14 @@ func (a *App) ExportPDF(html string) (string, error) {
 		return "", fmt.Errorf("PDF export failed: %w", err)
 	}
 	a.logInfo("ExportPDF: pdfexport.ExportHTMLToPDF returned successfully")
+
+	// PDF生成完了イベント
+	runtime.EventsEmit(a.ctx, "pdf-export-progress", map[string]interface{}{
+		"currentImage": totalImages,
+		"totalImages":  totalImages,
+		"htmlSize":     len(html),
+		"stage":        "generating-pdf",
+	})
 
 	// Verify that the PDF file was actually created
 	if _, err := os.Stat(pdfPath); os.IsNotExist(err) {
@@ -3308,17 +3428,16 @@ func (a *App) ExportPDF(html string) (string, error) {
 		return "", fmt.Errorf("PDF file is empty: %s", pdfPath)
 	}
 
-	a.logInfo(fmt.Sprintf("PDF exported: %s (size: %d bytes)", pdfPath, info.Size()))
-	url := strings.ReplaceAll(pdfPath, "\\", "/")
-	a.logInfo("url --- " + url)
-	return url, nil
+	return pdfPath, nil
 }
 
 // convertImageURLsToDataURIs converts image URLs in HTML to data URIs
 // This is necessary for PDF export because WKWebView cannot access HTTP URLs
 // Returns the converted HTML and a list of temporary files that need to be cleaned up
-func (a *App) convertImageURLsToDataURIs(html string) (string, []string) {
+func (a *App) convertImageURLsToDataURIs(html string, totalImages int) (string, []string) {
 	var tempFiles []string
+	var currentImage int
+	var totalDataURISize int64 // 総Data URIサイズを追跡
 	// Match img tags with src attributes
 	imgRegex := regexp.MustCompile(`(<img[^>]+src=["'])([^"']+)(["'][^>]*>)`)
 
@@ -3351,6 +3470,17 @@ func (a *App) convertImageURLsToDataURIs(html string) (string, []string) {
 			return match
 		}
 
+		// プログレスイベントを発行
+		currentImage++
+		if totalImages > 0 {
+			runtime.EventsEmit(a.ctx, "pdf-export-progress", map[string]interface{}{
+				"currentImage": currentImage,
+				"totalImages":  totalImages,
+				"htmlSize":     len(html),
+				"stage":        "converting-images",
+			})
+		}
+
 		// Convert to absolute file path
 		var absPath string
 		if filepath.IsAbs(imgPath) {
@@ -3380,6 +3510,7 @@ func (a *App) convertImageURLsToDataURIs(html string) (string, []string) {
 			a.logError(fmt.Sprintf("Failed to read image file for PDF export: %s, error: %v", absPath, err))
 			return match // Return original if file cannot be read
 		}
+		originalSize := len(imgData)
 
 		// Determine MIME type and process image
 		ext := strings.ToLower(filepath.Ext(absPath))
@@ -3394,11 +3525,14 @@ func (a *App) convertImageURLsToDataURIs(html string) (string, []string) {
 				return match // Return original if WebP cannot be decoded
 			}
 			originalBounds := img.Bounds()
-			a.logInfo(fmt.Sprintf("PDF export: WebP image size: %s (width: %d, height: %d)", absPath, originalBounds.Dx(), originalBounds.Dy()))
+			a.logInfo(fmt.Sprintf("PDF export: WebP image size: %s (width: %d, height: %d, file size: %d bytes)", absPath, originalBounds.Dx(), originalBounds.Dy(), originalSize))
 		} else if ext == ".svg" {
 			// SVGはリサイズできないので、そのまま使用
 			base64Data := base64.StdEncoding.EncodeToString(imgData)
 			dataURI := fmt.Sprintf("data:image/svg+xml;base64,%s", base64Data)
+			dataURISize := len(dataURI)
+			totalDataURISize += int64(dataURISize)
+			a.logInfo(fmt.Sprintf("PDF export: Converted SVG image %d/%d: %s -> data:image/svg+xml (original: %d bytes, data URI: %d bytes)", currentImage, totalImages, imgURL, originalSize, dataURISize))
 			return prefix + dataURI + suffix
 		} else {
 			// For non-WebP images, decode
@@ -3408,10 +3542,11 @@ func (a *App) convertImageURLsToDataURIs(html string) (string, []string) {
 				return match // Return original if image cannot be decoded
 			}
 			originalBounds := img.Bounds()
-			a.logInfo(fmt.Sprintf("PDF export: Image size: %s (width: %d, height: %d)", absPath, originalBounds.Dx(), originalBounds.Dy()))
+			a.logInfo(fmt.Sprintf("PDF export: Image size: %s (width: %d, height: %d, file size: %d bytes)", absPath, originalBounds.Dx(), originalBounds.Dy(), originalSize))
 		}
 
 		// Create optimized temporary JPEG file
+		imageStartTime := time.Now()
 		tmpFile, err := a.createOptimizedImageTempFile(img, absPath)
 		if err != nil {
 			a.logError(fmt.Sprintf("Failed to create optimized temp file for PDF export: %s, error: %v", absPath, err))
@@ -3430,14 +3565,19 @@ func (a *App) convertImageURLsToDataURIs(html string) (string, []string) {
 
 		// Encode to base64
 		base64Data := base64.StdEncoding.EncodeToString(tmpData)
+		dataURISize := len(base64Data) + len("data:image/jpeg;base64,") // Data URIの実際のサイズ
+		totalDataURISize += int64(dataURISize)
 
 		// Create data URI (always JPEG for optimized images)
 		dataURI := fmt.Sprintf("data:image/jpeg;base64,%s", base64Data)
+		imageDuration := time.Since(imageStartTime)
 
-		a.logInfo(fmt.Sprintf("Converted image URL to data URI: %s -> data:image/jpeg (size: %d bytes)", imgURL, len(tmpData)))
+		a.logInfo(fmt.Sprintf("PDF export: Converted image %d/%d: %s -> data:image/jpeg (original: %d bytes, temp file: %d bytes, data URI: %d bytes, duration: %v)", currentImage, totalImages, imgURL, originalSize, len(tmpData), dataURISize, imageDuration))
 
 		return prefix + dataURI + suffix
 	})
+
+	a.logInfo(fmt.Sprintf("PDF export: Image conversion summary - total images: %d, total Data URI size: %d bytes", totalImages, totalDataURISize))
 
 	return convertedHTML, tempFiles
 }

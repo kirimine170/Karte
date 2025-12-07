@@ -109,10 +109,13 @@ func wrapWithLayout(root string, fm *FrontMatter, inner string) string {
 	}
 
 	if err != nil {
-		return fmt.Sprintf(`<!doctype html><meta charset="utf-8"><title>%s</title>
+		return fmt.Sprintf(`<!doctype html>
+<html>
+<meta charset="utf-8"><title>%s</title>
             <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
             <script>mermaid.initialize({startOnLoad:true});</script>
-            <body><main class="container">%s</main></body>`, html.EscapeString(fm.Title), inner)
+            <body><main class="container">%s</main></body>
+</html>`, html.EscapeString(fm.Title), inner)
 	}
 	s := string(b)
 	s = strings.ReplaceAll(s, "{{TITLE}}", html.EscapeString(fm.Title))
