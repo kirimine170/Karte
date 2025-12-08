@@ -17,7 +17,7 @@
       "GOOS": "darwin",
       "GOARCH": "amd64"
     },
-    "flags": []
+    "flags": ["-tags", "universal"]
   },
   {
     "name": "darwin-arm64",
