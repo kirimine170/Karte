@@ -272,6 +272,7 @@ let isDirty = false;
 let lastSavedContent = '';
 let isModalShowing = false;
 let closeHandlerRegistered = false;
+let isSaving = false;
 
 // DOM elements
 const statusEl = document.getElementById('status');
@@ -412,8 +413,8 @@ async function confirmNavigationIfDirty() {
         return true;
     }
 
-    // 既にモーダルが表示されている場合は、新しいモーダルを表示しない
-    if (isModalShowing) {
+    // 保存処理中または既にモーダルが表示されている場合は、新しいモーダルを表示しない
+    if (isModalShowing || isSaving) {
         return false; // キャンセル扱い
     }
 
@@ -1057,6 +1058,9 @@ async function save() {
         return;
     }
 
+    // 保存処理中フラグを設定
+    isSaving = true;
+
     try {
         statusEl.textContent = 'Saving...';
         console.log('Calling SaveFile with path:', currentPath, 'content length:', ta.value.length);
@@ -1068,6 +1072,9 @@ async function save() {
     } catch (error) {
         console.error('Failed to save file:', error);
         statusEl.textContent = 'Save failed: ' + error.message;
+    } finally {
+        // 保存処理中フラグをリセット
+        isSaving = false;
     }
 }
 
