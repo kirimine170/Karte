@@ -84,6 +84,10 @@ type App struct {
 	// Uncomment when upgrading to Wails v3:
 	// presenter windows keyed by document id (e.g., "content/xxx.md")
 	// presenters map[string]*Presenter
+
+	// Window close control
+	allowCloseMu   sync.Mutex
+	allowCloseFlag bool
 }
 
 // NOTE: Multi-window support requires Wails v3 (currently in development)
@@ -5218,9 +5222,13 @@ func (a *App) checkUnsavedBeforeClose() {
 // AllowClose is called by JS after user confirms closing (save/discard)
 // This allows the window to close after user interaction
 func (a *App) AllowClose() {
-	// This method is called by JS after user confirms
-	// The actual closing will be handled by JS calling window.close or similar
-	// For Wails, we use runtime.Quit to close the application
+	// Set flag to allow closing
+	a.allowCloseMu.Lock()
+	a.allowCloseFlag = true
+	a.allowCloseMu.Unlock()
+
+	// Quit the application
+	// This will trigger OnBeforeClose again, but it will return false because allowCloseFlag is true
 	runtime.Quit(a.ctx)
 }
 

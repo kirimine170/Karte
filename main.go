@@ -31,9 +31,23 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 255, G: 255, B: 255, A: 1},
 		OnStartup:        app.startup,
 		OnBeforeClose: func(ctx context.Context) (prevent bool) {
+			app.ctx = ctx
+
+			// Check if closing is allowed (set by AllowClose())
+			app.allowCloseMu.Lock()
+			allowClose := app.allowCloseFlag
+			app.allowCloseMu.Unlock()
+
+			if allowClose {
+				// Reset flag for next time
+				app.allowCloseMu.Lock()
+				app.allowCloseFlag = false
+				app.allowCloseMu.Unlock()
+				return false // Allow closing
+			}
+
 			// Emit event to JS to check unsaved changes
 			// JS will show modal and call AllowClose() if user confirms
-			app.ctx = ctx
 			app.checkUnsavedBeforeClose()
 			return true // Prevent closing by default, JS will handle it
 		},
