@@ -5209,6 +5209,21 @@ func (a *App) IsRecording() bool {
 	return a.isRecording
 }
 
+// checkUnsavedBeforeClose emits an event to JS to check for unsaved changes
+// JS will show a modal and call AllowClose() if user confirms closing
+func (a *App) checkUnsavedBeforeClose() {
+	runtime.EventsEmit(a.ctx, "check-unsaved-before-close", nil)
+}
+
+// AllowClose is called by JS after user confirms closing (save/discard)
+// This allows the window to close after user interaction
+func (a *App) AllowClose() {
+	// This method is called by JS after user confirms
+	// The actual closing will be handled by JS calling window.close or similar
+	// For Wails, we use runtime.Quit to close the application
+	runtime.Quit(a.ctx)
+}
+
 // cleanupRecording cleans up recording resources
 func (a *App) cleanupRecording() {
 	a.logInfo("[Recording] cleanupRecording called")

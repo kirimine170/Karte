@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 
 	"github.com/wailsapp/wails/v2"
@@ -29,6 +30,13 @@ func main() {
 		},
 		BackgroundColour: &options.RGBA{R: 255, G: 255, B: 255, A: 1},
 		OnStartup:        app.startup,
+		OnBeforeClose: func(ctx context.Context) (prevent bool) {
+			// Emit event to JS to check unsaved changes
+			// JS will show modal and call AllowClose() if user confirms
+			app.ctx = ctx
+			app.checkUnsavedBeforeClose()
+			return true // Prevent closing by default, JS will handle it
+		},
 		Bind: []interface{}{
 			app,
 		},
