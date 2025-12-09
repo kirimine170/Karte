@@ -196,6 +196,30 @@
     border-color: var(--line)
   }
 
+  .item .unsaved-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: #a855f7;
+    display: none;
+    margin-right: 6px;
+    box-shadow: 0 0 0 2px var(--panel);
+    vertical-align: middle;
+  }
+
+  .item.unsaved .unsaved-dot {
+    display: inline-block;
+  }
+
+  .item.unsaved {
+    font-weight: 600;
+  }
+
+  #saveBtn.unsaved {
+    border-color: #a855f7;
+    color: #a855f7;
+  }
+
   .item.active {
     background: var(--opened-tab-backgroundcolor);
     border-color: var(--borderline-color)
@@ -1092,6 +1116,19 @@
     <div class="modal-buttons">
       <button id="confirmRenameBtn" class="btn">変更</button>
       <button id="cancelRenameBtn" class="btn btn-secondary">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<!-- Unsaved changes confirmation modal -->
+<div id="unsavedConfirmModal" class="modal" style="display: none;">
+  <div class="modal-content">
+    <h3>未保存の変更があります</h3>
+    <p>保存されていない変更があります。どうしますか？</p>
+    <div class="modal-buttons">
+      <button id="unsavedSaveBtn" class="btn">保存して続行</button>
+      <button id="unsavedDiscardBtn" class="btn btn-secondary">破棄して続行</button>
+      <button id="unsavedCancelBtn" class="btn btn-secondary">キャンセル</button>
     </div>
   </div>
 </div>

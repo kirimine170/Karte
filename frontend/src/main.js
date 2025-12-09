@@ -1,5 +1,5 @@
 import * as AppModule from '../wailsjs/wailsjs/go/main/App';
-const { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, ImportPdfFile, ImportPdfBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetPdfFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS, RenamePdfFile, CaptureScreenInteractive } = AppModule;
+const { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, ImportPdfFile, ImportPdfBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetPdfFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS, RenamePdfFile, CaptureScreenInteractive, AllowClose } = AppModule;
 // RenameFile and UpdateLinkToLatest may not exist in generated bindings yet, so import them conditionally
 const RenameFile = AppModule.RenameFile || null;
 const UpdateLinkToLatest = AppModule.UpdateLinkToLatest || null;
@@ -268,6 +268,11 @@ let statusClearTimer = null;
 let currentMetadataImagePath = null;
 let imageMetadataDirty = false;
 let imageMetadataLoading = false;
+let isDirty = false;
+let lastSavedContent = '';
+let isModalShowing = false;
+let closeHandlerRegistered = false;
+let isSaving = false;
 
 // DOM elements
 const statusEl = document.getElementById('status');
@@ -335,6 +340,12 @@ const renameFileInput = document.getElementById('renameFileInput');
 const confirmRenameBtn = document.getElementById('confirmRenameBtn');
 const cancelRenameBtn = document.getElementById('cancelRenameBtn');
 
+// Unsaved changes confirmation modal elements
+const unsavedConfirmModal = document.getElementById('unsavedConfirmModal');
+const unsavedSaveBtn = document.getElementById('unsavedSaveBtn');
+const unsavedDiscardBtn = document.getElementById('unsavedDiscardBtn');
+const unsavedCancelBtn = document.getElementById('unsavedCancelBtn');
+
 // Custom CSS elements
 const customCssBtn = document.getElementById('customCssBtn');
 const customCssModal = document.getElementById('customCssModal');
@@ -375,6 +386,127 @@ const audioPlayer = document.getElementById('audioPlayer');
 let customCssCache = '';
 let currentConflictInfo = null;
 let asrStatusCheckInterval = null;
+
+function setDirtyState(flag) {
+    if (isDirty === flag) {
+        return;
+    }
+    isDirty = flag;
+    updateUnsavedIndicator();
+}
+
+function updateUnsavedIndicator() {
+    if (tree) {
+        const items = tree.querySelectorAll('.item');
+        items.forEach((item) => {
+            const isCurrent = item.dataset.path === currentPath;
+            item.classList.toggle('unsaved', isCurrent && isDirty);
+        });
+    }
+    if (saveBtn) {
+        saveBtn.classList.toggle('unsaved', isDirty);
+    }
+}
+
+async function confirmNavigationIfDirty() {
+    if (!isDirty) {
+        return true;
+    }
+
+    // 保存処理中または既にモーダルが表示されている場合は、新しいモーダルを表示しない
+    if (isModalShowing || isSaving) {
+        return false; // キャンセル扱い
+    }
+
+    return new Promise((resolve) => {
+        if (!unsavedConfirmModal) {
+            // フォールバック: モーダルが存在しない場合はconfirmを使用
+            const wantsSave = window.confirm('未保存の変更があります。保存してから続行しますか？\nOK: 保存して続行 / キャンセル: 破棄するか選択');
+            if (wantsSave) {
+                save().then(() => resolve(true)).catch(() => resolve(false));
+                return;
+            }
+            const discard = window.confirm('変更を破棄して続行しますか？');
+            if (discard) {
+                lastSavedContent = ta?.value || '';
+                setDirtyState(false);
+                resolve(true);
+            } else {
+                resolve(false);
+            }
+            return;
+        }
+
+        // モーダル表示中フラグを設定
+        isModalShowing = true;
+
+        // 既存のイベントリスナーをクリアするために、一度削除して再追加
+        const hideModal = () => {
+            unsavedConfirmModal.style.display = 'none';
+            isModalShowing = false; // フラグをリセット
+        };
+
+        const handleSave = async () => {
+            try {
+                await save();
+                // save()が完了してsetDirtyState(false)が呼ばれるまで、モーダルを表示したままにする
+                // これにより、保存処理中に別のイベントが発生しても新しいモーダルが表示されない
+                hideModal();
+                resolve(true);
+            } catch (error) {
+                console.error('Save failed during navigation confirm:', error);
+                hideModal();
+                resolve(false);
+            }
+        };
+
+        const handleDiscard = () => {
+            hideModal();
+            lastSavedContent = ta?.value || '';
+            setDirtyState(false);
+            resolve(true);
+        };
+
+        const handleCancel = () => {
+            hideModal();
+            resolve(false);
+        };
+
+        // 毎回最新の要素を取得（グローバル変数ではなく）
+        const saveBtn = document.getElementById('unsavedSaveBtn');
+        const discardBtn = document.getElementById('unsavedDiscardBtn');
+        const cancelBtn = document.getElementById('unsavedCancelBtn');
+
+        if (!saveBtn || !discardBtn || !cancelBtn) {
+            console.error('Unsaved confirm modal buttons not found');
+            isModalShowing = false; // フラグをリセット
+            resolve(false);
+            return;
+        }
+
+        // 既存のイベントリスナーを削除してから新しいものを追加
+        const newSaveBtn = saveBtn.cloneNode(true);
+        const newDiscardBtn = discardBtn.cloneNode(true);
+        const newCancelBtn = cancelBtn.cloneNode(true);
+        saveBtn.parentNode.replaceChild(newSaveBtn, saveBtn);
+        discardBtn.parentNode.replaceChild(newDiscardBtn, discardBtn);
+        cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
+
+        newSaveBtn.onclick = handleSave;
+        newDiscardBtn.onclick = handleDiscard;
+        newCancelBtn.onclick = handleCancel;
+
+        // モーダル外クリックでキャンセル
+        const handleModalClick = (e) => {
+            if (e.target === unsavedConfirmModal) {
+                handleCancel();
+            }
+        };
+        unsavedConfirmModal.onclick = handleModalClick;
+
+        unsavedConfirmModal.style.display = 'flex';
+    });
+}
 
 // Initialize the application
 async function init() {
@@ -513,6 +645,11 @@ async function init() {
 async function createNewFile() {
     console.log('Create new file function called');
 
+    const ok = await confirmNavigationIfDirty();
+    if (!ok) {
+        return;
+    }
+
     // Show modal instead of prompt
     showFilenameModal();
 }
@@ -620,9 +757,16 @@ function renderFileList() {
 
         const a = document.createElement('a');
         a.className = 'item' + (file.path === currentPath ? ' active' : '');
+        a.dataset.path = file.path;
         a.textContent = (file.title || 'Untitled') + '  —  ' + file.path.replace(/^content\//, '');
+        const dot = document.createElement('span');
+        dot.className = 'unsaved-dot';
+        a.prepend(dot);
+        if (file.path === currentPath && isDirty) {
+            a.classList.add('unsaved');
+        }
         a.href = '#';
-        a.onclick = (e) => {
+        a.onclick = async (e) => {
             e.preventDefault();
             console.log('File clicked:', file);
             console.log('File path:', file.path);
@@ -650,6 +794,7 @@ function renderFileList() {
         frag.appendChild(a);
     }
     tree.appendChild(frag);
+    updateUnsavedIndicator();
 }
 
 // ---- Rename (file name change) ----
@@ -820,6 +965,13 @@ function showRenameMenu(e, file) {
 // Load a file
 async function loadFile(path) {
     console.log('loadFile called with path:', path);
+    if (isDirty) {
+        const ok = await confirmNavigationIfDirty();
+        if (!ok) {
+            console.log('Navigation cancelled due to unsaved changes');
+            return;
+        }
+    }
     try {
         statusEl.textContent = 'Loading...';
         console.log('Calling LoadFile with path:', path);
@@ -833,6 +985,8 @@ async function loadFile(path) {
             // PDF閲覧モード: エディタを非表示、プレビューにPDFを表示
             ta.value = '';
             currentPath = path;
+            lastSavedContent = '';
+            setDirtyState(false);
 
             // Hide editor
             if (ta) {
@@ -849,6 +1003,8 @@ async function loadFile(path) {
             // 通常のマークダウンファイル
             ta.value = content;
             currentPath = path;
+            lastSavedContent = content;
+            setDirtyState(false);
 
             // Show editor
             if (ta) {
@@ -902,15 +1058,23 @@ async function save() {
         return;
     }
 
+    // 保存処理中フラグを設定
+    isSaving = true;
+
     try {
         statusEl.textContent = 'Saving...';
         console.log('Calling SaveFile with path:', currentPath, 'content length:', ta.value.length);
         await api.SaveFile(currentPath, ta.value);
         statusEl.textContent = 'Saved';
         console.log('File saved successfully');
+        lastSavedContent = ta.value;
+        setDirtyState(false);
     } catch (error) {
         console.error('Failed to save file:', error);
         statusEl.textContent = 'Save failed: ' + error.message;
+    } finally {
+        // 保存処理中フラグをリセット
+        isSaving = false;
     }
 }
 
@@ -1686,6 +1850,7 @@ function setupEventListeners() {
         inputTimeout = setTimeout(() => {
             updatePreview();
         }, 300);
+        setDirtyState(currentPath && ta.value !== lastSavedContent);
     });
 
     // Setup editor drop handler for images
@@ -1741,6 +1906,41 @@ function setupEventListeners() {
             switchToTab(tabName);
         });
     });
+
+    // Handle window close with custom modal (Wails OnBeforeClose)
+    if (!isBrowser && !closeHandlerRegistered) {
+        closeHandlerRegistered = true; // フラグを設定して重複登録を防ぐ
+        EventsOn('check-unsaved-before-close', async () => {
+            // 既にモーダルが表示されている場合は何もしない
+            if (isModalShowing) {
+                return;
+            }
+
+            if (isDirty) {
+                const result = await confirmNavigationIfDirty();
+                if (result) {
+                    // User confirmed (saved or discarded), allow closing
+                    if (AllowClose) {
+                        AllowClose();
+                    }
+                }
+                // If result is false, user cancelled, so window won't close
+            } else {
+                // No unsaved changes, allow closing
+                if (AllowClose) {
+                    AllowClose();
+                }
+            }
+        });
+    } else if (isBrowser) {
+        // Browser mode: use beforeunload
+        window.addEventListener('beforeunload', (e) => {
+            if (isDirty) {
+                e.preventDefault();
+                e.returnValue = '';
+            }
+        });
+    }
 
     setupDragAndDrop();
     setupRecording();
@@ -2591,6 +2791,7 @@ function setupRecording() {
                 const newContent = content + '\n\n## Transcript\n\n' + partialMarkerStart + text + partialMarkerEnd + '\n';
                 const cursorPos = ta.selectionStart;
                 ta.value = newContent;
+                setDirtyState(currentPath && ta.value !== lastSavedContent);
                 scheduleRecordingPreviewUpdate();
                 if (cursorPos <= content.length) {
                     ta.setSelectionRange(cursorPos, cursorPos);
@@ -2621,6 +2822,7 @@ function setupRecording() {
             }
 
             ta.value = newContent;
+            setDirtyState(currentPath && ta.value !== lastSavedContent);
             scheduleRecordingPreviewUpdate();
 
             const transcriptStart = headerIndex;
@@ -2651,6 +2853,7 @@ function setupRecording() {
                 const newContent = content + '\n\n## Transcript\n\n' + finalLine + '\n';
                 const cursorPos = ta.selectionStart;
                 ta.value = newContent;
+                setDirtyState(currentPath && ta.value !== lastSavedContent);
                 scheduleRecordingPreviewUpdate();
                 if (cursorPos <= content.length) {
                     ta.setSelectionRange(cursorPos, cursorPos);
@@ -2691,6 +2894,7 @@ function setupRecording() {
             }
 
             ta.value = newContent;
+            setDirtyState(currentPath && ta.value !== lastSavedContent);
             scheduleRecordingPreviewUpdate();
 
             const transcriptStart = headerIndex;

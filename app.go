@@ -84,6 +84,10 @@ type App struct {
 	// Uncomment when upgrading to Wails v3:
 	// presenter windows keyed by document id (e.g., "content/xxx.md")
 	// presenters map[string]*Presenter
+
+	// Window close control
+	allowCloseMu   sync.Mutex
+	allowCloseFlag bool
 }
 
 // NOTE: Multi-window support requires Wails v3 (currently in development)
@@ -5207,6 +5211,25 @@ func (a *App) IsRecording() bool {
 	a.recordingMu.Lock()
 	defer a.recordingMu.Unlock()
 	return a.isRecording
+}
+
+// checkUnsavedBeforeClose emits an event to JS to check for unsaved changes
+// JS will show a modal and call AllowClose() if user confirms closing
+func (a *App) checkUnsavedBeforeClose() {
+	runtime.EventsEmit(a.ctx, "check-unsaved-before-close", nil)
+}
+
+// AllowClose is called by JS after user confirms closing (save/discard)
+// This allows the window to close after user interaction
+func (a *App) AllowClose() {
+	// Set flag to allow closing
+	a.allowCloseMu.Lock()
+	a.allowCloseFlag = true
+	a.allowCloseMu.Unlock()
+
+	// Quit the application
+	// This will trigger OnBeforeClose again, but it will return false because allowCloseFlag is true
+	runtime.Quit(a.ctx)
 }
 
 // cleanupRecording cleans up recording resources
