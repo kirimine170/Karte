@@ -2791,6 +2791,7 @@ function setupRecording() {
                 const newContent = content + '\n\n## Transcript\n\n' + partialMarkerStart + text + partialMarkerEnd + '\n';
                 const cursorPos = ta.selectionStart;
                 ta.value = newContent;
+                setDirtyState(currentPath && ta.value !== lastSavedContent);
                 scheduleRecordingPreviewUpdate();
                 if (cursorPos <= content.length) {
                     ta.setSelectionRange(cursorPos, cursorPos);
@@ -2821,6 +2822,7 @@ function setupRecording() {
             }
 
             ta.value = newContent;
+            setDirtyState(currentPath && ta.value !== lastSavedContent);
             scheduleRecordingPreviewUpdate();
 
             const transcriptStart = headerIndex;
@@ -2851,6 +2853,7 @@ function setupRecording() {
                 const newContent = content + '\n\n## Transcript\n\n' + finalLine + '\n';
                 const cursorPos = ta.selectionStart;
                 ta.value = newContent;
+                setDirtyState(currentPath && ta.value !== lastSavedContent);
                 scheduleRecordingPreviewUpdate();
                 if (cursorPos <= content.length) {
                     ta.setSelectionRange(cursorPos, cursorPos);
@@ -2891,6 +2894,7 @@ function setupRecording() {
             }
 
             ta.value = newContent;
+            setDirtyState(currentPath && ta.value !== lastSavedContent);
             scheduleRecordingPreviewUpdate();
 
             const transcriptStart = headerIndex;
