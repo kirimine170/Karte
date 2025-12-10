@@ -1,5 +1,5 @@
 import * as AppModule from '../wailsjs/wailsjs/go/main/App';
-const { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, ImportPdfFile, ImportPdfBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetPdfFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS, RenamePdfFile, CaptureScreenInteractive, AllowClose } = AppModule;
+const { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, ImportPdfFile, ImportPdfBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetPdfFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS, RenamePdfFile, CaptureScreenInteractive, AllowClose, GetCsvList, GetCsvFile, SaveCsvFile, ImportCsvFile, ImportCsvBase64 } = AppModule;
 // RenameFile and UpdateLinkToLatest may not exist in generated bindings yet, so import them conditionally
 const RenameFile = AppModule.RenameFile || null;
 const UpdateLinkToLatest = AppModule.UpdateLinkToLatest || null;
@@ -155,6 +155,38 @@ const mockFunctions = {
         return true;
     },
 
+    async GetCsvList() {
+        console.log('Mock GetCsvList called');
+        return [
+            { path: 'data/csv/mock-1.csv', name: 'mock-1.csv', size: 512, modTime: new Date().toISOString() },
+            { path: 'data/csv/mock-2.csv', name: 'mock-2.csv', size: 1024, modTime: new Date().toISOString() }
+        ];
+    },
+
+    async GetCsvFile(path) {
+        console.log('Mock GetCsvFile called:', path);
+        return [
+            ['Name', 'Age', 'City'],
+            ['Alice', '25', 'Tokyo'],
+            ['Bob', '30', 'Osaka']
+        ];
+    },
+
+    async SaveCsvFile(path, data) {
+        console.log('Mock SaveCsvFile called:', path, data);
+        return true;
+    },
+
+    async ImportCsvFile(src) {
+        console.log('Mock ImportCsvFile called:', src);
+        return 'data/csv/imported.csv';
+    },
+
+    async ImportCsvBase64(filename, base64Data) {
+        console.log('Mock ImportCsvBase64 called:', filename);
+        return 'data/csv/imported.csv';
+    },
+
     async StartRecording() {
         console.log('Mock StartRecording called');
         return true;
@@ -219,7 +251,12 @@ const api = isBrowser && browserApi ? browserApi : {
     LogJS,
     RenameFile: RenameFile || (() => Promise.reject(new Error('RenameFile not available'))),
     RenamePdfFile: RenamePdfFile || (() => Promise.reject(new Error('RenamePdfFile not available'))),
-    UpdateLinkToLatest: UpdateLinkToLatest || (() => Promise.reject(new Error('UpdateLinkToLatest not available')))
+    UpdateLinkToLatest: UpdateLinkToLatest || (() => Promise.reject(new Error('UpdateLinkToLatest not available'))),
+    GetCsvList,
+    GetCsvFile,
+    SaveCsvFile,
+    ImportCsvFile,
+    ImportCsvBase64
 };
 
 // Logging helper function that writes to app.log via Go backend
@@ -303,6 +340,21 @@ const imagePreviewClose = document.getElementById('imagePreviewClose');
 const imageMetadataEditor = document.getElementById('imageMetadataEditor');
 const imageMetadataSaveBtn = document.getElementById('imageMetadataSaveBtn');
 const imageMetadataStatus = document.getElementById('imageMetadataStatus');
+
+// CSV gallery elements
+const csvGalleryContainer = document.getElementById('csvGalleryContainer');
+const csvGalleryGrid = document.getElementById('csvGalleryGrid');
+const csvGalleryEmpty = document.getElementById('csvGalleryEmpty');
+const csvEditModal = document.getElementById('csvEditModal');
+const csvEditFileName = document.getElementById('csvEditFileName');
+const csvEditTableHead = document.getElementById('csvEditTableHead');
+const csvEditTableBody = document.getElementById('csvEditTableBody');
+const csvAddRowBtn = document.getElementById('csvAddRowBtn');
+const csvAddColBtn = document.getElementById('csvAddColBtn');
+const csvDeleteRowBtn = document.getElementById('csvDeleteRowBtn');
+const csvDeleteColBtn = document.getElementById('csvDeleteColBtn');
+const csvSaveBtn = document.getElementById('csvSaveBtn');
+const csvCancelBtn = document.getElementById('csvCancelBtn');
 const captureScreenBtn = document.getElementById('captureScreenBtn');
 
 if (imageMetadataEditor) {
@@ -1840,14 +1892,14 @@ function setupEventListeners() {
         setDirtyState(currentPath && ta.value !== lastSavedContent);
     });
 
-    // Setup editor drop handler for images
+    // Setup editor drop handler for images and CSV
     if (ta) {
         ta.addEventListener('dragover', (e) => {
-            // Check if dragging an image from gallery by checking dataTransfer types
+            // Check if dragging an image or CSV from gallery by checking dataTransfer types
             const types = Array.from(e.dataTransfer.types || []);
             if (types.includes('application/json') || types.includes('text/plain')) {
-                // Check if it's an image drag by looking at the source element
-                const dragSource = document.querySelector('.image-thumbnail[style*="opacity: 0.5"]');
+                // Check if it's an image or CSV drag by looking at the source element
+                const dragSource = document.querySelector('.image-thumbnail[style*="opacity: 0.5"], .csv-item[style*="opacity: 0.5"]');
                 if (dragSource) {
                     e.preventDefault();
                     e.dataTransfer.dropEffect = 'copy';
@@ -1862,6 +1914,13 @@ function setupEventListeners() {
                 // Try text/plain as fallback
                 const path = e.dataTransfer.getData('text/plain');
                 if (path) {
+                    // Check if it's CSV or image
+                    const csvItem = document.querySelector('.csv-item[data-csv-path="' + path + '"]');
+                    if (csvItem) {
+                        const name = csvItem.getAttribute('data-csv-name') || path.split('/').pop();
+                        insertCsvAtCursor(path, name);
+                        return;
+                    }
                     // Try to get name from attribute
                     const dragSource = document.querySelector('.image-thumbnail[data-image-path="' + path + '"]');
                     const name = dragSource?.getAttribute('data-image-name') || path.split('/').pop();
@@ -1871,12 +1930,14 @@ function setupEventListeners() {
             }
 
             try {
-                const imageData = JSON.parse(data);
-                if (imageData.path && imageData.name) {
-                    insertImageAtCursor(imageData.path, imageData.name);
+                const itemData = JSON.parse(data);
+                if (itemData.type === 'csv' && itemData.path && itemData.name) {
+                    insertCsvAtCursor(itemData.path, itemData.name);
+                } else if (itemData.path && itemData.name) {
+                    insertImageAtCursor(itemData.path, itemData.name);
                 }
             } catch (error) {
-                console.error('Failed to parse image data:', error);
+                console.error('Failed to parse drag data:', error);
             }
         });
     }
@@ -1932,11 +1993,18 @@ function setupEventListeners() {
     setupDragAndDrop();
     setupRecording();
     setupImageGallery();
+    setupCsvGallery();
     setupPreviewImageDrop();
 }
 
 // Global variable to store current drag image data
 let currentDragImageData = null;
+
+// Global variables for CSV
+let currentCsvData = null;
+let currentCsvPath = null;
+let currentDragCsvData = null;
+let csvGalleryRequestId = 0;
 
 // Setup preview iframe drop handler for images
 function setupPreviewImageDrop() {
@@ -1962,11 +2030,11 @@ function setupPreviewImageDrop() {
 
             // Setup dragover to allow drop
             iframeDoc.addEventListener('dragover', (e) => {
-                // Check if dragging an image from gallery by checking types
+                // Check if dragging an image or CSV from gallery by checking types
                 const types = Array.from(e.dataTransfer.types || []);
                 if (types.includes('application/json') || types.includes('text/plain')) {
-                    // Check if it's an image drag by looking at the source element
-                    const dragSource = document.querySelector('.image-thumbnail[style*="opacity: 0.5"]');
+                    // Check if it's an image or CSV drag by looking at the source element
+                    const dragSource = document.querySelector('.image-thumbnail[style*="opacity: 0.5"], .csv-item[style*="opacity: 0.5"]');
                     if (dragSource) {
                         e.preventDefault();
                         e.dataTransfer.dropEffect = 'copy';
@@ -1978,42 +2046,62 @@ function setupPreviewImageDrop() {
             iframeDoc.addEventListener('drop', async (e) => {
                 e.preventDefault();
 
-                // Get image data from global variable (set during dragstart)
-                let imagePath = null;
-                let imageName = null;
+                // Get image or CSV data from global variable (set during dragstart)
+                let itemPath = null;
+                let itemName = null;
+                let itemType = null;
 
-                // Try to get from global variable first
-                if (currentDragImageData) {
-                    imagePath = currentDragImageData.path;
-                    imageName = currentDragImageData.name;
+                // Try to get from global variables first
+                if (currentDragCsvData) {
+                    itemPath = currentDragCsvData.path;
+                    itemName = currentDragCsvData.name;
+                    itemType = 'csv';
+                } else if (currentDragImageData) {
+                    itemPath = currentDragImageData.path;
+                    itemName = currentDragImageData.name;
+                    itemType = 'image';
                 } else {
                     // Fallback: try to get from parent window's drag source
-                    const dragSource = document.querySelector('.image-thumbnail[style*="opacity: 0.5"]');
-                    if (dragSource) {
-                        imagePath = dragSource.getAttribute('data-image-path');
-                        imageName = dragSource.getAttribute('data-image-name');
+                    const csvSource = document.querySelector('.csv-item[style*="opacity: 0.5"]');
+                    if (csvSource) {
+                        itemPath = csvSource.getAttribute('data-csv-path');
+                        itemName = csvSource.getAttribute('data-csv-name');
+                        itemType = 'csv';
+                    } else {
+                        const dragSource = document.querySelector('.image-thumbnail[style*="opacity: 0.5"]');
+                        if (dragSource) {
+                            itemPath = dragSource.getAttribute('data-image-path');
+                            itemName = dragSource.getAttribute('data-image-name');
+                            itemType = 'image';
+                        }
                     }
                 }
 
-                if (!imagePath || !imageName) {
-                    console.error('Failed to get image data from drag');
+                if (!itemPath || !itemName) {
+                    console.error('Failed to get item data from drag');
                     return;
                 }
 
-                // Clear the global variable
+                // Clear the global variables
                 currentDragImageData = null;
+                currentDragCsvData = null;
 
                 try {
-                    // Find element at drop position
-                    const element = iframeDoc.elementFromPoint(e.clientX, e.clientY);
-                    if (element) {
-                        await insertImageAfterElement(imagePath, imageName, element);
+                    if (itemType === 'csv') {
+                        // For CSV, always insert at cursor
+                        insertCsvAtCursor(itemPath, itemName);
                     } else {
-                        // Fallback: append to end
-                        insertImageAtCursor(imagePath, imageName);
+                        // Find element at drop position
+                        const element = iframeDoc.elementFromPoint(e.clientX, e.clientY);
+                        if (element) {
+                            await insertImageAfterElement(itemPath, itemName, element);
+                        } else {
+                            // Fallback: append to end
+                            insertImageAtCursor(itemPath, itemName);
+                        }
                     }
                 } catch (error) {
-                    console.error('Failed to handle image drop in preview:', error);
+                    console.error('Failed to handle drop in preview:', error);
                 }
             });
         } catch (error) {
@@ -2285,6 +2373,354 @@ function toggleSidebar() {
     localStorage.setItem('sidebarHidden', !isHidden);
 }
 
+// Setup CSV gallery
+function setupCsvGallery() {
+    // Load initial gallery
+    loadCsvGallery();
+
+    // Setup CSV edit modal buttons
+    if (csvAddRowBtn) {
+        csvAddRowBtn.addEventListener('click', () => {
+            if (!currentCsvData) return;
+            const colCount = currentCsvData[0]?.length || 1;
+            currentCsvData.push(new Array(colCount).fill(''));
+            renderCsvEditTable(currentCsvData);
+        });
+    }
+
+    if (csvAddColBtn) {
+        csvAddColBtn.addEventListener('click', () => {
+            if (!currentCsvData) return;
+            currentCsvData.forEach(row => row.push(''));
+            renderCsvEditTable(currentCsvData);
+        });
+    }
+
+    if (csvDeleteRowBtn) {
+        csvDeleteRowBtn.addEventListener('click', () => {
+            if (!currentCsvData || currentCsvData.length <= 1) return;
+            const tbody = csvEditTableBody;
+            const selectedRow = tbody.querySelector('tr.selected');
+            if (selectedRow) {
+                const rowIndex = Array.from(tbody.children).indexOf(selectedRow) + 1;
+                currentCsvData.splice(rowIndex, 1);
+                renderCsvEditTable(currentCsvData);
+            }
+        });
+    }
+
+    if (csvDeleteColBtn) {
+        csvDeleteColBtn.addEventListener('click', () => {
+            if (!currentCsvData) return;
+            const thead = csvEditTableHead;
+            const selectedCol = thead.querySelector('th.selected');
+            if (selectedCol) {
+                const colIndex = Array.from(thead.children[0].children).indexOf(selectedCol);
+                currentCsvData.forEach(row => row.splice(colIndex, 1));
+                renderCsvEditTable(currentCsvData);
+            }
+        });
+    }
+
+    if (csvSaveBtn) {
+        csvSaveBtn.addEventListener('click', async () => {
+            if (!currentCsvData || !currentCsvPath || !api.SaveCsvFile) {
+                return;
+            }
+
+            try {
+                // Get data from contentEditable cells
+                const thead = csvEditTableHead;
+                const tbody = csvEditTableBody;
+
+                const data = [];
+                // Header row
+                const headerRow = Array.from(thead.querySelectorAll('th')).map(th => th.textContent || '');
+                data.push(headerRow);
+                // Data rows
+                Array.from(tbody.querySelectorAll('tr')).forEach(tr => {
+                    const row = Array.from(tr.querySelectorAll('td')).map(td => td.textContent || '');
+                    data.push(row);
+                });
+
+                await api.SaveCsvFile(currentCsvPath, data);
+                csvEditModal.style.display = 'none';
+                loadCsvGallery(); // Reload gallery
+                setStatusMessage('CSVファイルを保存しました', 3000);
+            } catch (error) {
+                console.error('Failed to save CSV:', error);
+                alert('CSVファイルの保存に失敗しました');
+            }
+        });
+    }
+
+    if (csvCancelBtn) {
+        csvCancelBtn.addEventListener('click', () => {
+            csvEditModal.style.display = 'none';
+            currentCsvData = null;
+            currentCsvPath = null;
+        });
+    }
+
+    // Setup CSV toggle button
+    const csvToggle = document.getElementById('csvToggle');
+    if (csvToggle) {
+        csvToggle.addEventListener('click', toggleCsvGallery);
+    }
+
+    // Restore CSV gallery hidden state from localStorage
+    const isCsvGalleryHidden = localStorage.getItem('csvGalleryHidden') === 'true';
+    if (isCsvGalleryHidden && csvGalleryContainer) {
+        csvGalleryContainer.style.display = 'none';
+        if (csvToggle) {
+            csvToggle.title = 'CSV管理を表示';
+        }
+    } else {
+        if (csvToggle) {
+            csvToggle.title = 'CSV管理を非表示';
+        }
+    }
+}
+
+// Load CSV gallery from backend
+async function loadCsvGallery() {
+    if (!csvGalleryGrid || !api.GetCsvList) {
+        return;
+    }
+
+    const requestId = ++csvGalleryRequestId;
+
+    try {
+        const csvs = await api.GetCsvList();
+        if (requestId !== csvGalleryRequestId) {
+            return;
+        }
+        renderCsvGallery(csvs);
+    } catch (error) {
+        console.error('Failed to load CSV gallery:', error);
+        jsLog('ERROR', 'Failed to load CSV gallery:', error);
+    }
+}
+
+// Render CSV gallery
+function renderCsvGallery(csvs) {
+    if (!csvGalleryGrid || !csvGalleryEmpty) {
+        return;
+    }
+
+    csvGalleryGrid.innerHTML = '';
+
+    // Always show create button as first item
+    const createItem = document.createElement('div');
+    createItem.className = 'csv-item csv-create-item';
+    createItem.innerHTML = `
+        <div class="csv-create-icon">+</div>
+    `;
+    createItem.setAttribute('title', '新規CSV作成');
+    createItem.addEventListener('click', async () => {
+        // Create empty CSV with default structure
+        const defaultData = [
+            ['列1', '列2', '列3'],
+            ['', '', ''],
+            ['', '', '']
+        ];
+
+        try {
+            // Generate filename with timestamp
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+            const filename = `data-${timestamp}.csv`;
+
+            // Save to backend
+            const path = `data/csv/${filename}`;
+            await api.SaveCsvFile(path, defaultData);
+
+            // Reload gallery and open edit modal
+            await loadCsvGallery();
+            await openCsvEditModal(path, filename);
+            setStatusMessage('新しいCSVファイルを作成しました', 3000);
+        } catch (error) {
+            console.error('Failed to create CSV:', error);
+            alert('CSVファイルの作成に失敗しました');
+        }
+    });
+    csvGalleryGrid.appendChild(createItem);
+
+    if (!csvs || csvs.length === 0) {
+        csvGalleryEmpty.style.display = 'none';
+        csvGalleryGrid.style.display = 'grid';
+        return;
+    }
+
+    csvGalleryEmpty.style.display = 'none';
+    csvGalleryGrid.style.display = 'grid';
+
+    csvs.forEach(csv => {
+        const item = document.createElement('div');
+        item.className = 'csv-item';
+        item.innerHTML = `
+            <div class="csv-icon">📊</div>
+            <div class="csv-name">${csv.name}</div>
+        `;
+        item.setAttribute('data-csv-path', csv.path);
+        item.setAttribute('data-csv-name', csv.name);
+
+        // Double click to open edit modal
+        item.addEventListener('dblclick', () => {
+            openCsvEditModal(csv.path, csv.name);
+        });
+
+        // Make draggable
+        item.draggable = true;
+        item.addEventListener('dragstart', (e) => {
+            currentDragCsvData = { path: csv.path, name: csv.name, type: 'csv' };
+            e.dataTransfer.effectAllowed = 'copy';
+            e.dataTransfer.setData('text/plain', csv.path);
+            e.dataTransfer.setData('application/json', JSON.stringify({
+                path: csv.path,
+                name: csv.name,
+                type: 'csv'
+            }));
+            item.style.opacity = '0.5';
+        });
+
+        item.addEventListener('dragend', () => {
+            item.style.opacity = '1';
+            currentDragCsvData = null;
+        });
+
+        csvGalleryGrid.appendChild(item);
+    });
+}
+
+// Toggle CSV gallery visibility
+function toggleCsvGallery() {
+    if (!csvGalleryContainer || !row) {
+        return;
+    }
+
+    const isHidden = csvGalleryContainer.style.display === 'none';
+    if (isHidden) {
+        // Show CSV gallery
+        csvGalleryContainer.style.display = 'flex';
+        row.classList.remove('csv-hidden');
+        const csvToggle = document.getElementById('csvToggle');
+        if (csvToggle) {
+            csvToggle.title = 'CSV管理を非表示';
+        }
+    } else {
+        // Hide CSV gallery
+        csvGalleryContainer.style.display = 'none';
+        row.classList.add('csv-hidden');
+        const csvToggle = document.getElementById('csvToggle');
+        if (csvToggle) {
+            csvToggle.title = 'CSV管理を表示';
+        }
+    }
+
+    // Save state to localStorage
+    localStorage.setItem('csvGalleryHidden', !isHidden);
+}
+
+// Open CSV edit modal
+async function openCsvEditModal(path, name) {
+    if (!csvEditModal || !api.GetCsvFile) {
+        return;
+    }
+
+    try {
+        const data = await api.GetCsvFile(path);
+        currentCsvData = data;
+        currentCsvPath = path;
+
+        if (csvEditFileName) {
+            csvEditFileName.textContent = name;
+        }
+        renderCsvEditTable(data);
+        csvEditModal.style.display = 'flex';
+    } catch (error) {
+        console.error('Failed to load CSV file:', error);
+        alert('CSVファイルの読み込みに失敗しました');
+    }
+}
+
+// Render CSV edit table
+function renderCsvEditTable(data) {
+    if (!csvEditTableHead || !csvEditTableBody) {
+        return;
+    }
+
+    csvEditTableHead.innerHTML = '';
+    csvEditTableBody.innerHTML = '';
+
+    if (!data || data.length === 0) {
+        // Create empty table
+        const row = document.createElement('tr');
+        const cell = document.createElement('th');
+        cell.contentEditable = true;
+        cell.textContent = '';
+        row.appendChild(cell);
+        csvEditTableHead.appendChild(row);
+        return;
+    }
+
+    // Header row
+    const headerRow = document.createElement('tr');
+    data[0].forEach((_, colIndex) => {
+        const th = document.createElement('th');
+        th.contentEditable = true;
+        th.textContent = data[0][colIndex] || '';
+        th.addEventListener('input', () => {
+            if (currentCsvData && currentCsvData[0]) {
+                currentCsvData[0][colIndex] = th.textContent;
+            }
+        });
+        th.addEventListener('click', () => {
+            // Select column
+            csvEditTableHead.querySelectorAll('th').forEach(c => c.classList.remove('selected'));
+            csvEditTableBody.querySelectorAll('td').forEach((td, idx) => {
+                const rowIdx = Math.floor(idx / (data[0]?.length || 1));
+                const colIdx = idx % (data[0]?.length || 1);
+                if (colIdx === colIndex) {
+                    td.classList.add('selected');
+                } else {
+                    td.classList.remove('selected');
+                }
+            });
+            th.classList.add('selected');
+        });
+        headerRow.appendChild(th);
+    });
+    csvEditTableHead.appendChild(headerRow);
+
+    // Data rows
+    for (let rowIndex = 1; rowIndex < data.length; rowIndex++) {
+        const tr = document.createElement('tr');
+        const row = data[rowIndex];
+        const maxCols = Math.max(row.length, data[0].length);
+
+        for (let colIndex = 0; colIndex < maxCols; colIndex++) {
+            const td = document.createElement('td');
+            td.contentEditable = true;
+            td.textContent = row[colIndex] || '';
+            td.addEventListener('input', () => {
+                if (currentCsvData && currentCsvData[rowIndex]) {
+                    if (!currentCsvData[rowIndex][colIndex]) {
+                        currentCsvData[rowIndex][colIndex] = '';
+                    }
+                    currentCsvData[rowIndex][colIndex] = td.textContent;
+                }
+            });
+            td.addEventListener('click', () => {
+                // Select row
+                csvEditTableBody.querySelectorAll('tr').forEach(r => r.classList.remove('selected'));
+                tr.classList.add('selected');
+            });
+            tr.appendChild(td);
+        }
+        csvEditTableBody.appendChild(tr);
+    }
+}
+
 // Show image preview modal
 async function showImagePreview(imagePath, imageName, imageURL = null) {
     if (!imagePreviewModal || !imagePreviewImg || !imagePreviewName || !imagePreviewPath) {
@@ -2420,6 +2856,41 @@ function handleImageImportedEvent(payload) {
     jsLog('INFO', 'Image imported event:', payload);
     // Reload gallery when new image is imported
     loadImageGallery();
+}
+
+function handleCsvImportedEvent(payload) {
+    jsLog('INFO', 'CSV imported event:', payload);
+    // Reload gallery when new CSV is imported
+    loadCsvGallery();
+}
+
+// Insert CSV at cursor position in editor
+function insertCsvAtCursor(csvPath, csvName) {
+    if (!ta) {
+        return;
+    }
+
+    const cursorPos = ta.selectionStart;
+    const textBefore = ta.value.substring(0, cursorPos);
+    const textAfter = ta.value.substring(cursorPos);
+
+    // Create @import syntax
+    const csvMarkdown = `@import(type="csv", path="${csvPath}")\n`;
+
+    // Insert CSV markdown
+    const newText = textBefore + csvMarkdown + textAfter;
+    ta.value = newText;
+
+    // Set cursor position after inserted CSV
+    const newCursorPos = cursorPos + csvMarkdown.length;
+    ta.setSelectionRange(newCursorPos, newCursorPos);
+    ta.focus();
+
+    // Update preview
+    updatePreview();
+
+    // Trigger input event to save
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 // Insert image at cursor position in editor
@@ -2958,6 +3429,10 @@ function setupDragAndDrop() {
         const hasAudio = files.some((file) => isSupportedAudioFile(file.name));
         const hasImage = files.some((file) => isSupportedImageFile(file.name));
         const hasPdf = files.some((file) => isSupportedPdfFile(file.name));
+        const hasCsv = files.some((file) => {
+            const name = (file.name || '').toLowerCase();
+            return name.endsWith('.csv');
+        });
 
         const tasks = [];
         if (hasAudio) {
@@ -2968,6 +3443,9 @@ function setupDragAndDrop() {
         }
         if (hasPdf) {
             tasks.push(handlePdfDrop(files));
+        }
+        if (hasCsv) {
+            tasks.push(handleCsvDrop(files));
         }
 
         if (tasks.length === 0) {
@@ -3072,6 +3550,49 @@ async function handleImageDrop(fileList) {
     setStatusMessage('画像ファイルを保存しました。', 3000);
     // Reload image gallery after import
     await loadImageGallery();
+}
+
+async function handleCsvDrop(fileList) {
+    if (!fileList || fileList.length === 0) {
+        return;
+    }
+    if (!api.ImportCsvFile) {
+        console.warn('ImportCsvFile API is unavailable in this environment');
+        return;
+    }
+
+    const files = Array.from(fileList).filter((file) => {
+        const name = (file.name || '').toLowerCase();
+        return name.endsWith('.csv');
+    });
+    if (files.length === 0) {
+        setStatusMessage('対応していないファイル形式です (csv)', 3000);
+        return;
+    }
+
+    for (const file of files) {
+        try {
+            setStatusMessage(`CSVを取り込み中: ${file.name}`);
+            if (file.path) {
+                await api.ImportCsvFile(file.path);
+            } else if (api.ImportCsvBase64 && file.arrayBuffer) {
+                const buffer = await file.arrayBuffer();
+                const base64 = arrayBufferToBase64(buffer);
+                await api.ImportCsvBase64(file.name || `data-${Date.now()}.csv`, base64);
+            } else {
+                console.warn('Cannot access data for dropped CSV:', file.name);
+                setStatusMessage('CSVデータにアクセスできませんでした', 4000);
+            }
+        } catch (error) {
+            console.error('ImportCsvFile failed', error);
+            setStatusMessage(`CSV取り込みに失敗: ${error?.message || error}`, 4000);
+        }
+    }
+
+    await loadFileList();
+    setStatusMessage('CSVファイルを保存しました。', 3000);
+    // Reload CSV gallery after import
+    await loadCsvGallery();
 }
 
 async function handlePdfDrop(fileList) {

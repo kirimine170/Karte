@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -168,6 +169,14 @@ type ImageItem struct {
 	ModTime      time.Time `json:"modTime"`
 	MetadataPath string    `json:"metadataPath,omitempty"`
 	OriginalPath string    `json:"originalPath,omitempty"`
+}
+
+// CSVItem represents a CSV file in the gallery
+type CSVItem struct {
+	Path    string    `json:"path"`
+	Name    string    `json:"name"`
+	Size    int64     `json:"size"`
+	ModTime time.Time `json:"modTime"`
 }
 
 // CaptureScreenInteractive captures a screenshot using the platform-specific
@@ -366,6 +375,7 @@ func (a *App) initializeDataDirectory() error {
 		"data",
 		filepath.Join("data", "audio"),
 		filepath.Join("data", "image"),
+		filepath.Join("data", "csv"),
 		filepath.Join("data", "asr"),
 		"themes",
 		"public",
@@ -669,6 +679,57 @@ func (a *App) GetImageList() []ImageItem {
 
 	a.logInfo(fmt.Sprintf("Found %d image files", len(images)))
 	return images
+}
+
+// GetCsvList returns a list of CSV files in the data/csv directory
+func (a *App) GetCsvList() []CSVItem {
+	var csvs []CSVItem
+	csvDir := filepath.Join(a.dataDir, "data", "csv")
+
+	a.logInfo(fmt.Sprintf("GetCsvList: csvDir=%s", csvDir))
+
+	// Check if csv directory exists
+	if _, err := os.Stat(csvDir); os.IsNotExist(err) {
+		a.logInfo(fmt.Sprintf("CSV directory does not exist: %s", csvDir))
+		return []CSVItem{}
+	}
+
+	err := filepath.Walk(csvDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			a.logError(fmt.Sprintf("Error walking path %s: %v", p, err))
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if strings.ToLower(filepath.Ext(info.Name())) != ".csv" {
+			return nil
+		}
+
+		rel, _ := filepath.Rel(a.dataDir, p)
+		rel = filepath.ToSlash(rel)
+		csvItem := CSVItem{
+			Path:    rel,
+			Name:    info.Name(),
+			Size:    info.Size(),
+			ModTime: info.ModTime(),
+		}
+		csvs = append(csvs, csvItem)
+		a.logInfo(fmt.Sprintf("Found CSV: %s", csvItem.Path))
+		return nil
+	})
+
+	if err != nil {
+		a.logError(fmt.Sprintf("Error walking CSV directory: %v", err))
+		return []CSVItem{}
+	}
+
+	// Sort by modification time (newest first)
+	sort.Slice(csvs, func(i, j int) bool {
+		return csvs[i].ModTime.After(csvs[j].ModTime)
+	})
+
+	return csvs
 }
 
 // GetImageMetadata returns the YAML metadata associated with the provided image.
@@ -2107,6 +2168,145 @@ func (a *App) importImageFromReader(originalName string, src io.Reader) (string,
 	a.logInfo(fmt.Sprintf("Image imported: %s -> webp=%s (original=%s)", originalName, relWebPPath, relOriginalPath))
 
 	return relWebPPath, nil
+}
+
+// ImportCsvFile copies a CSV file into karte_data/data/csv
+func (a *App) ImportCsvFile(src string) (string, error) {
+	if src == "" {
+		return "", fmt.Errorf("source path is required")
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return "", fmt.Errorf("stat csv: %w", err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("csv path must be a file")
+	}
+	ext := strings.ToLower(filepath.Ext(src))
+	if ext != ".csv" {
+		return "", fmt.Errorf("file is not a CSV: %s", ext)
+	}
+
+	f, err := os.Open(src)
+	if err != nil {
+		return "", fmt.Errorf("open csv: %w", err)
+	}
+	defer f.Close()
+
+	return a.importCsvFromReader(info.Name(), f)
+}
+
+// ImportCsvBase64 saves CSV content provided as base64 (used when native paths are not available).
+func (a *App) ImportCsvBase64(filename, base64Data string) (string, error) {
+	if filename == "" {
+		return "", fmt.Errorf("filename is required")
+	}
+	if base64Data == "" {
+		return "", fmt.Errorf("csv data is empty")
+	}
+	data, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		return "", fmt.Errorf("decode csv data: %w", err)
+	}
+	return a.importCsvFromReader(filename, bytes.NewReader(data))
+}
+
+func (a *App) importCsvFromReader(originalName string, src io.Reader) (string, error) {
+	if originalName == "" {
+		return "", fmt.Errorf("original name is required")
+	}
+
+	destDir := filepath.Join(a.dataDir, "data", "csv")
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return "", fmt.Errorf("prepare csv dir: %w", err)
+	}
+
+	ext := strings.ToLower(filepath.Ext(originalName))
+	base := audio.SanitizeFileName(strings.TrimSuffix(originalName, ext))
+	if base == "" {
+		base = "data"
+	}
+	filename := base + ".csv"
+
+	// Check if file already exists, add number suffix if needed
+	baseIndex := 1
+	for {
+		destPath := filepath.Join(destDir, filename)
+		if _, err := os.Stat(destPath); os.IsNotExist(err) {
+			break
+		}
+		filename = fmt.Sprintf("%s_%02d.csv", base, baseIndex)
+		baseIndex++
+	}
+
+	destPath := filepath.Join(destDir, filename)
+	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return "", fmt.Errorf("create csv file: %w", err)
+	}
+	if _, err := io.Copy(out, src); err != nil {
+		out.Close()
+		return "", fmt.Errorf("write csv file: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return "", fmt.Errorf("close csv file: %w", err)
+	}
+
+	relPath, err := filepath.Rel(a.dataDir, destPath)
+	if err != nil {
+		relPath = destPath
+	}
+	relPath = filepath.ToSlash(relPath)
+
+	payload := map[string]interface{}{
+		"path": relPath,
+		"name": filename,
+	}
+	runtime.EventsEmit(a.ctx, "csv-imported", payload)
+	a.logInfo(fmt.Sprintf("CSV imported: %s -> %s", originalName, relPath))
+
+	return relPath, nil
+}
+
+// GetCsvFile reads a CSV file and returns its content as a 2D array
+func (a *App) GetCsvFile(path string) ([][]string, error) {
+	absPath := filepath.Join(a.dataDir, filepath.FromSlash(path))
+	f, err := os.Open(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("open csv: %w", err)
+	}
+	defer f.Close()
+
+	r := csv.NewReader(f)
+	records, err := r.ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("read csv: %w", err)
+	}
+
+	return records, nil
+}
+
+// SaveCsvFile saves CSV content to a file
+func (a *App) SaveCsvFile(path string, data [][]string) error {
+	absPath := filepath.Join(a.dataDir, filepath.FromSlash(path))
+
+	f, err := os.OpenFile(absPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("create csv file: %w", err)
+	}
+	defer f.Close()
+
+	w := csv.NewWriter(f)
+	if err := w.WriteAll(data); err != nil {
+		return fmt.Errorf("write csv: %w", err)
+	}
+	w.Flush()
+
+	if err := w.Error(); err != nil {
+		return fmt.Errorf("flush csv: %w", err)
+	}
+
+	return nil
 }
 
 // ImportAudioBase64 saves audio content provided as base64 (used when native paths are not available).
