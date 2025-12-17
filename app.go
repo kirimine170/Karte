@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"karte/internal/agent"
 	"karte/internal/asr"
 	"karte/internal/audio"
 	"karte/internal/docid"
@@ -88,6 +89,9 @@ type App struct {
 	// Window close control
 	allowCloseMu   sync.Mutex
 	allowCloseFlag bool
+
+	// Agent client for RAG
+	agentClient *agent.Client
 }
 
 // NOTE: Multi-window support requires Wails v3 (currently in development)
@@ -282,6 +286,14 @@ func (a *App) startup(ctx context.Context) {
 	}()
 
 	a.logInfo(fmt.Sprintf("Karte started. root=%s dataDir=%s exeDir=%s", a.root, a.dataDir, exeDir))
+
+	// Initialize agent client
+	agentClient, err := agent.NewClient()
+	if err != nil {
+		runtime.LogError(ctx, fmt.Sprintf("Failed to create agent client: %v", err))
+	} else {
+		a.agentClient = agentClient
+	}
 
 	// Initialize sync manager (disabled for now - will be implemented with git integration)
 	// a.syncManager = syncpkg.NewSyncManager(ctx, a.root)
@@ -5342,4 +5354,137 @@ func (a *App) createOptimizedImageTempFile(img image.Image, originalPath string)
 	a.logInfo(fmt.Sprintf("PDF export: Created optimized PNG temp file: %s (size: %d bytes)", tmpFile, len(finalData)))
 
 	return tmpFile, nil
+}
+
+// RAGContext represents a RAG search result context
+type RAGContext struct {
+	DocID    string                 `json:"doc_id"`
+	Path     string                 `json:"path"`
+	ChunkID  string                 `json:"chunk_id"`
+	Text     string                 `json:"text"`
+	Score    float64                `json:"score"`
+	Metadata map[string]interface{} `json:"metadata"`
+}
+
+// AgentStatus represents the agent connection status
+type AgentStatus struct {
+	Connected bool   `json:"connected"`
+	Error     string `json:"error,omitempty"`
+}
+
+// GetRAGContexts performs RAG search and returns contexts
+func (a *App) GetRAGContexts(query string, k int) ([]RAGContext, error) {
+	if a.agentClient == nil {
+		return nil, fmt.Errorf("agent client not initialized")
+	}
+
+	if k <= 0 {
+		k = 5
+	}
+
+	// Ensure connected
+	if !a.agentClient.CheckConnection() {
+		return nil, fmt.Errorf("failed to connect to agent")
+	}
+
+	// Call RAG.Search
+	params := map[string]interface{}{
+		"query": query,
+		"k":     k,
+	}
+
+	resp, err := a.agentClient.Call("RAG.Search", params)
+	if err != nil {
+		return nil, fmt.Errorf("RAG search failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return nil, fmt.Errorf("RAG search error: %s", resp.Error.Message)
+	}
+
+	// Parse results
+	resultsBytes, err := json.Marshal(resp.Result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal results: %w", err)
+	}
+
+	var contexts []RAGContext
+	if err := json.Unmarshal(resultsBytes, &contexts); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal results: %w", err)
+	}
+
+	return contexts, nil
+}
+
+// GetAgentStatus returns the agent connection status
+func (a *App) GetAgentStatus() AgentStatus {
+	if a.agentClient == nil {
+		return AgentStatus{
+			Connected: false,
+			Error:     "agent client not initialized",
+		}
+	}
+
+	connected := a.agentClient.CheckConnection()
+	if !connected {
+		return AgentStatus{
+			Connected: false,
+			Error:     "failed to connect to agent",
+		}
+	}
+
+	return AgentStatus{
+		Connected: true,
+	}
+}
+
+// GetZeroDocuments returns a list of documents in content/zero/
+func (a *App) GetZeroDocuments() []FileItem {
+	var files []FileItem
+	zeroDir := filepath.Join(a.dataDir, "content", "zero")
+
+	// Check if zero directory exists
+	if _, err := os.Stat(zeroDir); os.IsNotExist(err) {
+		return []FileItem{}
+	}
+
+	err := filepath.Walk(zeroDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
+			return nil
+		}
+
+		rel, err := filepath.Rel(a.dataDir, p)
+		if err != nil {
+			return nil
+		}
+
+		title := info.Name()
+		// Try to extract title from frontmatter
+		if b, err := os.ReadFile(p); err == nil {
+			title = fm.ExtractTitle(string(b), title)
+		}
+
+		files = append(files, FileItem{
+			Path:  filepath.ToSlash(rel),
+			Title: title,
+		})
+		return nil
+	})
+
+	if err != nil {
+		a.logError(fmt.Sprintf("Error walking zero directory: %v", err))
+		return []FileItem{}
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Path > files[j].Path // Most recent first
+	})
+
+	return files
 }

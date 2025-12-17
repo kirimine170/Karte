@@ -88,10 +88,21 @@ func main() {
 			log.Fatalf("failed to move artifacts for %s: %v", t.Name, err)
 		}
 
-		// macOS 向けビルドでは、templateをコピーする
+		// macOS 向けビルドでは、templateをコピーし、karte-agentを同梱する
 		if isDarwinTarget(t.Name) {
 			if err := packageTemplateIntoAppBundle(projectRoot, t.ArtifactDir); err != nil {
 				log.Fatalf("failed to package karte_data_template for %s: %v", t.Name, err)
+			}
+			// Check if this is a universal binary build (has "-tags", "universal" in flags)
+			isUniversal := false
+			for i, flag := range t.Flags {
+				if flag == "-tags" && i+1 < len(t.Flags) && t.Flags[i+1] == "universal" {
+					isUniversal = true
+					break
+				}
+			}
+			if err := buildAndBundleKarteAgent(ctx, projectRoot, t.ArtifactDir, t.Env, isUniversal); err != nil {
+				log.Fatalf("failed to build and bundle karte-agent for %s: %v", t.Name, err)
 			}
 		}
 
@@ -354,6 +365,125 @@ func copyFile(src, dst string) error {
 	if _, err := io.Copy(df, sf); err != nil {
 		return err
 	}
+	return nil
+}
+
+// buildAndBundleKarteAgent builds karte-agent and copies it into Karte.app/Contents/MacOS/
+func buildAndBundleKarteAgent(ctx context.Context, projectRoot, artifactDir string, env map[string]string, isUniversal bool) error {
+	appBundle := filepath.Join(artifactDir, "Karte.app")
+	if fi, err := os.Stat(appBundle); err != nil || !fi.IsDir() {
+		// .app が存在しない場合は何もしない
+		return nil
+	}
+
+	macosDir := filepath.Join(appBundle, "Contents", "MacOS")
+	if err := os.MkdirAll(macosDir, 0o755); err != nil {
+		return fmt.Errorf("create MacOS dir %s: %w", macosDir, err)
+	}
+
+	agentBinary := filepath.Join(macosDir, "karte-agent")
+	
+	// Determine GOOS and GOARCH from env
+	goos := env["GOOS"]
+	if goos == "" {
+		goos = "darwin"
+	}
+	goarch := env["GOARCH"]
+	
+	// Build environment base
+	buildEnvBase := make(map[string]string)
+	for k, v := range env {
+		buildEnvBase[k] = v
+	}
+	buildEnvBase["GOOS"] = goos
+	buildEnvBase["CGO_ENABLED"] = "0" // Disable CGO for simpler builds
+
+	if isUniversal && runtime.GOOS == "darwin" {
+		// Build universal binary: build both architectures and combine with lipo
+		fmt.Printf("==> Building karte-agent as universal binary (arm64 + amd64)\n")
+		
+		tempDir := filepath.Join(artifactDir, ".karte-agent-build")
+		if err := os.MkdirAll(tempDir, 0o755); err != nil {
+			return fmt.Errorf("create temp build dir: %w", err)
+		}
+		defer os.RemoveAll(tempDir)
+		
+		arm64Binary := filepath.Join(tempDir, "karte-agent-arm64")
+		amd64Binary := filepath.Join(tempDir, "karte-agent-amd64")
+		
+		// Build arm64
+		buildEnvArm64 := make(map[string]string)
+		for k, v := range buildEnvBase {
+			buildEnvArm64[k] = v
+		}
+		buildEnvArm64["GOARCH"] = "arm64"
+		
+		fmt.Printf("  -> Building arm64...\n")
+		buildArgs := []string{
+			"build",
+			"-o", arm64Binary,
+			"-ldflags", "-s -w",
+			"./cmd/karte-agent",
+		}
+		if err := runCommand(ctx, projectRoot, buildEnvArm64, "go", buildArgs...); err != nil {
+			return fmt.Errorf("build karte-agent arm64: %w", err)
+		}
+		
+		// Build amd64
+		buildEnvAmd64 := make(map[string]string)
+		for k, v := range buildEnvBase {
+			buildEnvAmd64[k] = v
+		}
+		buildEnvAmd64["GOARCH"] = "amd64"
+		
+		fmt.Printf("  -> Building amd64...\n")
+		buildArgs = []string{
+			"build",
+			"-o", amd64Binary,
+			"-ldflags", "-s -w",
+			"./cmd/karte-agent",
+		}
+		if err := runCommand(ctx, projectRoot, buildEnvAmd64, "go", buildArgs...); err != nil {
+			return fmt.Errorf("build karte-agent amd64: %w", err)
+		}
+		
+		// Combine with lipo
+		fmt.Printf("  -> Combining with lipo...\n")
+		if err := runCommand(ctx, ".", nil, "lipo", "-create", "-output", agentBinary, arm64Binary, amd64Binary); err != nil {
+			return fmt.Errorf("lipo combine: %w", err)
+		}
+	} else {
+		// Single architecture build
+		if goarch == "" {
+			goarch = "arm64" // Default to arm64 for darwin if not specified
+		}
+		
+		buildEnv := make(map[string]string)
+		for k, v := range buildEnvBase {
+			buildEnv[k] = v
+		}
+		buildEnv["GOARCH"] = goarch
+		
+		fmt.Printf("==> Building karte-agent for %s/%s\n", goos, goarch)
+		
+		buildArgs := []string{
+			"build",
+			"-o", agentBinary,
+			"-ldflags", "-s -w", // Strip debug info to reduce size
+			"./cmd/karte-agent",
+		}
+		
+		if err := runCommand(ctx, projectRoot, buildEnv, "go", buildArgs...); err != nil {
+			return fmt.Errorf("build karte-agent: %w", err)
+		}
+	}
+
+	// Make executable
+	if err := os.Chmod(agentBinary, 0o755); err != nil {
+		return fmt.Errorf("chmod karte-agent: %w", err)
+	}
+
+	fmt.Printf("✅ karte-agent bundled into Karte.app\n")
 	return nil
 }
 
