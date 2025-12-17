@@ -19,7 +19,8 @@ var font []byte
 
 // ExportHTMLToPDF generates a PDF at outPath using gofpdf with UTF-8 font embedding.
 // プレビューHTMLをそのままのレイアウトで出力することはできませんが、内容はテキストとして安全に出力します。
-func ExportHTMLToPDF(htmlStr string, outPath string) error {
+func ExportHTMLToPDF(htmlStr string, outPath string, logPath string) error {
+	//TODO 第三引数としてlogPath: stringを受け取り、すべてのログはそこに向かって吐き出す
 	if strings.TrimSpace(htmlStr) == "" {
 		return fmt.Errorf("empty html")
 	}
