@@ -5,10 +5,13 @@ const RenameFile = AppModule.RenameFile || null;
 const UpdateLinkToLatest = AppModule.UpdateLinkToLatest || null;
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
-import { createBrowserApi, isBrowser } from './test-support/browser-api.js';
+import { createBrowserApi } from './test-support/browser-api.js';
+
+// Check if running in browser (no Wails backend)
+const isBrowser = typeof window !== 'undefined' && !window.go;
 
 // Use mock functions if in browser, otherwise use real Wails functions
-const browserApi = createBrowserApi();
+const browserApi = isBrowser ? createBrowserApi() : null;
 const api = isBrowser && browserApi ? browserApi : {
     GetFileList,
     LoadFile,

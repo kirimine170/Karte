@@ -269,4 +269,3 @@ export function createBrowserApi() {
     };
 }
 
-export { isBrowser };
