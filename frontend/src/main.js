@@ -5,6 +5,7 @@ const RenameFile = AppModule.RenameFile || null;
 const UpdateLinkToLatest = AppModule.UpdateLinkToLatest || null;
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
+import { createBrowserApi } from './test-support/browser-api.js';
 import { buildFileDisplayLabel, convertMarkdownToHtml, filterFilesByQuery } from './logic.js';
 
 // Check if running in browser (no Wails backend)
@@ -185,7 +186,8 @@ const mockFunctions = {
 };
 
 // Use mock functions if in browser, otherwise use real Wails functions
-const api = isBrowser ? mockFunctions : {
+const browserApi = isBrowser ? createBrowserApi() : null;
+const api = isBrowser && browserApi ? browserApi : {
     GetFileList,
     LoadFile,
     SaveFile,
