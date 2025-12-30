@@ -6,9 +6,184 @@ const UpdateLinkToLatest = AppModule.UpdateLinkToLatest || null;
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
 import { createBrowserApi } from './test-support/browser-api.js';
+import { buildFileDisplayLabel, convertMarkdownToHtml, filterFilesByQuery } from './logic.js';
 
 // Check if running in browser (no Wails backend)
 const isBrowser = typeof window !== 'undefined' && !window.go;
+
+// Mock functions for browser testing
+const mockFunctions = {
+    async GetFileList() {
+        return [
+            { path: 'content/README.md', title: 'README' },
+            { path: 'content/Test.md', title: 'Test Document' }
+        ];
+    },
+
+    async LoadFile(path) {
+        return `# ${path.split('/').pop()}\n\nThis is a mock file content for testing in browser.\n\n## Features\n- Mock content\n- Browser testing\n- No backend required`;
+    },
+
+    async SaveFile(path, content) {
+        console.log('Mock SaveFile called:', path, content.length);
+        return true;
+    },
+
+    async PreviewMarkdown(content) {
+        return convertMarkdownToHtml(content);
+    },
+
+    async GetGraphData() {
+        return {
+            nodes: [
+                { id: 'doc:/README.md', label: 'README', kind: 'note', exists: true, degIn: 0, degOut: 1, tags: [] },
+                { id: 'doc:/Test.md', label: 'Test Document', kind: 'note', exists: true, degIn: 1, degOut: 0, tags: [] }
+            ],
+            edges: [
+                { id: 'e1', source: 'doc:/README.md', target: 'doc:/Test.md', kind: 'wikilink', weight: 1 }
+            ],
+            meta: { directed: true }
+        };
+    },
+
+    async CreateNewFile(filename) {
+        console.log('Mock CreateNewFile called:', filename);
+        // Simulate file creation
+        return true;
+    },
+
+    async ExportPDF(html) {
+        console.log('Mock ExportPDF called, HTML length:', html.length);
+        return '/mock/path/to/export.pdf';
+    },
+
+    async ExportPreviewHTML(html) {
+        console.log('Mock ExportPreviewHTML called, HTML length:', html.length);
+        return 'file:///mock/path/to/preview.html';
+    },
+
+    async GetCustomCSS() {
+        console.log('Mock GetCustomCSS called');
+        return '';
+    },
+
+    async SetCustomCSS(css) {
+        console.log('Mock SetCustomCSS called, CSS length:', css.length);
+        return true;
+    },
+
+    async ClearCustomCSS() {
+        console.log('Mock ClearCustomCSS called');
+        return true;
+    },
+
+    async ResolveConflict(path, strategy) {
+        console.log('Mock ResolveConflict called:', path, strategy);
+        return true;
+    },
+
+    async ImportAudioFile(path) {
+        console.log('Mock ImportAudioFile called:', path);
+        return `data/audio/mock-${Date.now()}.wav`;
+    },
+
+    async ImportAudioBase64(name, data) {
+        console.log('Mock ImportAudioBase64 called:', name, data.length);
+        return `data/audio/mock-${Date.now()}.wav`;
+    },
+
+    async ImportImageFile(path) {
+        console.log('Mock ImportImageFile called:', path);
+        return `data/image/mock-${Date.now()}.png`;
+    },
+
+    async ImportImageBase64(name, data) {
+        console.log('Mock ImportImageBase64 called:', name, data.length);
+        return `data/image/mock-${Date.now()}.png`;
+    },
+
+    async GetASRStatus() {
+        console.log('Mock GetASRStatus called');
+        return { initialized: false, initializing: false };
+    },
+
+    async GetAudioFileURL(audioPath) {
+        console.log('Mock GetAudioFileURL called:', audioPath);
+        return `/audio/${audioPath}`;
+    },
+
+    async GetImageFileURL(imagePath) {
+        console.log('Mock GetImageFileURL called:', imagePath);
+        return `/image/${imagePath}`;
+    },
+
+    async ImportPdfFile(path) {
+        console.log('Mock ImportPdfFile called:', path);
+        return `content/mock-${Date.now()}.pdf`;
+    },
+
+    async ImportPdfBase64(name, data) {
+        console.log('Mock ImportPdfBase64 called:', name, data.length);
+        return `content/mock-${Date.now()}.pdf`;
+    },
+
+    async GetPdfFileURL(pdfPath) {
+        console.log('Mock GetPdfFileURL called:', pdfPath);
+        return `/pdf/${pdfPath}`;
+    },
+
+    async RenamePdfFile(oldPath, newPath) {
+        console.log('Mock RenamePdfFile called:', oldPath, '->', newPath);
+        return true;
+    },
+
+    async GetImageList() {
+        console.log('Mock GetImageList called');
+        return [
+            { path: 'data/image/mock-1.png', name: 'mock-1.png', size: 1024, modTime: new Date().toISOString() },
+            { path: 'data/image/mock-2.jpg', name: 'mock-2.jpg', size: 2048, modTime: new Date().toISOString() }
+        ];
+    },
+
+    async GetImageMetadata(path) {
+        console.log('Mock GetImageMetadata called:', path);
+        return 'title: mock image\nnotes: サンプルメタデータ';
+    },
+
+    async SaveImageMetadata(path, yaml) {
+        console.log('Mock SaveImageMetadata called:', path, yaml);
+        return true;
+    },
+
+    async StartRecording() {
+        console.log('Mock StartRecording called');
+        return true;
+    },
+
+    async StopRecording() {
+        console.log('Mock StopRecording called');
+        return 'data/audio/mock-recording.m4a';
+    },
+
+    async IsRecording() {
+        console.log('Mock IsRecording called');
+        return false;
+    },
+
+    async LogJS(level, msg) {
+        console.log(`[Mock LogJS] ${level}: ${msg}`);
+    },
+
+    async RenameFile(oldPath, newPath) {
+        console.log('Mock RenameFile called:', oldPath, '->', newPath);
+        return true;
+    },
+
+    async UpdateLinkToLatest(sourceDocID, targetDocID) {
+        console.log('Mock UpdateLinkToLatest called:', sourceDocID, targetDocID);
+        return true;
+    }
+};
 
 // Use mock functions if in browser, otherwise use real Wails functions
 const browserApi = isBrowser ? createBrowserApi() : null;
@@ -551,35 +726,26 @@ async function loadFileList() {
 
 // Render file list in sidebar
 function renderFileList() {
+    if (!tree) {
+        return;
+    }
+
     tree.innerHTML = '';
     const frag = document.createDocumentFragment();
-    const qq = (inp.value || '').toLowerCase();
+    const filteredFiles = filterFilesByQuery(files, inp?.value || '');
 
-    console.log('Rendering file list, files:', files);
+    console.log('Rendering file list, files:', filteredFiles);
 
-    for (const file of files) {
-        console.log('Processing file:', file);
-
-        // Check if file object is valid
-        if (!file || typeof file !== 'object') {
-            console.warn('Invalid file object:', file);
-            continue;
-        }
-
-        // Check if path property exists
-        if (!file.path) {
-            console.warn('File missing path property:', file);
-            continue;
-        }
-
-        if (qq && !(file.path.toLowerCase().includes(qq) || (file.title && file.title.toLowerCase().includes(qq)))) {
+    for (const file of filteredFiles) {
+        const label = buildFileDisplayLabel(file);
+        if (!label) {
             continue;
         }
 
         const a = document.createElement('a');
         a.className = 'item' + (file.path === currentPath ? ' active' : '');
         a.dataset.path = file.path;
-        a.textContent = (file.title || 'Untitled') + '  —  ' + file.path.replace(/^content\//, '');
+        a.textContent = label;
         const dot = document.createElement('span');
         dot.className = 'unsaved-dot';
         a.prepend(dot);

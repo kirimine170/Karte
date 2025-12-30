@@ -65,6 +65,7 @@ type App struct {
 	root            string
 	dataDir         string
 	logFilePath     string
+	fs              FileSystem
 	syncManager     *syncpkg.SyncManager
 	vcs             *gitvcs.VCS
 	asrService      *asr.Service
@@ -139,14 +140,18 @@ func (a *App) appendLog(level, msg string) {
 	}
 	// Prepend timestamp
 	line := fmt.Sprintf("%s [%s] %s\n", time.Now().Format(time.RFC3339), level, msg)
-	f, err := os.OpenFile(a.logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	fs := a.fs
+	if fs == nil {
+		fs = OSFileSystem{}
+	}
+	f, err := fs.OpenFile(a.logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		// fallback to std logger if file can't be opened
 		log.Printf("log open error: %v", err)
 		return
 	}
 	defer f.Close()
-	_, _ = f.WriteString(line)
+	_, _ = f.Write([]byte(line))
 }
 
 // FileItem represents a markdown file in the content directory
@@ -229,9 +234,41 @@ type GraphMeta struct {
 	Directed bool `json:"directed"`
 }
 
-// NewApp creates a new App application struct
+// FileSystem abstracts file operations for easier testing.
+type FileSystem interface {
+	MkdirAll(path string, perm fs.FileMode) error
+	Stat(name string) (fs.FileInfo, error)
+	WriteFile(name string, data []byte, perm fs.FileMode) error
+	OpenFile(name string, flag int, perm fs.FileMode) (io.WriteCloser, error)
+}
+
+// OSFileSystem provides FileSystem backed by the os package.
+type OSFileSystem struct{}
+
+func (OSFileSystem) MkdirAll(path string, perm fs.FileMode) error {
+	return os.MkdirAll(path, perm)
+}
+
+func (OSFileSystem) Stat(name string) (fs.FileInfo, error) {
+	return os.Stat(name)
+}
+
+func (OSFileSystem) WriteFile(name string, data []byte, perm fs.FileMode) error {
+	return os.WriteFile(name, data, perm)
+}
+
+func (OSFileSystem) OpenFile(name string, flag int, perm fs.FileMode) (io.WriteCloser, error) {
+	return os.OpenFile(name, flag, perm)
+}
+
+// NewApp creates a new App application struct with default dependencies.
 func NewApp() *App {
-	return &App{}
+	return NewAppWithFileSystem(OSFileSystem{})
+}
+
+// NewAppWithFileSystem creates a new App with the provided FileSystem.
+func NewAppWithFileSystem(fs FileSystem) *App {
+	return &App{fs: fs}
 }
 
 // startup is called when the app starts. The context is saved
@@ -304,8 +341,12 @@ func (a *App) shutdown(ctx context.Context) {
 
 // initializeDataDirectory creates and initializes the karte_data directory structure
 func (a *App) initializeDataDirectory() error {
+	fsys := a.fs
+	if fsys == nil {
+		fsys = OSFileSystem{}
+	}
 	// Ensure base directory exists
-	if err := os.MkdirAll(a.dataDir, 0755); err != nil {
+	if err := fsys.MkdirAll(a.dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %v", err)
 	}
 
@@ -332,20 +373,20 @@ func (a *App) initializeDataDirectory() error {
 	}
 	for _, subdir := range subdirs {
 		dirPath := filepath.Join(a.dataDir, subdir)
-		if err := os.MkdirAll(dirPath, 0755); err != nil {
+		if err := fsys.MkdirAll(dirPath, 0755); err != nil {
 			return fmt.Errorf("failed to create subdirectory %s: %v", subdir, err)
 		}
 	}
 
 	// Create default theme directory
 	themeDir := filepath.Join(a.dataDir, "themes", "default")
-	if err := os.MkdirAll(themeDir, 0755); err != nil {
+	if err := fsys.MkdirAll(themeDir, 0755); err != nil {
 		return fmt.Errorf("failed to create theme directory: %v", err)
 	}
 
 	// Create log directory
 	logDir := filepath.Join(a.dataDir, "log")
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := fsys.MkdirAll(logDir, 0755); err != nil {
 		return fmt.Errorf("failed to create log directory: %v", err)
 	}
 	a.logFilePath = filepath.Join(logDir, "app.log")
@@ -375,8 +416,8 @@ func (a *App) initializeDataDirectory() error {
 	}
 
 	for filePath, content := range defaultFiles {
-		if _, err := os.Stat(filePath); os.IsNotExist(err) {
-			if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		if _, err := fsys.Stat(filePath); os.IsNotExist(err) {
+			if err := fsys.WriteFile(filePath, []byte(content), 0644); err != nil {
 				return fmt.Errorf("failed to create default file %s: %v", filePath, err)
 			}
 		}
@@ -4479,7 +4520,7 @@ func (a *App) StartRecording() error {
 				if r := recover(); r != nil {
 					errMsg := fmt.Sprintf("panic in NewRealtimeService: %v", r)
 					a.logError(fmt.Sprintf("[Recording] %s", errMsg))
-					serviceErr = fmt.Errorf(errMsg)
+					serviceErr = fmt.Errorf("%s", errMsg)
 				}
 			}()
 
