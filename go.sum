@@ -50,6 +50,12 @@ github.com/gordonklaus/portaudio v0.0.0-20250206071425-98a94950218b h1:WEuQWBxel
 github.com/gordonklaus/portaudio v0.0.0-20250206071425-98a94950218b/go.mod h1:esZFQEUwqC+l76f2R8bIWSwXMaPbp79PppwZ1eJhFco=
 github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=
 github.com/gorilla/websocket v1.5.3/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
+github.com/ikawaha/kagome-dict v1.1.6 h1:bpMDkXEbHsgh/gdqNMpASM5EDd/jpRtzm2AFJTGP6C4=
+github.com/ikawaha/kagome-dict v1.1.6/go.mod h1:kVQBTitXg2pqmQUMFqGOw60e14zahWKyEyuZW2n7Yus=
+github.com/ikawaha/kagome-dict/ipa v1.2.5 h1:uX9D/T7xNpx1nleDU6SSbpaYHgiAhRs9IIEkcWu9XLQ=
+github.com/ikawaha/kagome-dict/ipa v1.2.5/go.mod h1:mfrhW/dynf56fNLSD4fyC29wQsEffWJj7trEJjSZz5Q=
+github.com/ikawaha/kagome/v2 v2.10.2 h1:5bWo0LJqJHzjtpeLQ+XO5IMdyLOMr52de28czE+s1r0=
+github.com/ikawaha/kagome/v2 v2.10.2/go.mod h1:vUBsiTqPQiG+dqSHmvRz3rWb3sCwnS6WO3HNXSPclL4=
 github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 h1:BQSFePA1RWJOlocH6Fxy8MmwDt+yVQYULKfN0RoTN8A=
 github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99/go.mod h1:1lJo3i6rXxKeerYnT8Nvf0QmHCRC1n8sfWVwXF2Frvo=
 github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 h1:njuLRcjAuMKr7kI3D85AXWkw6/+v9PwtV6M6o11sWHQ=

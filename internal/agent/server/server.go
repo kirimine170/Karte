@@ -289,11 +289,6 @@ func (s *Server) handleRAGSearch(params json.RawMessage) (interface{}, *RPCError
 		}
 	}
 
-	// Log search request
-	if s.audit != nil {
-		_ = s.audit.LogSearch(projectID, p.Query)
-	}
-
 	// Search
 	contexts, err := s.rag.Search(p.Query, projectID, p.K)
 	if err != nil {
@@ -302,6 +297,28 @@ func (s *Server) handleRAGSearch(params json.RawMessage) (interface{}, *RPCError
 			Message: "RAG search failed",
 			Data:    err.Error(),
 		}
+	}
+
+	// Log search request with results
+	if s.audit != nil {
+		results := make([]audit.SearchResult, len(contexts))
+		for i, ctx := range contexts {
+			title := ""
+			if ctx.Metadata != nil {
+				if t, ok := ctx.Metadata["title"].(string); ok {
+					title = t
+				}
+			}
+			results[i] = audit.SearchResult{
+				DocID:   ctx.DocID,
+				Path:    ctx.Path,
+				ChunkID: ctx.ChunkID,
+				Score:   ctx.Score,
+				Title:   title,
+				Text:    ctx.Text,
+			}
+		}
+		_ = s.audit.LogSearchWithResults(projectID, p.Query, results)
 	}
 
 	return contexts, nil

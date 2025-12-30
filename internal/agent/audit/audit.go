@@ -52,6 +52,41 @@ func (l *Logger) LogSearch(projectID, query string) error {
 	return l.logEntry(entry)
 }
 
+// SearchResult represents a search result for logging
+type SearchResult struct {
+	DocID    string  `json:"doc_id"`
+	Path     string  `json:"path"`
+	ChunkID  string  `json:"chunk_id"`
+	Score    float64 `json:"score"`
+	Title    string  `json:"title,omitempty"`
+	Text     string  `json:"text,omitempty"` // Truncated to first 200 chars
+}
+
+// LogSearchWithResults logs a search request with results
+func (l *Logger) LogSearchWithResults(projectID, query string, results []SearchResult) error {
+	// Truncate text in results to avoid huge log entries
+	logResults := make([]SearchResult, len(results))
+	for i, r := range results {
+		logResults[i] = r
+		if len(r.Text) > 200 {
+			logResults[i].Text = r.Text[:200] + "..."
+		}
+	}
+
+	entry := LogEntry{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Type:      "search",
+		ProjectID: projectID,
+		Query:     query,
+		Metadata: map[string]interface{}{
+			"result_count": len(results),
+			"results":      logResults,
+		},
+	}
+
+	return l.logEntry(entry)
+}
+
 // LogWrite logs a document write
 func (l *Logger) LogWrite(projectID, requestID, docID string, metadata map[string]interface{}) error {
 	entry := LogEntry{
