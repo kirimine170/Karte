@@ -5,6 +5,7 @@ const RenameFile = AppModule.RenameFile || null;
 const UpdateLinkToLatest = AppModule.UpdateLinkToLatest || null;
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
+import { buildFileDisplayLabel, convertMarkdownToHtml, filterFilesByQuery } from './logic.js';
 
 // Check if running in browser (no Wails backend)
 const isBrowser = typeof window !== 'undefined' && !window.go;
@@ -28,14 +29,7 @@ const mockFunctions = {
     },
 
     async PreviewMarkdown(content) {
-        // Simple markdown to HTML conversion for testing
-        return content
-            .replace(/^# (.*$)/gim, '<h1>$1</h1>')
-            .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-            .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-            .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
-            .replace(/\*(.*)\*/gim, '<em>$1</em>')
-            .replace(/\n/gim, '<br>');
+        return convertMarkdownToHtml(content);
     },
 
     async GetGraphData() {
@@ -730,35 +724,26 @@ async function loadFileList() {
 
 // Render file list in sidebar
 function renderFileList() {
+    if (!tree) {
+        return;
+    }
+
     tree.innerHTML = '';
     const frag = document.createDocumentFragment();
-    const qq = (inp.value || '').toLowerCase();
+    const filteredFiles = filterFilesByQuery(files, inp?.value || '');
 
-    console.log('Rendering file list, files:', files);
+    console.log('Rendering file list, files:', filteredFiles);
 
-    for (const file of files) {
-        console.log('Processing file:', file);
-
-        // Check if file object is valid
-        if (!file || typeof file !== 'object') {
-            console.warn('Invalid file object:', file);
-            continue;
-        }
-
-        // Check if path property exists
-        if (!file.path) {
-            console.warn('File missing path property:', file);
-            continue;
-        }
-
-        if (qq && !(file.path.toLowerCase().includes(qq) || (file.title && file.title.toLowerCase().includes(qq)))) {
+    for (const file of filteredFiles) {
+        const label = buildFileDisplayLabel(file);
+        if (!label) {
             continue;
         }
 
         const a = document.createElement('a');
         a.className = 'item' + (file.path === currentPath ? ' active' : '');
         a.dataset.path = file.path;
-        a.textContent = (file.title || 'Untitled') + '  —  ' + file.path.replace(/^content\//, '');
+        a.textContent = label;
         const dot = document.createElement('span');
         dot.className = 'unsaved-dot';
         a.prepend(dot);
