@@ -11,7 +11,7 @@ const alias = useStubModules
       '../wailsjs/wailsjs/runtime/runtime': path.resolve(
         __dirname,
         'src/test-support/wails-runtime-stub.js'
-      )
+      ),
     }
   : {};
 
