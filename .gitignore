@@ -1,4 +1,7 @@
 public/
+!frontend/public/
+!frontend/public/data/
+!frontend/public/data/sample.csv
 .mdsys/index.json
 .mdsys/graph.json
 *.exe
@@ -28,6 +31,8 @@ frontend/dist/
 
 # Data files
 data/
+!frontend/public/data/
+!frontend/public/data/sample.csv
 
 # IDE and OS files
 .vscode/

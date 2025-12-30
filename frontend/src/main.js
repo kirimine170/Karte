@@ -9,6 +9,73 @@ import GraphModule from './graph-d3.js';
 // Check if running in browser (no Wails backend)
 const isBrowser = typeof window !== 'undefined' && !window.go;
 
+function sanitizeCsvValue(value) {
+    const trimmed = value.trim();
+    if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+        return trimmed.slice(1, -1);
+    }
+    return trimmed;
+}
+
+function parseCsvContent(csvText) {
+    const rows = csvText
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .map((line) => line.split(',').map(sanitizeCsvValue));
+
+    if (rows.length === 0) {
+        return null;
+    }
+
+    const [headers, ...dataRows] = rows;
+    return { headers, rows: dataRows };
+}
+
+function buildCsvTableHtml(parsedCsv, sourcePath) {
+    const headerCells = parsedCsv.headers
+        .map((cell) => `<th scope="col">${cell}</th>`)
+        .join('');
+    const bodyRows = parsedCsv.rows
+        .map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join('')}</tr>`)
+        .join('');
+
+    return `
+<figure data-testid="csv-import" aria-label="CSV preview">
+    <figcaption>@import ${sourcePath}</figcaption>
+    <table data-testid="csv-table">
+        <thead><tr>${headerCells}</tr></thead>
+        <tbody>${bodyRows}</tbody>
+    </table>
+</figure>`;
+}
+
+async function renderCsvImport(importPath) {
+    const url = importPath.startsWith('http')
+        ? importPath
+        : `/${importPath.replace(/^\//, '')}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Failed to load CSV (${response.status})`);
+    }
+    const csvText = await response.text();
+    const parsed = parseCsvContent(csvText);
+    if (!parsed) {
+        throw new Error('CSV is empty');
+    }
+    return buildCsvTableHtml(parsed, importPath);
+}
+
+function basicMarkdownToHtml(content) {
+    return content
+        .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+        .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+        .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+        .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
+        .replace(/\*(.*)\*/gim, '<em>$1</em>')
+        .replace(/\n/gim, '<br>');
+}
+
 // Mock functions for browser testing
 const mockFunctions = {
     async GetFileList() {
@@ -28,14 +95,31 @@ const mockFunctions = {
     },
 
     async PreviewMarkdown(content) {
-        // Simple markdown to HTML conversion for testing
-        return content
-            .replace(/^# (.*$)/gim, '<h1>$1</h1>')
-            .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-            .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-            .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
-            .replace(/\*(.*)\*/gim, '<em>$1</em>')
-            .replace(/\n/gim, '<br>');
+        const importRegex = /^@import\s+([^\s]+)\s*$/gm;
+        const placeholders = [];
+
+        const contentWithPlaceholders = content.replace(importRegex, (_match, importPath) => {
+            const token = `__CSV_IMPORT_${placeholders.length}__`;
+            placeholders.push({ token, importPath: importPath.trim() });
+            return token;
+        });
+
+        let html = basicMarkdownToHtml(contentWithPlaceholders);
+
+        for (const placeholder of placeholders) {
+            try {
+                const tableHtml = await renderCsvImport(placeholder.importPath);
+                html = html.replace(placeholder.token, tableHtml);
+            } catch (error) {
+                const message = error?.message || 'CSV import failed';
+                html = html.replace(
+                    placeholder.token,
+                    `<p data-testid="csv-error">Failed to import ${placeholder.importPath}: ${message}</p>`
+                );
+            }
+        }
+
+        return html;
     },
 
     async GetGraphData() {
