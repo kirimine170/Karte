@@ -51,3 +51,41 @@ func TestApplyFileChangeMkdirError(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestApplyFileChangeUnsafePath(t *testing.T) {
+	fm := &mockFileManager{}
+	sm := NewSyncManagerWithFileManager(nil, "/repo", fm)
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "absolute path", path: "/etc/passwd"},
+		{name: "parent directory", path: "../secret"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := sm.applyFileChange(FileChange{Path: tc.path})
+			if err == nil || err.Error() != "unsafe file path: "+tc.path {
+				t.Fatalf("expected unsafe path error, got: %v", err)
+			}
+			if fm.mkdirPath != "" || fm.writePath != "" {
+				t.Fatalf("file manager should not be called for unsafe path: %+v", fm)
+			}
+		})
+	}
+}
+
+func TestApplyFileChangeWriteError(t *testing.T) {
+	fm := &mockFileManager{writeErr: errors.New("write fail")}
+	sm := NewSyncManagerWithFileManager(nil, "/repo", fm)
+
+	err := sm.applyFileChange(FileChange{Path: "notes/fail.txt"})
+	if err == nil || err.Error() != "failed to write file: write fail" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fm.mkdirPath == "" || fm.writePath == "" {
+		t.Fatalf("file manager not called correctly: %+v", fm)
+	}
+}
