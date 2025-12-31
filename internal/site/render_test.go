@@ -93,3 +93,46 @@ func TestRenderMarkdownMissingFile(t *testing.T) {
 		t.Fatalf("expected not exist error, got %v", err)
 	}
 }
+
+func TestProcessKaTeX(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "inline math replaced and entities decoded",
+			input:    "<p>$a &amp; b$ inside text</p>",
+			expected: "<p><span class=\"katex-inline\">a & b</span> inside text</p>",
+		},
+		{
+			name:     "block math with newlines and entities decoded",
+			input:    "<section>$$$x &amp; y\n+ z$$$</section>",
+			expected: "<section><div class=\"katex-block\">x & y\n+ z</div></section>",
+		},
+		{
+			name:     "inline code preserved",
+			input:    "<p><code>$x$ &amp; y</code> text</p>",
+			expected: "<p><code>$x$ &amp; y</code> text</p>",
+		},
+		{
+			name:     "pre code preserved while math converts",
+			input:    "<pre><code class=\"language-go\">$foo$ &amp; bar\nreturn</code></pre><p>$1+1$</p>",
+			expected: "<pre><code class=\"language-go\">$foo$ &amp; bar\nreturn</code></pre><p><span class=\"katex-inline\">1+1</span></p>",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := processKaTeX(tt.input)
+			if got != tt.expected {
+				t.Fatalf("unexpected output:\ninput: %s\nwant:  %s\ngot:   %s", tt.input, tt.expected, got)
+			}
+		})
+	}
+}
