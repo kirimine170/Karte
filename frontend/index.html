@@ -481,17 +481,79 @@
   .row {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
+    /* 3列 */
+    grid-template-rows: 1fr 1fr;
+    /* 2行 */
     gap: var(--gap);
     flex: 1 1 auto;
     min-height: 0;
   }
 
+  /* デフォルトの配置 */
+  .editor-pane {
+    grid-column: 1;
+    grid-row: 1 / 3;
+    /* 1-2行目を占有 */
+  }
+
+  .preview-pane {
+    grid-column: 2;
+    grid-row: 1 / 3;
+    /* 1-2行目を占有 */
+  }
+
+  .image-gallery-container {
+    grid-column: 3;
+    grid-row: 1;
+    /* 1行目のみ */
+  }
+
+  .csv-gallery-container {
+    grid-column: 3;
+    grid-row: 2;
+    /* 2行目のみ */
+  }
+
+  /* 画像が非表示の時、CSVが1-2行目を占有（位置は右列のまま） */
   .row.gallery-hidden {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr;
+    /* 3列を維持 */
   }
 
   .row.gallery-hidden .image-gallery-container {
     display: none;
+  }
+
+  .row.gallery-hidden .csv-gallery-container {
+    grid-column: 3;
+    /* 右列に固定 */
+    grid-row: 1 / 3;
+    /* 1-2行目を占有 */
+  }
+
+  /* CSVが非表示の時、画像が1-2行目を占有 */
+  .csv-gallery-container[style*="display: none"] {
+    display: none !important;
+  }
+
+  .row:has(.csv-gallery-container[style*="display: none"]) .image-gallery-container {
+    grid-row: 1 / 3;
+    /* 1-2行目を占有 */
+  }
+
+  /* 両方非表示の時は2列レイアウト（エディタとプレビューのみ） */
+  .row.gallery-hidden:has(.csv-gallery-container[style*="display: none"]) {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .row.gallery-hidden:has(.csv-gallery-container[style*="display: none"]) .editor-pane {
+    grid-column: 1;
+    grid-row: 1 / 3;
+  }
+
+  .row.gallery-hidden:has(.csv-gallery-container[style*="display: none"]) .preview-pane {
+    grid-column: 2;
+    grid-row: 1 / 3;
   }
 
   /* 4ペイン: 各カラムは内部スクロールを持つ */
@@ -503,6 +565,7 @@
     min-height: 0;
   }
 
+
   .editor-pane-body,
   .preview-pane-body,
   .gallery-pane-body {
@@ -513,22 +576,80 @@
     overflow: hidden;
   }
 
-  .row.pdf-mode {
-    /* PDF表示時: エディタは非表示、プレビューとギャラリーを横に並べる */
-    grid-template-columns: 1fr 1fr;
-  }
-
+  /* PDFモード: エディタは常に非表示 */
   .row.pdf-mode .editor-pane {
-    /* PDF表示時はエディタペイン全体を非表示 */
     display: none;
   }
 
-  .row.pdf-mode.gallery-hidden {
-    /* PDF表示時かつギャラリー非表示: プレビューのみ（全幅） */
-    grid-template-columns: 1fr;
+  /* PDFモード: 基本レイアウト（画像とCSVが両方表示される場合に対応） */
+  .row.pdf-mode {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
   }
 
-  .row.pdf-mode.gallery-hidden .image-gallery-container {
+  .row.pdf-mode .preview-pane {
+    grid-column: 1;
+    grid-row: 1 / 3;
+    /* 1-2行目を占有 */
+  }
+
+  .row.pdf-mode .image-gallery-container {
+    grid-column: 2;
+    grid-row: 1;
+    /* 2列目、1行目 */
+  }
+
+  .row.pdf-mode .csv-gallery-container {
+    grid-column: 2;
+    grid-row: 2;
+    /* 2列目、2行目 */
+  }
+
+  /* PDFモード: 画像のみ表示（CSV非表示） */
+  .row.pdf-mode:has(.csv-gallery-container[style*="display: none"]) {
+    grid-template-rows: 1fr;
+    /* 1行に変更 */
+  }
+
+  .row.pdf-mode:has(.csv-gallery-container[style*="display: none"]) .preview-pane {
+    grid-row: 1;
+    /* 1行目のみ */
+  }
+
+  .row.pdf-mode:has(.csv-gallery-container[style*="display: none"]) .image-gallery-container {
+    grid-row: 1;
+    /* 1行目のみ */
+  }
+
+  /* PDFモード: CSVのみ表示（画像非表示） */
+  .row.pdf-mode.gallery-hidden:not(:has(.csv-gallery-container[style*="display: none"])) {
+    grid-template-rows: 1fr;
+    /* 1行に変更 */
+  }
+
+  .row.pdf-mode.gallery-hidden:not(:has(.csv-gallery-container[style*="display: none"])) .preview-pane {
+    grid-row: 1;
+    /* 1行目のみ */
+  }
+
+  .row.pdf-mode.gallery-hidden:not(:has(.csv-gallery-container[style*="display: none"])) .csv-gallery-container {
+    grid-row: 1;
+    /* 1行目のみ */
+  }
+
+  /* PDFモード: 両方非表示（PDF単体） */
+  .row.pdf-mode.gallery-hidden:has(.csv-gallery-container[style*="display: none"]) {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr;
+  }
+
+  .row.pdf-mode.gallery-hidden:has(.csv-gallery-container[style*="display: none"]) .preview-pane {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .row.pdf-mode.gallery-hidden:has(.csv-gallery-container[style*="display: none"]) .image-gallery-container,
+  .row.pdf-mode.gallery-hidden:has(.csv-gallery-container[style*="display: none"]) .csv-gallery-container {
     display: none;
   }
 
@@ -695,6 +816,134 @@
     text-align: center;
     color: var(--mute);
     font-size: 14px;
+  }
+
+  /* CSV Gallery Styles */
+  .csv-gallery-container {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel);
+    min-height: 0;
+  }
+
+  .csv-gallery-header {
+    display: flex;
+    align-items: center;
+    padding: 12px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .csv-gallery-title {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--ink);
+  }
+
+  /* CSV create item in grid */
+  .csv-create-item {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 80px;
+    aspect-ratio: 1;
+  }
+
+  .csv-create-icon {
+    font-size: 48px;
+    font-weight: 300;
+    color: var(--ink);
+    line-height: 1;
+  }
+
+  .csv-gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    grid-auto-rows: auto;
+    gap: 8px;
+    padding: 12px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+    align-content: start;
+  }
+
+  .csv-gallery-empty {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--mute);
+    font-size: 14px;
+  }
+
+  .csv-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    cursor: pointer;
+    background: var(--backgroundcolor-unhover);
+    transition: transform 0.2s, box-shadow 0.2s, background 0.2s;
+    min-height: 80px;
+  }
+
+  .csv-item:hover {
+    background: var(--border-color);
+    transform: scale(1.02);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  }
+
+  .csv-icon {
+    font-size: 32px;
+    margin-bottom: 5px;
+  }
+
+  .csv-name {
+    font-size: 12px;
+    text-align: center;
+    word-break: break-all;
+    color: var(--ink);
+  }
+
+  /* CSV Edit Modal Styles */
+  #csvEditTable {
+    border: 1px solid var(--line);
+    width: 100%;
+  }
+
+  #csvEditTable th,
+  #csvEditTable td {
+    border: 1px solid var(--line);
+    padding: 8px;
+    min-width: 100px;
+    background: var(--panel);
+    color: var(--ink);
+  }
+
+  #csvEditTable th {
+    background: var(--backgroundcolor-unhover);
+    font-weight: 600;
+  }
+
+  #csvEditTable th[contenteditable="true"],
+  #csvEditTable td[contenteditable="true"] {
+    outline: none;
+  }
+
+  #csvEditTable th[contenteditable="true"]:focus,
+  #csvEditTable td[contenteditable="true"]:focus {
+    background: var(--input-color-unhover);
+    outline: 2px solid var(--loading-color);
+    outline-offset: -2px;
+  }
+
+  #csvEditTable th.selected,
+  #csvEditTable td.selected {
+    background: var(--loading-color);
+    opacity: 0.3;
   }
 
   .image-preview-modal {
@@ -955,6 +1204,7 @@
   <div class="hint">Ctrl/Cmd+S: 保存・再ビルド</div>
   <button class="btn" id="sidebarToggle" title="ファイルリストを表示/非表示" style="margin-right: 8px;">📁</button>
   <button class="btn" id="galleryToggle" title="画像ギャラリーを表示/非表示" style="margin-right: 8px;">🖼️</button>
+  <button class="btn" id="csvToggle" title="CSV管理を表示/非表示" style="margin-right: 8px;">📊</button>
   <div class="toolbar">
     <label class="hint" for="theme">Theme</label>
     <select id="theme">
@@ -1049,6 +1299,15 @@
             画像がありません
           </div>
         </div>
+        <div class="csv-gallery-container gallery-pane" id="csvGalleryContainer">
+          <div class="csv-gallery-header">
+            <div class="csv-gallery-title">CSV管理</div>
+          </div>
+          <div class="csv-gallery-grid gallery-pane-body" id="csvGalleryGrid"></div>
+          <div class="csv-gallery-empty" id="csvGalleryEmpty" style="display: none;">
+            CSVファイルがありません
+          </div>
+        </div>
       </div>
     </div>
     <div class="tab-content" id="graph-tab">
@@ -1090,6 +1349,7 @@
     <div class="drop-overlay__hint">
       <div>音声: WAV / MP3 / M4A</div>
       <div>画像: JPG / PNG / GIF / WebP</div>
+      <div>CSV: CSV</div>
     </div>
   </div>
 </div>
@@ -1221,6 +1481,29 @@
       padding: 10px;
     }
   </style>
+</div>
+
+<!-- CSV edit modal -->
+<div id="csvEditModal" class="modal" style="display: none;">
+  <div class="modal-content" style="min-width: 600px; max-width: 90vw;">
+    <h3>CSV編集: <span id="csvEditFileName"></span></h3>
+    <div id="csvEditTableContainer" style="overflow: auto; max-height: 60vh; margin: 15px 0;">
+      <table id="csvEditTable" style="width: 100%; border-collapse: collapse;">
+        <thead id="csvEditTableHead"></thead>
+        <tbody id="csvEditTableBody"></tbody>
+      </table>
+    </div>
+    <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+      <button id="csvAddRowBtn" class="btn">行を追加</button>
+      <button id="csvAddColBtn" class="btn">列を追加</button>
+      <button id="csvDeleteRowBtn" class="btn btn-secondary">行を削除</button>
+      <button id="csvDeleteColBtn" class="btn btn-secondary">列を削除</button>
+    </div>
+    <div class="modal-buttons">
+      <button id="csvSaveBtn" class="btn">保存</button>
+      <button id="csvCancelBtn" class="btn btn-secondary">キャンセル</button>
+    </div>
+  </div>
 </div>
 
 <!-- Conflict resolution modal -->
