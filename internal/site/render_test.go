@@ -156,6 +156,9 @@ func TestParseArgs(t *testing.T) {
 		if args[k] != v {
 			t.Fatalf("unexpected value for %s: %s", k, args[k])
 		}
+	}
+}
+
 func TestProcessKaTeX(t *testing.T) {
 	t.Parallel()
 
