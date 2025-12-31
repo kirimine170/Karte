@@ -1,0 +1,80 @@
+# .github/ISSUE_TEMPLATE/1-bug.yml
+name: "バグ報告 / Bug report"
+description: "不具合を報告する"
+title: "[Bug]: "
+labels:
+  - type/bug
+  - status/triage
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        バグ報告ありがとうございます．できるだけ再現しやすい情報を書いてください．
+
+  - type: input
+    id: summary
+    attributes:
+      label: 概要
+      placeholder: 例）ファイル未保存の状態でウィンドウを閉じても警告ダイアログが出ない
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現手順
+      description: できる限り詳細な手順を書いてください
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 本来期待する動作
+      placeholder: 例）ウィンドウを閉じる前に「未保存です」ダイアログが表示される
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の動作
+      placeholder: 例）ダイアログが表示されず、そのままウィンドウが閉じる
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 対象モジュール
+      options:
+        - frontend
+        - backend
+        - asr
+        - ocr
+        - devops
+        - other / 不明
+    validations:
+      required: false
+
+  - type: input
+    id: env
+    attributes:
+      label: 使用環境
+      description: OS / バージョンなど
+      placeholder: 例）macOS 15 / Karte v0.3.0
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 補足情報
+      description: スクリーンショットやログなどがあれば
+    validations:
+      required: false

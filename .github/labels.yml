@@ -1,0 +1,89 @@
+# Karte 共通ラベル定義
+
+# --- 種別 ---
+- name: type/bug
+  color: d73a4a
+  description: 不具合
+
+- name: type/feature
+  color: a2eeef
+  description: 機能追加・改善
+
+- name: type/task
+  color: fef2c0
+  description: メンテナンス・作業タスク（CI整備・テンプレ作成など）
+
+- name: type/research
+  color: c5def5
+  description: 技術検証・Spike（Markdown on MQTT などの検証）
+
+- name: type/design
+  color: f9d0c4
+  description: 仕様・設計検討（フォーマットやアーキテクチャの議論）
+
+- name: type/refactor
+  color: cfd3d7
+  description: リファクタ（挙動を変えないコード整理）
+
+- name: type/docs
+  color: 0366d6
+  description: ドキュメント（README・設計資料など）
+
+# --- モジュール（area）---
+- name: area/frontend
+  color: 1d76db
+  description: Wails / フロントエンド
+
+- name: area/backend
+  color: 5319e7
+  description: Go バックエンド
+
+- name: area/asr
+  color: 0e8a16
+  description: ASR 音声認識
+
+- name: area/ocr
+  color: fbca04
+  description: OCR 文字認識
+
+- name: area/devops
+  color: 0052cc
+  description: CI/CD・ビルド・リリース
+
+# --- 優先度 ---
+- name: prio/P0
+  color: b60205
+  description: 最優先
+
+- name: prio/P1
+  color: d93f0b
+  description: 高優先
+
+- name: prio/P2
+  color: fbca04
+  description: 通常
+
+- name: prio/P3
+  color: e4e669
+  description: 低優先
+
+# --- ステータス ---
+- name: status/triage
+  color: d4c5f9
+  description: 要整理・要優先度付け
+
+- name: status/in-progress
+  color: 0e8a16
+  description: 対応中
+
+- name: status/review
+  color: 0366d6
+  description: レビュー待ち
+
+- name: status/blocked
+  color: 5319e7
+  description: ブロック中
+
+- name: status/stale
+  color: cfd3d7
+  description: 長期間更新なし

@@ -1,3 +1,5 @@
+//go:build darwin && arm64 && !universal
+
 package audio
 
 import (

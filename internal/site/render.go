@@ -5,6 +5,8 @@ import (
 	"encoding/csv"
 	"fmt"
 	"html"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -39,12 +41,46 @@ func newMarkdown(hardwrap bool) goldmark.Markdown {
 var fmRe = regexp.MustCompile(`(?s)^---\n(.*?)\n---\n`)
 var impRe = regexp.MustCompile(`(?m)^@import\((.*?)\)\s*$`)
 
+// FileSystem abstracts file access for rendering.
+type FileSystem interface {
+	ReadFile(name string) ([]byte, error)
+	Stat(name string) (fs.FileInfo, error)
+	Open(name string) (io.ReadCloser, error)
+}
+
+// OSFileSystem implements FileSystem using the os package.
+type OSFileSystem struct{}
+
+func (OSFileSystem) ReadFile(name string) ([]byte, error)    { return os.ReadFile(name) }
+func (OSFileSystem) Stat(name string) (fs.FileInfo, error)   { return os.Stat(name) }
+func (OSFileSystem) Open(name string) (io.ReadCloser, error) { return os.Open(name) }
+
+// Renderer renders Markdown content using the provided FileSystem.
+type Renderer struct {
+	fs FileSystem
+}
+
+// NewRenderer constructs a Renderer.
+func NewRenderer(fs FileSystem) *Renderer {
+	if fs == nil {
+		fs = OSFileSystem{}
+	}
+	return &Renderer{fs: fs}
+}
+
+var defaultRenderer = NewRenderer(OSFileSystem{})
+
 func RenderMarkdown(root, path string) (string, *FrontMatter, error) {
-	return RenderMarkdownWithOptions(root, path, false)
+	return defaultRenderer.RenderMarkdownWithOptions(root, path, false)
 }
 
 func RenderMarkdownWithOptions(root, path string, hardwrap bool) (string, *FrontMatter, error) {
-	b, err := os.ReadFile(path)
+	return defaultRenderer.RenderMarkdownWithOptions(root, path, hardwrap)
+}
+
+// RenderMarkdownWithOptions renders markdown content using the configured FileSystem.
+func (r *Renderer) RenderMarkdownWithOptions(root, path string, hardwrap bool) (string, *FrontMatter, error) {
+	b, err := r.fs.ReadFile(path)
 	if err != nil {
 		return "", nil, err
 	}
@@ -68,11 +104,11 @@ func RenderMarkdownWithOptions(root, path string, hardwrap bool) (string, *Front
 		switch typ {
 		case "csv":
 			abs := filepath.Join(root, p)
-			html := renderCSV(abs, args)
+			html := r.renderCSV(abs, args)
 			return []byte(html)
 		case "md":
 			abs := filepath.Join(root, p)
-			child, _, err := RenderMarkdown(root, abs)
+			child, _, err := r.RenderMarkdownWithOptions(root, abs, hardwrap)
 			if err != nil {
 				return []byte(fmt.Sprintf("<p>Error include: %v</p>", err))
 			}
@@ -89,11 +125,11 @@ func RenderMarkdownWithOptions(root, path string, hardwrap bool) (string, *Front
 	htmlContent := buf.String()
 	// Process KaTeX math expressions
 	htmlContent = processKaTeX(htmlContent)
-	htmlOut := wrapWithLayout(root, fm, htmlContent)
+	htmlOut := r.wrapWithLayout(root, fm, htmlContent)
 	return htmlOut, fm, nil
 }
 
-func wrapWithLayout(root string, fm *FrontMatter, inner string) string {
+func (r *Renderer) wrapWithLayout(root string, fm *FrontMatter, inner string) string {
 	// Check if this is a preview request by looking for preview layout
 	previewLayoutPath := filepath.Join(root, "themes", "default", "preview.html")
 	layoutPath := filepath.Join(root, "themes", "default", "layout.html")
@@ -102,17 +138,20 @@ func wrapWithLayout(root string, fm *FrontMatter, inner string) string {
 	var err error
 
 	// Try preview layout first, fallback to regular layout
-	if _, statErr := os.Stat(previewLayoutPath); statErr == nil {
-		b, err = os.ReadFile(previewLayoutPath)
+	if _, statErr := r.fs.Stat(previewLayoutPath); statErr == nil {
+		b, err = r.fs.ReadFile(previewLayoutPath)
 	} else {
-		b, err = os.ReadFile(layoutPath)
+		b, err = r.fs.ReadFile(layoutPath)
 	}
 
 	if err != nil {
-		return fmt.Sprintf(`<!doctype html><meta charset="utf-8"><title>%s</title>
+		return fmt.Sprintf(`<!doctype html>
+<html>
+<meta charset="utf-8"><title>%s</title>
             <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
             <script>mermaid.initialize({startOnLoad:true});</script>
-            <body><main class="container">%s</main></body>`, html.EscapeString(fm.Title), inner)
+            <body><main class="container">%s</main></body>
+</html>`, html.EscapeString(fm.Title), inner)
 	}
 	s := string(b)
 	s = strings.ReplaceAll(s, "{{TITLE}}", html.EscapeString(fm.Title))
@@ -131,14 +170,14 @@ func parseArgs(s string) map[string]string {
 	return m
 }
 
-func renderCSV(abs string, args map[string]string) string {
-	f, err := os.Open(abs)
+func (r *Renderer) renderCSV(abs string, args map[string]string) string {
+	f, err := r.fs.Open(abs)
 	if err != nil {
 		return fmt.Sprintf("<p>csv open error: %v</p>", err)
 	}
 	defer f.Close()
-	r := csv.NewReader(f)
-	rec, err := r.ReadAll()
+	reader := csv.NewReader(f)
+	rec, err := reader.ReadAll()
 	if err != nil {
 		return fmt.Sprintf("<p>csv read error: %v</p>", err)
 	}

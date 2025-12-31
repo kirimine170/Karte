@@ -1,0 +1,72 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18.x'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install --prefer-offline --no-audit
+
+      - name: Build frontend assets
+        working-directory: frontend
+        run: npm run build --if-present
+
+      - name: Install system dependencies
+        run: brew install portaudio
+
+      - name: Backend tests
+        run: |
+          mkdir -p reports
+          go test $(go list ./... | grep -v internal/asr) | tee reports/backend-tests.log
+
+      - name: Frontend tests
+        run: |
+          mkdir -p reports
+          cd frontend
+          npm test --if-present | tee ../reports/frontend-tests.log
+
+      - name: E2E tests
+        run: |
+          mkdir -p reports
+          cd frontend
+          npm run test:e2e --if-present | tee ../reports/e2e-tests.log
+
+      - name: Test summary
+        if: always()
+        run: |
+          echo "## Test logs" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Backend: reports/backend-tests.log" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Frontend: reports/frontend-tests.log" >> "$GITHUB_STEP_SUMMARY"
+          echo "- E2E: reports/e2e-tests.log" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: reports

@@ -87,6 +87,9 @@
   body {
     min-height: 100%;
     height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
   }
 
   html {
@@ -94,10 +97,11 @@
   }
 
   body {
-    margin: 0;
     background: var(--bg);
     color: var(--ink);
     font: 13px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Meiryo", sans-serif;
+    display: flex;
+    flex-direction: column;
   }
 
   a {
@@ -131,10 +135,10 @@
   }
 
   .layout {
-    height: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
     display: grid;
     grid-template-columns: 260px 1fr;
-    height: calc(100% - 44px);
   }
 
   .layout.sidebar-hidden {
@@ -150,12 +154,16 @@
     padding: 12px;
     background: var(--panel);
     transition: width 0.2s;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
   }
 
   .search {
     display: flex;
     gap: 6px;
-    margin-bottom: 10px
+    margin-bottom: 10px;
+    flex-shrink: 0;
   }
 
   .search input {
@@ -169,8 +177,10 @@
   }
 
   .tree {
-    overflow: auto;
-    height: calc(100% - 44px)
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: auto;
   }
 
   .item {
@@ -186,6 +196,30 @@
     border-color: var(--line)
   }
 
+  .item .unsaved-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: #a855f7;
+    display: none;
+    margin-right: 6px;
+    box-shadow: 0 0 0 2px var(--panel);
+    vertical-align: middle;
+  }
+
+  .item.unsaved .unsaved-dot {
+    display: inline-block;
+  }
+
+  .item.unsaved {
+    font-weight: 600;
+  }
+
+  #saveBtn.unsaved {
+    border-color: #a855f7;
+    color: #a855f7;
+  }
+
   .item.active {
     background: var(--opened-tab-backgroundcolor);
     border-color: var(--borderline-color)
@@ -194,8 +228,9 @@
   .main {
     display: flex;
     flex-direction: column;
-    height: 100%;
     padding: var(--gap2);
+    flex: 1 1 auto;
+    min-height: 0;
   }
 
   .tabs {
@@ -447,7 +482,7 @@
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
     gap: var(--gap);
-    flex: 1;
+    flex: 1 1 auto;
     min-height: 0;
   }
 
@@ -456,6 +491,44 @@
   }
 
   .row.gallery-hidden .image-gallery-container {
+    display: none;
+  }
+
+  /* 4ペイン: 各カラムは内部スクロールを持つ */
+  .editor-pane,
+  .preview-pane,
+  .gallery-pane {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .editor-pane-body,
+  .preview-pane-body,
+  .gallery-pane-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    /* エディタとプレビューは内側要素（textarea/iframe）がスクロールを持つので、
+       外側ラッパではスクロールを発生させない */
+    overflow: hidden;
+  }
+
+  .row.pdf-mode {
+    /* PDF表示時: エディタは非表示、プレビューとギャラリーを横に並べる */
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .row.pdf-mode .editor-pane {
+    /* PDF表示時はエディタペイン全体を非表示 */
+    display: none;
+  }
+
+  .row.pdf-mode.gallery-hidden {
+    /* PDF表示時かつギャラリー非表示: プレビューのみ（全幅） */
+    grid-template-columns: 1fr;
+  }
+
+  .row.pdf-mode.gallery-hidden .image-gallery-container {
     display: none;
   }
 
@@ -553,7 +626,7 @@
     line-height: 1.6;
   }
 
-  .drop-overlay__hint > div {
+  .drop-overlay__hint>div {
     margin: 2px 0;
   }
 
@@ -911,6 +984,12 @@
     </div>
     <span class="transcription-progress-text"></span>
   </div>
+  <div id="pdfExportProgress" class="transcription-progress" style="display:none;">
+    <div class="transcription-progress-bar">
+      <div class="transcription-progress-fill"></div>
+    </div>
+    <span class="transcription-progress-text"></span>
+  </div>
 </div>
 <div class="layout">
   <aside class="side">
@@ -938,8 +1017,12 @@
     </div>
     <div class="tab-content active" id="editor-tab">
       <div class="row">
-        <textarea id="editor" spellcheck="false"></textarea>
-        <div class="preview-container">
+        <div class="editor-pane">
+          <div class="editor-pane-body">
+            <textarea id="editor" spellcheck="false"></textarea>
+          </div>
+        </div>
+        <div class="preview-container preview-pane">
           <div id="audioPlayerContainer" class="audio-player-container" style="display: none;">
             <audio id="audioPlayer" controls preload="metadata">
               Your browser does not support the audio element.
@@ -949,13 +1032,19 @@
             <div class="realtime-transcript-header">リアルタイム文字起こし</div>
             <div id="realtimeTranscriptContent" class="realtime-transcript-content"></div>
           </div>
-          <iframe id="preview"></iframe>
+          <div class="preview-pane-body">
+            <iframe id="preview"></iframe>
+          </div>
         </div>
-        <div class="image-gallery-container" id="imageGalleryContainer">
+        <div class="image-gallery-container gallery-pane" id="imageGalleryContainer">
           <div class="image-gallery-header">
             <div class="image-gallery-title">画像ギャラリー</div>
+            <button id="captureScreenBtn" class="btn" style="font-size: 11px; padding: 4px 8px; margin-left: auto;"
+              title="画面キャプチャを撮ってギャラリーに保存">
+              画面キャプチャ
+            </button>
           </div>
-          <div class="image-gallery-grid" id="imageGalleryGrid"></div>
+          <div class="image-gallery-grid gallery-pane-body" id="imageGalleryGrid"></div>
           <div class="image-gallery-empty" id="imageGalleryEmpty" style="display: none;">
             画像がありません
           </div>
@@ -1014,6 +1103,32 @@
     <div class="modal-buttons">
       <button id="createFileBtn" class="btn">作成</button>
       <button id="cancelFileBtn" class="btn btn-secondary">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<!-- Rename file modal -->
+<div id="renameFileModal" class="modal" style="display: none;">
+  <div class="modal-content">
+    <h3>ファイル名を変更</h3>
+    <p>新しいファイル名を入力してください（content/ は不要、.md拡張子は自動で追加されます）:</p>
+    <input type="text" id="renameFileInput" placeholder="例: new-filename" />
+    <div class="modal-buttons">
+      <button id="confirmRenameBtn" class="btn">変更</button>
+      <button id="cancelRenameBtn" class="btn btn-secondary">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<!-- Unsaved changes confirmation modal -->
+<div id="unsavedConfirmModal" class="modal" style="display: none;">
+  <div class="modal-content">
+    <h3>未保存の変更があります</h3>
+    <p>保存されていない変更があります。どうしますか？</p>
+    <div class="modal-buttons">
+      <button id="unsavedSaveBtn" class="btn">保存して続行</button>
+      <button id="unsavedDiscardBtn" class="btn btn-secondary">破棄して続行</button>
+      <button id="unsavedCancelBtn" class="btn btn-secondary">キャンセル</button>
     </div>
   </div>
 </div>

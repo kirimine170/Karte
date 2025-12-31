@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"image"
 	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
+	"image/png"
 	"io"
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -24,18 +24,23 @@ import (
 
 	"karte/internal/asr"
 	"karte/internal/audio"
+	"karte/internal/docid"
 	fm "karte/internal/frontmatter"
 	gitvcs "karte/internal/git"
+	"karte/internal/markdown"
 	"karte/internal/marp"
 	pdfexport "karte/internal/pdf"
+	"karte/internal/screenshot"
 	"karte/internal/site"
 	syncpkg "karte/internal/sync"
 	"karte/internal/webpchunk"
+	"karte/internal/webputil"
 
 	"github.com/chai2010/webp"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"golang.org/x/image/draw"
 	"gopkg.in/yaml.v3"
 )
 
@@ -50,12 +55,17 @@ var (
 	backupImageExtCandidates = []string{".jpg", ".jpeg", ".png", ".gif"}
 )
 
+const maxImageSizeForPDF = 10 * 1024 * 1024 // 10MB
+const maxImageWidthForPDF = 800             // PDF表示用に最大横幅800px（Previewで開く速度を改善）
+const maxImageFileSizeForPDF = 300 * 1024   // 各画像の目標サイズ300KB
+
 // App struct
 type App struct {
 	ctx             context.Context
 	root            string
 	dataDir         string
 	logFilePath     string
+	fs              FileSystem
 	syncManager     *syncpkg.SyncManager
 	vcs             *gitvcs.VCS
 	asrService      *asr.Service
@@ -75,6 +85,10 @@ type App struct {
 	// Uncomment when upgrading to Wails v3:
 	// presenter windows keyed by document id (e.g., "content/xxx.md")
 	// presenters map[string]*Presenter
+
+	// Window close control
+	allowCloseMu   sync.Mutex
+	allowCloseFlag bool
 }
 
 // NOTE: Multi-window support requires Wails v3 (currently in development)
@@ -126,14 +140,18 @@ func (a *App) appendLog(level, msg string) {
 	}
 	// Prepend timestamp
 	line := fmt.Sprintf("%s [%s] %s\n", time.Now().Format(time.RFC3339), level, msg)
-	f, err := os.OpenFile(a.logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	fs := a.fs
+	if fs == nil {
+		fs = OSFileSystem{}
+	}
+	f, err := fs.OpenFile(a.logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		// fallback to std logger if file can't be opened
 		log.Printf("log open error: %v", err)
 		return
 	}
 	defer f.Close()
-	_, _ = f.WriteString(line)
+	_, _ = f.Write([]byte(line))
 }
 
 // FileItem represents a markdown file in the content directory
@@ -152,9 +170,32 @@ type ImageItem struct {
 	OriginalPath string    `json:"originalPath,omitempty"`
 }
 
+// CaptureScreenInteractive captures a screenshot using the platform-specific
+// implementation and stores it under karte_data/data/image as a WebP file.
+// It returns the image path relative to dataDir (e.g. "data/image/xxx.webp").
+func (a *App) CaptureScreenInteractive() (string, error) {
+	if a == nil {
+		return "", fmt.Errorf("app is not initialized")
+	}
+	if a.dataDir == "" {
+		return "", fmt.Errorf("dataDir is not initialized")
+	}
+
+	a.logInfo("CaptureScreenInteractive: start")
+	path, err := screenshot.CaptureScreenInteractive(a.dataDir)
+	if err != nil {
+		a.logError(fmt.Sprintf("CaptureScreenInteractive failed: %v", err))
+		return "", err
+	}
+
+	a.logInfo(fmt.Sprintf("CaptureScreenInteractive: saved screenshot to %s", path))
+	return path, nil
+}
+
 // GraphNode represents a node in the graph
 type GraphNode struct {
-	ID     string   `json:"id"`
+	ID     string   `json:"id"`              // Path-based ID (e.g., "doc:/path/to/file.md")
+	DocID  string   `json:"docId,omitempty"` // Document ID (logical identifier, persistent across renames)
 	Label  string   `json:"label"`
 	Kind   string   `json:"kind"`
 	Exists bool     `json:"exists"`
@@ -167,14 +208,18 @@ type GraphNode struct {
 // GraphEdge represents an edge in the graph
 type GraphEdge struct {
 	ID            string `json:"id"`
-	Source        string `json:"source"`
-	Target        string `json:"target"`
+	Source        string `json:"source"`                // Path-based source ID (backward compatibility)
+	Target        string `json:"target"`                // Path-based target ID (backward compatibility)
+	SourceDocID   string `json:"sourceDocId,omitempty"` // Document ID of source (logical identifier)
+	TargetDocID   string `json:"targetDocId,omitempty"` // Document ID of target (logical identifier)
 	Kind          string `json:"kind"`
 	Weight        int    `json:"weight"`
 	TargetHash    string `json:"targetHash,omitempty"`    // Hash of target file when link was created
 	SourceHash    string `json:"sourceHash,omitempty"`    // Hash of source file when link was created
 	LinkVersion   int    `json:"linkVersion,omitempty"`   // Version number when link was created
 	TargetUpdated bool   `json:"targetUpdated,omitempty"` // True if target file has been updated since link creation
+	ToVersionMode string `json:"toVersionMode,omitempty"` // "latest" or "pinned" (for future version management)
+	ToVersionID   string `json:"toVersionId,omitempty"`   // Version ID when pinned (content_hash)
 }
 
 // GraphData represents the complete graph structure
@@ -189,9 +234,41 @@ type GraphMeta struct {
 	Directed bool `json:"directed"`
 }
 
-// NewApp creates a new App application struct
+// FileSystem abstracts file operations for easier testing.
+type FileSystem interface {
+	MkdirAll(path string, perm fs.FileMode) error
+	Stat(name string) (fs.FileInfo, error)
+	WriteFile(name string, data []byte, perm fs.FileMode) error
+	OpenFile(name string, flag int, perm fs.FileMode) (io.WriteCloser, error)
+}
+
+// OSFileSystem provides FileSystem backed by the os package.
+type OSFileSystem struct{}
+
+func (OSFileSystem) MkdirAll(path string, perm fs.FileMode) error {
+	return os.MkdirAll(path, perm)
+}
+
+func (OSFileSystem) Stat(name string) (fs.FileInfo, error) {
+	return os.Stat(name)
+}
+
+func (OSFileSystem) WriteFile(name string, data []byte, perm fs.FileMode) error {
+	return os.WriteFile(name, data, perm)
+}
+
+func (OSFileSystem) OpenFile(name string, flag int, perm fs.FileMode) (io.WriteCloser, error) {
+	return os.OpenFile(name, flag, perm)
+}
+
+// NewApp creates a new App application struct with default dependencies.
 func NewApp() *App {
-	return &App{}
+	return NewAppWithFileSystem(OSFileSystem{})
+}
+
+// NewAppWithFileSystem creates a new App with the provided FileSystem.
+func NewAppWithFileSystem(fs FileSystem) *App {
+	return &App{fs: fs}
 }
 
 // startup is called when the app starts. The context is saved
@@ -264,8 +341,12 @@ func (a *App) shutdown(ctx context.Context) {
 
 // initializeDataDirectory creates and initializes the karte_data directory structure
 func (a *App) initializeDataDirectory() error {
+	fsys := a.fs
+	if fsys == nil {
+		fsys = OSFileSystem{}
+	}
 	// Ensure base directory exists
-	if err := os.MkdirAll(a.dataDir, 0755); err != nil {
+	if err := fsys.MkdirAll(a.dataDir, 0755); err != nil {
 		return fmt.Errorf("failed to create data directory: %v", err)
 	}
 
@@ -292,20 +373,20 @@ func (a *App) initializeDataDirectory() error {
 	}
 	for _, subdir := range subdirs {
 		dirPath := filepath.Join(a.dataDir, subdir)
-		if err := os.MkdirAll(dirPath, 0755); err != nil {
+		if err := fsys.MkdirAll(dirPath, 0755); err != nil {
 			return fmt.Errorf("failed to create subdirectory %s: %v", subdir, err)
 		}
 	}
 
 	// Create default theme directory
 	themeDir := filepath.Join(a.dataDir, "themes", "default")
-	if err := os.MkdirAll(themeDir, 0755); err != nil {
+	if err := fsys.MkdirAll(themeDir, 0755); err != nil {
 		return fmt.Errorf("failed to create theme directory: %v", err)
 	}
 
 	// Create log directory
 	logDir := filepath.Join(a.dataDir, "log")
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := fsys.MkdirAll(logDir, 0755); err != nil {
 		return fmt.Errorf("failed to create log directory: %v", err)
 	}
 	a.logFilePath = filepath.Join(logDir, "app.log")
@@ -335,8 +416,8 @@ func (a *App) initializeDataDirectory() error {
 	}
 
 	for filePath, content := range defaultFiles {
-		if _, err := os.Stat(filePath); os.IsNotExist(err) {
-			if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		if _, err := fsys.Stat(filePath); os.IsNotExist(err) {
+			if err := fsys.WriteFile(filePath, []byte(content), 0644); err != nil {
 				return fmt.Errorf("failed to create default file %s: %v", filePath, err)
 			}
 		}
@@ -488,14 +569,29 @@ func (a *App) GetFileList() []FileItem {
 		if info.IsDir() {
 			return nil
 		}
-		if strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
+		lowerName := strings.ToLower(info.Name())
+		isMarkdown := strings.HasSuffix(lowerName, ".md")
+		isPdf := strings.HasSuffix(lowerName, ".pdf")
+		if isMarkdown || isPdf {
 			// Generate path relative to dataDir so that it starts with "content/..."
-			rel, _ := filepath.Rel(a.dataDir, p)
+			rel, err := filepath.Rel(a.dataDir, p)
+			if err != nil {
+				a.logError(fmt.Sprintf("Failed to get relative path for %s: %v", p, err))
+				return nil
+			}
 			title := info.Name()
 
-			// Try to extract title from frontmatter
-			if b, err := os.ReadFile(p); err == nil {
-				title = fm.ExtractTitle(string(b), title)
+			// Try to extract title from frontmatter for markdown files
+			if isMarkdown {
+				if b, err := os.ReadFile(p); err == nil {
+					title = fm.ExtractTitle(string(b), title)
+				} else {
+					a.logError(fmt.Sprintf("Failed to read file %s: %v", p, err))
+					// Continue with filename as title if read fails
+				}
+			} else if isPdf {
+				// For PDF files, use filename without extension as title
+				title = strings.TrimSuffix(title, filepath.Ext(title))
 			}
 			fileItem := FileItem{
 				Path:  filepath.ToSlash(rel),
@@ -512,7 +608,10 @@ func (a *App) GetFileList() []FileItem {
 		return []FileItem{}
 	}
 
-	a.logInfo(fmt.Sprintf("Found %d markdown files", len(files)))
+	a.logInfo(fmt.Sprintf("GetFileList completed: Found %d files (markdown and PDF)", len(files)))
+	if len(files) > 0 {
+		a.logInfo(fmt.Sprintf("First file: %s", files[0].Path))
+	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files
 }
@@ -781,6 +880,7 @@ func (a *App) CreateNewFile(filename string) (bool, error) {
 }
 
 // LoadFile loads the content of a markdown file
+// For PDF files, returns an empty string since PDFs are not editable
 func (a *App) LoadFile(path string) (string, error) {
 	runtime.LogInfo(a.ctx, fmt.Sprintf("LoadFile called with path: %s", path))
 
@@ -792,85 +892,156 @@ func (a *App) LoadFile(path string) (string, error) {
 
 	runtime.LogInfo(a.ctx, fmt.Sprintf("Resolved path: %s", absPath))
 
+	// Check if this is a PDF file
+	if strings.HasSuffix(strings.ToLower(path), ".pdf") {
+		runtime.LogInfo(a.ctx, fmt.Sprintf("PDF file detected, returning empty string"))
+		return "", nil
+	}
+
 	content, err := os.ReadFile(absPath)
 	if err != nil {
 		runtime.LogError(a.ctx, fmt.Sprintf("Failed to read file %s: %v", absPath, err))
 		return "", fmt.Errorf("failed to read file: %v", err)
 	}
 
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Successfully loaded file, content length: %d", len(content)))
-	return string(content), nil
+	contentStr := string(content)
+
+	// Ensure doc_id exists (lazy assignment)
+	contentWithDocID, docID, err := a.ensureDocID(contentStr)
+	if err != nil {
+		a.logError(fmt.Sprintf("Failed to ensure doc_id for %s: %v", path, err))
+		// Continue with original content if doc_id generation fails
+	} else if docID != "" && contentWithDocID != contentStr {
+		// Save the updated content with doc_id if it was added
+		if err := os.WriteFile(absPath, []byte(contentWithDocID), 0644); err != nil {
+			a.logError(fmt.Sprintf("Failed to save file with doc_id: %v", err))
+		} else {
+			contentStr = contentWithDocID
+			a.logInfo(fmt.Sprintf("Assigned doc_id to file: %s -> %s", path, docID))
+		}
+	}
+
+	runtime.LogInfo(a.ctx, fmt.Sprintf("Successfully loaded file, content length: %d", len(contentStr)))
+	return contentStr, nil
 }
 
 // SaveFile saves content to a markdown file
 func (a *App) SaveFile(path, content string) error {
+	a.logInfo(fmt.Sprintf("SaveFile called for path: %s, content length: %d", path, len(content)))
+
 	absPath, ok := a.resolveContentPath(path)
 	if !ok {
+		a.logError(fmt.Sprintf("SaveFile: invalid path: %s", path))
 		return fmt.Errorf("invalid path: %s", path)
 	}
 
-	// Calculate hash before saving
+	// Calculate hash before saving (but don't read file content here to avoid conflicts)
 	var oldHash string
 	if existingContent, err := os.ReadFile(absPath); err == nil {
 		oldHash = gitvcs.CalculateHash(string(existingContent))
+		a.logInfo(fmt.Sprintf("SaveFile: existing file hash: %s (length: %d)", oldHash[:8], len(existingContent)))
+	} else {
+		a.logInfo(fmt.Sprintf("SaveFile: file does not exist yet or cannot be read"))
 	}
 
-	// Parse and format frontmatter before saving
-	frontMatter, markdownBody := fm.ParseFrontMatter(content)
+	// Ensure doc_id exists (lazy assignment) - do this first
+	contentWithDocID, docID, err := a.ensureDocID(content)
+	if err != nil {
+		a.logError(fmt.Sprintf("Failed to ensure doc_id for %s: %v", path, err))
+		// Continue with original content if doc_id generation fails
+		contentWithDocID = content
+	} else {
+		if docID != "" {
+			a.logInfo(fmt.Sprintf("File %s has doc_id: %s", path, docID))
+		}
+	}
+
+	a.logInfo(fmt.Sprintf("SaveFile: after ensureDocID, content length: %d (original: %d)", len(contentWithDocID), len(content)))
+
+	// Parse and format frontmatter after doc_id assignment
+	frontMatter, markdownBody := fm.ParseFrontMatter(contentWithDocID)
 	if frontMatter != nil {
 		// Format frontmatter with normalized tags
 		formattedFM := fm.FormatFrontMatter(frontMatter)
 		content = formattedFM + markdownBody
+		a.logInfo(fmt.Sprintf("SaveFile: formatted frontmatter for %s (title: %q, tags: %q, doc_id: %q, body length: %d)", path, frontMatter.Title, frontMatter.Tags, frontMatter.DocID, len(markdownBody)))
+	} else {
+		// No frontmatter, use content as-is
+		content = contentWithDocID
+		a.logInfo(fmt.Sprintf("SaveFile: no frontmatter for %s, using content as-is (length: %d)", path, len(content)))
 	}
 
 	// Detect conflict before saving
+	// IMPORTANT: Use the content from frontend (with user edits) as LocalContent
+	// We need to temporarily write it to disk so DetectConflict can read it
 	if a.vcs != nil {
 		relPath, err := filepath.Rel(a.dataDir, absPath)
 		if err == nil {
-			conflict, err := gitvcs.DetectConflict(a.vcs, a.dataDir, relPath)
-			if err != nil {
-				a.logError(fmt.Sprintf("Failed to detect conflict: %v", err))
-			} else if conflict != nil {
-				// Create backup before handling conflict
-				if err := a.createBackup(path, content); err != nil {
-					a.logError(fmt.Sprintf("Failed to create backup: %v", err))
-				}
-
-				// Try auto-merge for auto-resolvable or warning conflicts
-				if conflict.Severity == gitvcs.ConflictAutoResolvable || conflict.Severity == gitvcs.ConflictWarning {
-					merged, severity, err := gitvcs.AutoMergeMarkdown(conflict.BaseContent, conflict.LocalContent, conflict.RemoteContent)
-					if err == nil && severity != gitvcs.ConflictCritical {
-						// Auto-merge successful - use merged content
-						content = merged
-						runtime.EventsEmit(a.ctx, "auto-merge-success", map[string]interface{}{
-							"path":        path,
-							"merged_hash": gitvcs.CalculateHash(merged),
-						})
-						a.logInfo(fmt.Sprintf("Auto-merged conflict for file: %s", path))
-					} else {
-						// Auto-merge failed or still has conflicts - notify user
-						runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
-						if conflict.Severity == gitvcs.ConflictCritical {
-							return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
-						}
+			// Temporarily write the frontend content to disk for conflict detection
+			// This ensures DetectConflict uses the user's edited content, not the old file content
+			tempContent := content
+			if err := os.WriteFile(absPath, []byte(tempContent), 0644); err != nil {
+				a.logError(fmt.Sprintf("Failed to write temp content for conflict detection: %v", err))
+			} else {
+				// Now detect conflict - it will use the content we just wrote
+				conflict, err := gitvcs.DetectConflict(a.vcs, a.dataDir, relPath)
+				if err != nil {
+					a.logError(fmt.Sprintf("Failed to detect conflict: %v", err))
+				} else if conflict != nil {
+					// Create backup before handling conflict
+					if err := a.createBackup(path, content); err != nil {
+						a.logError(fmt.Sprintf("Failed to create backup: %v", err))
 					}
-				} else {
-					// Critical conflict - require manual resolution
-					runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
-					return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
+
+					// Try auto-merge for auto-resolvable or warning conflicts
+					// Use the frontend content as LocalContent (user's current edits)
+					if conflict.Severity == gitvcs.ConflictAutoResolvable || conflict.Severity == gitvcs.ConflictWarning {
+						// Use content (from frontend) as LocalContent instead of conflict.LocalContent
+						merged, severity, err := gitvcs.AutoMergeMarkdown(conflict.BaseContent, content, conflict.RemoteContent)
+						if err == nil && severity != gitvcs.ConflictCritical {
+							// Auto-merge successful - use merged content
+							content = merged
+							runtime.EventsEmit(a.ctx, "auto-merge-success", map[string]interface{}{
+								"path":        path,
+								"merged_hash": gitvcs.CalculateHash(merged),
+							})
+							a.logInfo(fmt.Sprintf("Auto-merged conflict for file: %s (using frontend content as LocalContent)", path))
+						} else {
+							// Auto-merge failed or still has conflicts - notify user
+							runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
+							if conflict.Severity == gitvcs.ConflictCritical {
+								return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
+							}
+						}
+					} else {
+						// Critical conflict - require manual resolution
+						runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
+						return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
+					}
 				}
 			}
 		}
 	}
 
 	// Save file
-	err := os.WriteFile(absPath, []byte(content), 0o644)
-	if err != nil {
+	a.logInfo(fmt.Sprintf("SaveFile: writing file %s (content length: %d)", absPath, len(content)))
+	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
+		a.logError(fmt.Sprintf("SaveFile: failed to write file %s: %v", absPath, err))
 		return fmt.Errorf("failed to write file: %v", err)
 	}
+	a.logInfo(fmt.Sprintf("SaveFile: successfully wrote file %s", absPath))
 
 	// Calculate new hash
 	newHash := gitvcs.CalculateHash(content)
+	oldHashShort := ""
+	newHashShort := ""
+	if len(oldHash) >= 8 {
+		oldHashShort = oldHash[:8]
+	}
+	if len(newHash) >= 8 {
+		newHashShort = newHash[:8]
+	}
+	a.logInfo(fmt.Sprintf("SaveFile: oldHash=%s, newHash=%s", oldHashShort, newHashShort))
 
 	// Commit to Git if content changed
 	if a.vcs != nil && oldHash != newHash {
@@ -913,6 +1084,45 @@ func (a *App) createBackup(path, content string) error {
 
 	a.logInfo(fmt.Sprintf("Created backup: %s", backupPath))
 	return nil
+}
+
+// ensureDocID ensures that the content has a doc_id in frontmatter, generating one if needed
+// Returns the content with doc_id and the doc_id value
+func (a *App) ensureDocID(content string) (string, string, error) {
+	frontMatter, body := fm.ParseFrontMatter(content)
+
+	var docID string
+	if frontMatter != nil {
+		docID = frontMatter.DocID
+	}
+
+	// If doc_id doesn't exist, generate one
+	if docID == "" {
+		// Ensure .mdsys directory exists
+		mdsysDir := filepath.Join(a.dataDir, ".mdsys")
+		if err := os.MkdirAll(mdsysDir, 0755); err != nil {
+			return "", "", fmt.Errorf("failed to create .mdsys directory: %v", err)
+		}
+
+		seqFile := filepath.Join(mdsysDir, "doc_seq.json")
+		newDocID, err := docid.GenerateDocID(seqFile)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to generate doc_id: %v", err)
+		}
+		docID = newDocID
+
+		// Create frontmatter if it doesn't exist
+		if frontMatter == nil {
+			frontMatter = &fm.FrontMatter{}
+		}
+		frontMatter.DocID = docID
+
+		// Reconstruct content with new frontmatter
+		formattedFM := fm.FormatFrontMatter(frontMatter)
+		content = formattedFM + body
+	}
+
+	return content, docID, nil
 }
 
 // ResolveConflict resolves a file conflict using the specified strategy
@@ -1064,6 +1274,187 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 			return match
 		})
 
+		// Check for pinned version references and add warnings (same logic as regular markdown)
+		sourceDocID := ""
+		if frontMatter != nil {
+			sourceDocID = frontMatter.DocID
+		}
+		a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: sourceDocID=%s", sourceDocID))
+
+		// If we have a doc_id, check for pinned version references
+		if sourceDocID != "" {
+			// Get graph data to find edges
+			graphData, err := a.GetGraphData()
+			if err != nil {
+				a.logError(fmt.Sprintf("PreviewMarkdown [Marp]: failed to get graph data: %v", err))
+			} else {
+				a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: got graph data with %d edges", len(graphData.Edges)))
+				// Get the actual file path from doc_id using doc_map.json
+				actualFilePath := ""
+				docMapPath := filepath.Join(a.dataDir, ".mdsys", "doc_map.json")
+				if docMapData, err := os.ReadFile(docMapPath); err == nil {
+					var docMap map[string]string
+					if err := json.Unmarshal(docMapData, &docMap); err == nil {
+						if path, exists := docMap[sourceDocID]; exists {
+							actualFilePath = path
+							a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: found file path for doc_id %s: %s", sourceDocID, actualFilePath))
+						} else {
+							a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: no file path found for doc_id %s in doc_map", sourceDocID))
+						}
+					}
+				}
+
+				// Extract links from markdown body to build a mapping
+				links := a.extractLinks(markdownBody)
+				a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: extracted %d links from markdown", len(links)))
+				// Create a map of target node IDs to original link targets for quick lookup
+				targetIDToLinkTarget := make(map[string]string) // targetID -> original link target (e.g., "file.md")
+				// Use actual file path if available, otherwise use content root
+				currentFilePath := actualFilePath
+				if currentFilePath == "" {
+					currentFilePath = "content/"
+				}
+				for _, link := range links {
+					if link.Kind == "wikilink" || link.Kind == "markdown_link" {
+						// Resolve link target using the actual file path
+						targetID := a.resolveLinkTarget(link, currentFilePath)
+						if targetID != "" {
+							targetIDToLinkTarget[targetID] = link.Target
+							a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: mapped link %s -> targetID %s (from file %s)", link.Target, targetID, currentFilePath))
+						} else {
+							a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: failed to resolve link %s from file %s", link.Target, currentFilePath))
+						}
+					}
+				}
+
+				// Find edges that reference pinned versions and have been updated
+				warningCount := 0
+				for _, edge := range graphData.Edges {
+					a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: checking edge: SourceDocID=%s, ToVersionMode=%s, TargetUpdated=%v", edge.SourceDocID, edge.ToVersionMode, edge.TargetUpdated))
+					if edge.SourceDocID == sourceDocID && edge.ToVersionMode == "pinned" && edge.TargetUpdated {
+						a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: found pinned updated edge: %s -> %s (TargetDocID: %s)", edge.Source, edge.Target, edge.TargetDocID))
+						// This link references a pinned version that has been updated
+						// Find the corresponding HTML link and add warning
+
+						// Get the current target path from doc_map.json using TargetDocID (handles renames)
+						targetPath := strings.TrimPrefix(edge.Target, "doc:/")
+						if edge.TargetDocID != "" {
+							// Try to get the current path from doc_map.json
+							if docMapData, err := os.ReadFile(docMapPath); err == nil {
+								var targetDocMap map[string]string
+								if err := json.Unmarshal(docMapData, &targetDocMap); err == nil {
+									if currentPath, exists := targetDocMap[edge.TargetDocID]; exists {
+										// Use the current path from doc_map (handles renames)
+										targetPath = strings.TrimPrefix(currentPath, "content/")
+										a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: resolved target path from doc_map: %s -> %s (doc_id: %s)", edge.Target, targetPath, edge.TargetDocID))
+									}
+								}
+							}
+						}
+
+						// Get the original link target from the markdown
+						// Try both old and new target IDs
+						originalLinkTarget := ""
+						hasLink := false
+
+						// First try with the edge.Target (might be old path after rename)
+						if linkTarget, ok := targetIDToLinkTarget[edge.Target]; ok {
+							originalLinkTarget = linkTarget
+							hasLink = true
+							a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: found original link target using edge.Target: %s -> %s", edge.Target, originalLinkTarget))
+						} else if edge.TargetDocID != "" {
+							// Try to find by constructing target ID from current path
+							currentTargetID := "doc:/" + targetPath
+							if linkTarget, ok := targetIDToLinkTarget[currentTargetID]; ok {
+								originalLinkTarget = linkTarget
+								hasLink = true
+								a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: found original link target using current path: %s -> %s", currentTargetID, originalLinkTarget))
+							} else {
+								a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: no original link target found for %s or %s", edge.Target, currentTargetID))
+							}
+						} else {
+							a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: no original link target found for %s", edge.Target))
+						}
+
+						// Build patterns to match the href attribute in HTML
+						// The href might be the original link target, or a resolved path
+						linkPatterns := []string{}
+						if hasLink {
+							// Add the original link target (e.g., "file.md" or "../file.md")
+							linkPatterns = append(linkPatterns, regexp.QuoteMeta(originalLinkTarget))
+							// Also try with .html extension
+							if strings.HasSuffix(originalLinkTarget, ".md") {
+								linkPatterns = append(linkPatterns, regexp.QuoteMeta(strings.TrimSuffix(originalLinkTarget, ".md")+".html"))
+							}
+						}
+						// Add the resolved target path
+						linkPatterns = append(linkPatterns, regexp.QuoteMeta(targetPath))
+						if strings.HasSuffix(targetPath, ".md") {
+							linkPatterns = append(linkPatterns, regexp.QuoteMeta(strings.TrimSuffix(targetPath, ".md")+".html"))
+						}
+						// Also try with leading slash
+						linkPatterns = append(linkPatterns, regexp.QuoteMeta("/"+targetPath))
+						if strings.HasSuffix(targetPath, ".md") {
+							linkPatterns = append(linkPatterns, regexp.QuoteMeta("/"+strings.TrimSuffix(targetPath, ".md")+".html"))
+						}
+
+						// Also add URL-encoded versions of patterns for multibyte characters
+						urlEncodedPatterns := []string{}
+						for _, pattern := range linkPatterns {
+							urlEncodedPatterns = append(urlEncodedPatterns, pattern)
+							// Add URL-encoded version (for multibyte characters)
+							// Remove regex escaping first, then URL encode, then re-escape for regex
+							unescaped := strings.ReplaceAll(pattern, "\\", "")
+							urlEncoded := url.QueryEscape(unescaped)
+							if urlEncoded != unescaped {
+								urlEncodedPatterns = append(urlEncodedPatterns, regexp.QuoteMeta(urlEncoded))
+							}
+						}
+						linkPatterns = urlEncodedPatterns
+
+						a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: trying %d patterns to match link (including URL-encoded)", len(linkPatterns)))
+
+						// Match <a> tags that link to this target and add warning
+						// Use a map to track which links already have warnings to avoid duplicates
+						warnedLinks := make(map[string]bool)
+						for _, pattern := range linkPatterns {
+							// Match <a> tag with href containing the pattern, but not already containing the warning
+							linkRegex := regexp.MustCompile(`(<a[^>]+href=["']([^"']*` + pattern + `[^"']*)["'][^>]*>.*?</a>)`)
+							html = linkRegex.ReplaceAllStringFunc(html, func(match string) string {
+								// Check if warning already added to this link
+								if strings.Contains(match, "version-warning") {
+									return match
+								}
+								// Extract href to check if we've already warned for this link
+								hrefMatch := regexp.MustCompile(`href=["']([^"']+)["']`)
+								if hrefSubmatch := hrefMatch.FindStringSubmatch(match); len(hrefSubmatch) > 1 {
+									href := hrefSubmatch[1]
+									if warnedLinks[href] {
+										// Already warned for this href, skip
+										return match
+									}
+									warnedLinks[href] = true
+								}
+								// Add warning after the closing </a> tag
+								// Create warning HTML with update button for this specific edge
+								warningHTML := fmt.Sprintf(
+									`<span class="version-warning" style="color: #ff6b6b; font-size: 0.9em; margin-left: 0.5em;">⚠️ 古いバージョンを参照しています <button class="update-to-latest-btn" data-source-doc-id="%s" data-target-doc-id="%s" style="margin-left: 0.5em; padding: 2px 8px; font-size: 0.85em; background: #4CAF50; color: white; border: none; border-radius: 3px; cursor: pointer;" onclick="updateLinkToLatest(this)">最新版に更新</button></span>`,
+									edge.SourceDocID, edge.TargetDocID)
+								warningCount++
+								a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: added warning to link matching pattern: %s", pattern))
+								return match + warningHTML
+							})
+						}
+					}
+				}
+				if warningCount > 0 {
+					a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: added %d warnings total", warningCount))
+				} else {
+					a.logInfo("PreviewMarkdown [Marp]: no warnings added (no matching edges or links)")
+				}
+			}
+		}
+
 		return html, nil
 	}
 
@@ -1123,6 +1514,216 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 		}
 		return match
 	})
+
+	// Check for pinned version references and add warnings
+	// Extract doc_id from frontmatter
+	sourceDocID := ""
+	if frontMatter != nil {
+		sourceDocID = frontMatter.DocID
+	}
+	a.logInfo(fmt.Sprintf("PreviewMarkdown: sourceDocID=%s", sourceDocID))
+
+	// If we have a doc_id, check for pinned version references
+	if sourceDocID != "" {
+		// Get graph data to find edges
+		graphData, err := a.GetGraphData()
+		if err != nil {
+			a.logError(fmt.Sprintf("PreviewMarkdown: failed to get graph data: %v", err))
+		} else {
+			a.logInfo(fmt.Sprintf("PreviewMarkdown: got graph data with %d edges", len(graphData.Edges)))
+			// Get the actual file path from doc_id using doc_map.json
+			actualFilePath := ""
+			docMapPath := filepath.Join(a.dataDir, ".mdsys", "doc_map.json")
+			if docMapData, err := os.ReadFile(docMapPath); err == nil {
+				var docMap map[string]string
+				if err := json.Unmarshal(docMapData, &docMap); err == nil {
+					if path, exists := docMap[sourceDocID]; exists {
+						actualFilePath = path
+						a.logInfo(fmt.Sprintf("PreviewMarkdown: found file path for doc_id %s: %s", sourceDocID, actualFilePath))
+					} else {
+						a.logInfo(fmt.Sprintf("PreviewMarkdown: no file path found for doc_id %s in doc_map", sourceDocID))
+					}
+				}
+			}
+
+			// Extract links from markdown body to build a mapping
+			links := a.extractLinks(markdownBody)
+			a.logInfo(fmt.Sprintf("PreviewMarkdown: extracted %d links from markdown", len(links)))
+			// Create a map of target node IDs to original link targets for quick lookup
+			targetIDToLinkTarget := make(map[string]string) // targetID -> original link target (e.g., "file.md")
+			// Use actual file path if available, otherwise use content root
+			currentFilePath := actualFilePath
+			if currentFilePath == "" {
+				currentFilePath = "content/"
+			}
+			for _, link := range links {
+				if link.Kind == "wikilink" || link.Kind == "markdown_link" {
+					// Resolve link target using the actual file path
+					targetID := a.resolveLinkTarget(link, currentFilePath)
+					if targetID != "" {
+						targetIDToLinkTarget[targetID] = link.Target
+						a.logInfo(fmt.Sprintf("PreviewMarkdown: mapped link %s -> targetID %s (from file %s)", link.Target, targetID, currentFilePath))
+					} else {
+						a.logInfo(fmt.Sprintf("PreviewMarkdown: failed to resolve link %s from file %s", link.Target, currentFilePath))
+					}
+				}
+			}
+
+			// Find edges that reference pinned versions and have been updated
+			warningCount := 0
+			for _, edge := range graphData.Edges {
+				a.logInfo(fmt.Sprintf("PreviewMarkdown: checking edge: SourceDocID=%s, ToVersionMode=%s, TargetUpdated=%v", edge.SourceDocID, edge.ToVersionMode, edge.TargetUpdated))
+				if edge.SourceDocID == sourceDocID && edge.ToVersionMode == "pinned" && edge.TargetUpdated {
+					a.logInfo(fmt.Sprintf("PreviewMarkdown: found pinned updated edge: %s -> %s (TargetDocID: %s)", edge.Source, edge.Target, edge.TargetDocID))
+					// This link references a pinned version that has been updated
+					// Find the corresponding HTML link and add warning
+
+					// Get the current target path from doc_map.json using TargetDocID (handles renames)
+					targetPath := strings.TrimPrefix(edge.Target, "doc:/")
+					if edge.TargetDocID != "" {
+						// Try to get the current path from doc_map.json
+						if docMapData, err := os.ReadFile(docMapPath); err == nil {
+							var targetDocMap map[string]string
+							if err := json.Unmarshal(docMapData, &targetDocMap); err == nil {
+								if currentPath, exists := targetDocMap[edge.TargetDocID]; exists {
+									// Use the current path from doc_map (handles renames)
+									targetPath = strings.TrimPrefix(currentPath, "content/")
+									a.logInfo(fmt.Sprintf("PreviewMarkdown: resolved target path from doc_map: %s -> %s (doc_id: %s)", edge.Target, targetPath, edge.TargetDocID))
+								}
+							}
+						}
+					}
+
+					// Get the original link target from the markdown
+					// Try both old and new target IDs
+					originalLinkTarget := ""
+					hasLink := false
+
+					// First try with the edge.Target (might be old path after rename)
+					if linkTarget, ok := targetIDToLinkTarget[edge.Target]; ok {
+						originalLinkTarget = linkTarget
+						hasLink = true
+						a.logInfo(fmt.Sprintf("PreviewMarkdown: found original link target using edge.Target: %s -> %s", edge.Target, originalLinkTarget))
+					} else if edge.TargetDocID != "" {
+						// Try to find by constructing target ID from current path
+						currentTargetID := "doc:/" + targetPath
+						if linkTarget, ok := targetIDToLinkTarget[currentTargetID]; ok {
+							originalLinkTarget = linkTarget
+							hasLink = true
+							a.logInfo(fmt.Sprintf("PreviewMarkdown: found original link target using current path: %s -> %s", currentTargetID, originalLinkTarget))
+						} else {
+							a.logInfo(fmt.Sprintf("PreviewMarkdown: no original link target found for %s or %s", edge.Target, currentTargetID))
+						}
+					} else {
+						a.logInfo(fmt.Sprintf("PreviewMarkdown: no original link target found for %s", edge.Target))
+					}
+
+					// Build patterns to match the href attribute in HTML
+					// The href might be the original link target, or a resolved path
+					linkPatterns := []string{}
+					if hasLink {
+						// Add the original link target (e.g., "file.md" or "../file.md")
+						linkPatterns = append(linkPatterns, regexp.QuoteMeta(originalLinkTarget))
+						// Also try with .html extension
+						if strings.HasSuffix(originalLinkTarget, ".md") {
+							linkPatterns = append(linkPatterns, regexp.QuoteMeta(strings.TrimSuffix(originalLinkTarget, ".md")+".html"))
+						}
+					}
+					// Add the resolved target path
+					linkPatterns = append(linkPatterns, regexp.QuoteMeta(targetPath))
+					if strings.HasSuffix(targetPath, ".md") {
+						linkPatterns = append(linkPatterns, regexp.QuoteMeta(strings.TrimSuffix(targetPath, ".md")+".html"))
+					}
+					// Also try with leading slash
+					linkPatterns = append(linkPatterns, regexp.QuoteMeta("/"+targetPath))
+					if strings.HasSuffix(targetPath, ".md") {
+						linkPatterns = append(linkPatterns, regexp.QuoteMeta("/"+strings.TrimSuffix(targetPath, ".md")+".html"))
+					}
+
+					// Also add URL-encoded versions of patterns for multibyte characters
+					urlEncodedPatterns := []string{}
+					for _, pattern := range linkPatterns {
+						urlEncodedPatterns = append(urlEncodedPatterns, pattern)
+						// Add URL-encoded version (for multibyte characters)
+						// Remove regex escaping first, then URL encode, then re-escape for regex
+						unescaped := strings.ReplaceAll(pattern, "\\", "")
+						urlEncoded := url.QueryEscape(unescaped)
+						if urlEncoded != unescaped {
+							urlEncodedPatterns = append(urlEncodedPatterns, regexp.QuoteMeta(urlEncoded))
+						}
+					}
+					linkPatterns = urlEncodedPatterns
+
+					a.logInfo(fmt.Sprintf("PreviewMarkdown: trying %d patterns to match link (including URL-encoded)", len(linkPatterns)))
+					// Debug: log first few patterns
+					if len(linkPatterns) > 0 {
+						maxLog := 3
+						if len(linkPatterns) < maxLog {
+							maxLog = len(linkPatterns)
+						}
+						for i := 0; i < maxLog; i++ {
+							a.logInfo(fmt.Sprintf("PreviewMarkdown: pattern %d: %s", i+1, linkPatterns[i]))
+						}
+					}
+
+					// Debug: extract all href attributes from HTML to see what we're matching against
+					hrefRegex := regexp.MustCompile(`href=["']([^"']+)["']`)
+					allHrefs := hrefRegex.FindAllStringSubmatch(html, -1)
+					a.logInfo(fmt.Sprintf("PreviewMarkdown: found %d href attributes in HTML", len(allHrefs)))
+					if len(allHrefs) > 0 {
+						maxLog := 3
+						if len(allHrefs) < maxLog {
+							maxLog = len(allHrefs)
+						}
+						for i := 0; i < maxLog; i++ {
+							if len(allHrefs[i]) > 1 {
+								a.logInfo(fmt.Sprintf("PreviewMarkdown: href %d: %s", i+1, allHrefs[i][1]))
+							}
+						}
+					}
+
+					// Match <a> tags that link to this target and add warning
+					// Use a map to track which links already have warnings to avoid duplicates
+					warnedLinks := make(map[string]bool)
+					for _, pattern := range linkPatterns {
+						// Match <a> tag with href containing the pattern, but not already containing the warning
+						linkRegex := regexp.MustCompile(`(<a[^>]+href=["']([^"']*` + pattern + `[^"']*)["'][^>]*>.*?</a>)`)
+						html = linkRegex.ReplaceAllStringFunc(html, func(match string) string {
+							// Check if warning already added to this link
+							if strings.Contains(match, "version-warning") {
+								return match
+							}
+							// Extract href to check if we've already warned for this link
+							hrefMatch := regexp.MustCompile(`href=["']([^"']+)["']`)
+							if hrefSubmatch := hrefMatch.FindStringSubmatch(match); len(hrefSubmatch) > 1 {
+								href := hrefSubmatch[1]
+								if warnedLinks[href] {
+									// Already warned for this href, skip
+									return match
+								}
+								warnedLinks[href] = true
+							}
+							// Add warning after the closing </a> tag
+							// Create warning HTML with update button for this specific edge
+							warningHTML := fmt.Sprintf(
+								`<span class="version-warning" style="color: #ff6b6b; font-size: 0.9em; margin-left: 0.5em;">⚠️ 古いバージョンを参照しています <button class="update-to-latest-btn" data-source-doc-id="%s" data-target-doc-id="%s" style="margin-left: 0.5em; padding: 2px 8px; font-size: 0.85em; background: #4CAF50; color: white; border: none; border-radius: 3px; cursor: pointer;" onclick="updateLinkToLatest(this)">最新版に更新</button></span>`,
+								edge.SourceDocID, edge.TargetDocID)
+							warningCount++
+							a.logInfo(fmt.Sprintf("PreviewMarkdown: added warning to link matching pattern: %s", pattern))
+							return match + warningHTML
+						})
+					}
+				}
+			}
+			if warningCount > 0 {
+				a.logInfo(fmt.Sprintf("PreviewMarkdown: added %d warnings total", warningCount))
+			} else {
+				a.logInfo("PreviewMarkdown: no warnings added (no matching edges or links)")
+			}
+		}
+	} else {
+		a.logInfo("PreviewMarkdown: no sourceDocID, skipping version warning check")
+	}
 
 	// Debug: log a sample of the generated HTML to check for KaTeX processing
 	if strings.Contains(html, "katex-inline") || strings.Contains(html, "katex-block") {
@@ -1474,12 +2075,8 @@ func (a *App) importImageFromReader(originalName string, src io.Reader) (string,
 		return "", fmt.Errorf("create webp image file: %w", err)
 	}
 
-	webpOptions := &webp.Options{Lossless: format == "png" || format == "gif"}
-	if !webpOptions.Lossless {
-		webpOptions.Quality = 90
-	}
-
-	if err := webp.Encode(webpFile, img, webpOptions); err != nil {
+	lossless := format == "png" || format == "gif"
+	if err := webputil.EncodeWebP(webpFile, img, lossless); err != nil {
 		webpFile.Close()
 		return "", fmt.Errorf("encode webp image: %w", err)
 	}
@@ -1584,6 +2181,108 @@ func (a *App) importAudioFromReader(originalName string, src io.Reader) (string,
 	a.logInfo(fmt.Sprintf("Audio imported: %s -> %s", originalName, relPath))
 
 	a.startTranscriptionJob(destPath, relPath)
+	return relPath, nil
+}
+
+// ImportPdfFile copies a PDF file into karte_data/content.
+func (a *App) ImportPdfFile(src string) (string, error) {
+	if src == "" {
+		return "", fmt.Errorf("source path is required")
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return "", fmt.Errorf("stat pdf: %w", err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("pdf path must be a file")
+	}
+	ext := strings.ToLower(filepath.Ext(src))
+	if ext != ".pdf" {
+		return "", fmt.Errorf("file is not a PDF: %s", ext)
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		return "", fmt.Errorf("open pdf: %w", err)
+	}
+	defer f.Close()
+	return a.importPdfFromReader(info.Name(), f)
+}
+
+// ImportPdfBase64 saves PDF content provided as base64 (used when native paths are not available).
+func (a *App) ImportPdfBase64(filename, base64Data string) (string, error) {
+	if filename == "" {
+		return "", fmt.Errorf("filename is required")
+	}
+	if base64Data == "" {
+		return "", fmt.Errorf("pdf data is empty")
+	}
+	data, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		return "", fmt.Errorf("decode pdf data: %w", err)
+	}
+	return a.importPdfFromReader(filename, bytes.NewReader(data))
+}
+
+func (a *App) importPdfFromReader(originalName string, src io.Reader) (string, error) {
+	if originalName == "" {
+		return "", fmt.Errorf("original name is required")
+	}
+	ext := strings.ToLower(filepath.Ext(originalName))
+	if ext != ".pdf" {
+		return "", fmt.Errorf("unsupported file format: %s", ext)
+	}
+
+	// Save PDF to content directory
+	contentDir := filepath.Join(a.dataDir, "content")
+	if err := os.MkdirAll(contentDir, 0o755); err != nil {
+		return "", fmt.Errorf("prepare content dir: %w", err)
+	}
+
+	base := strings.TrimSuffix(originalName, ext)
+	base = audio.SanitizeFileName(base)
+	if base == "" {
+		base = "document"
+	}
+	filename := base + ext
+
+	// Check if file already exists, add number suffix if needed
+	baseIndex := 1
+	for {
+		destPath := filepath.Join(contentDir, filename)
+		if _, err := os.Stat(destPath); os.IsNotExist(err) {
+			break
+		}
+		filename = fmt.Sprintf("%s_%02d%s", base, baseIndex, ext)
+		baseIndex++
+	}
+
+	destPath := filepath.Join(contentDir, filename)
+	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return "", fmt.Errorf("create pdf file: %w", err)
+	}
+	if _, err := io.Copy(out, src); err != nil {
+		out.Close()
+		return "", fmt.Errorf("write pdf file: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return "", fmt.Errorf("close pdf file: %w", err)
+	}
+
+	relPath, err := filepath.Rel(a.dataDir, destPath)
+	if err != nil {
+		relPath = destPath
+	}
+	relPath = filepath.ToSlash(relPath)
+
+	payload := map[string]interface{}{
+		"path":          relPath,
+		"original_name": originalName,
+		"saved_name":    filename,
+	}
+	runtime.EventsEmit(a.ctx, "pdf-imported", payload)
+	a.logInfo(fmt.Sprintf("PDF imported: %s -> %s", originalName, relPath))
+
 	return relPath, nil
 }
 
@@ -2031,19 +2730,41 @@ func (a *App) GetGraphData() (*GraphData, error) {
 
 		var fileHash string
 		var fileContent string
+		var frontMatter *fm.FrontMatter
+		var docIDFromEnsure string // ensureDocIDで取得したdocIDを保持
 
 		// ファイル内容を読み込み
 		var tags []string
 		var markdownBody string
 		if content, err := os.ReadFile(filepath.Join(a.dataDir, filePath)); err == nil {
 			fileContent = string(content)
+
+			// Ensure doc_id exists (lazy assignment)
+			contentWithDocID, docID, err := a.ensureDocID(fileContent)
+			if err != nil {
+				a.logError(fmt.Sprintf("Failed to ensure doc_id for %s: %v", filePath, err))
+				// Continue with original content if doc_id generation fails
+			} else {
+				docIDFromEnsure = docID // ensureDocIDで取得したdocIDを保持
+				if docID != "" && contentWithDocID != fileContent {
+					// Save the updated content with doc_id if it was added
+					absPath := filepath.Join(a.dataDir, filePath)
+					if err := os.WriteFile(absPath, []byte(contentWithDocID), 0644); err != nil {
+						a.logError(fmt.Sprintf("Failed to save file with doc_id: %v", err))
+					} else {
+						fileContent = contentWithDocID
+						a.logInfo(fmt.Sprintf("Assigned doc_id to file: %s -> %s", filePath, docID))
+					}
+				}
+			}
+
 			title = a.extractTitleFromContent(fileContent, title)
 			// タグを抽出
 			tags = fm.ExtractTags(fileContent)
 			// デバッグ: フロントマターのパース結果を確認
 			frontMatter, body := fm.ParseFrontMatter(fileContent)
 			if frontMatter != nil {
-				a.logInfo(fmt.Sprintf("File %s: frontmatter parsed - title: %q, tags: %q, theme: %q", filePath, frontMatter.Title, frontMatter.Tags, frontMatter.Theme))
+				a.logInfo(fmt.Sprintf("File %s: frontmatter parsed - title: %q, tags: %q, theme: %q, doc_id: %q", filePath, frontMatter.Title, frontMatter.Tags, frontMatter.Theme, frontMatter.DocID))
 				a.logInfo(fmt.Sprintf("File %s: extracted tags: %v", filePath, tags))
 			} else {
 				a.logInfo(fmt.Sprintf("File %s: no frontmatter found", filePath))
@@ -2056,9 +2777,19 @@ func (a *App) GetGraphData() (*GraphData, error) {
 			fileHash = gitvcs.CalculateHash(fileContent)
 		}
 
+		// doc_idを取得（frontMatterから取得、なければensureDocIDで取得したdocIDを使用）
+		var docID string
+		if frontMatter != nil && frontMatter.DocID != "" {
+			docID = frontMatter.DocID
+		} else if docIDFromEnsure != "" {
+			// frontMatterにdocIDがない場合、ensureDocIDで取得したdocIDを使用
+			docID = docIDFromEnsure
+		}
+
 		// ノードを作成
 		nodes[nodeID] = &GraphNode{
 			ID:     nodeID,
+			DocID:  docID,
 			Label:  title,
 			Kind:   "note",
 			Exists: true,
@@ -2098,6 +2829,21 @@ func (a *App) GetGraphData() (*GraphData, error) {
 					// エッジIDを生成
 					edgeID := fmt.Sprintf("e_%s_%s", strings.ReplaceAll(nodeID, "/", "_"), strings.ReplaceAll(targetID, "/", "_"))
 
+					// ターゲットノードのdoc_idを取得
+					var targetDocID string
+					if targetNode, exists := nodes[targetID]; exists {
+						targetDocID = targetNode.DocID
+					} else if strings.HasPrefix(targetID, "doc:/") {
+						// ターゲットファイルがまだ処理されていない場合、ファイルを読み込んでdoc_idを取得
+						targetPath := strings.TrimPrefix(targetID, "doc:/")
+						targetFilePath := filepath.Join(a.dataDir, "content", targetPath)
+						if targetContent, err := os.ReadFile(targetFilePath); err == nil {
+							if targetFM, _ := fm.ParseFrontMatter(string(targetContent)); targetFM != nil {
+								targetDocID = targetFM.DocID
+							}
+						}
+					}
+
 					// 既存のエッジがあるかチェックして、ターゲットの更新状況を判定
 					targetUpdated := false
 					storedTargetHash := currentTargetHash // デフォルトは現在のハッシュ
@@ -2113,16 +2859,30 @@ func (a *App) GetGraphData() (*GraphData, error) {
 					}
 
 					// エッジを作成または更新
+					// リンク作成時は常にpinnedバージョンとして記録（リンク作成時のターゲットのバージョンを固定）
+					toVersionMode := "pinned"
+					toVersionID := storedTargetHash // リンク作成時のターゲットのハッシュをバージョンIDとして保存
+					if toVersionID == "" {
+						// 初回リンク作成時は現在のハッシュを使用
+						toVersionID = currentTargetHash
+						toVersionMode = "pinned"
+					}
+
 					edges[edgeID] = &GraphEdge{
 						ID:            edgeID,
 						Source:        nodeID,
 						Target:        targetID,
+						SourceDocID:   docID,
+						TargetDocID:   targetDocID,
 						Kind:          link.Kind,
 						Weight:        edgeCounts[edgeKey],
 						SourceHash:    fileHash,
 						TargetHash:    storedTargetHash, // 以前のハッシュを保持（初回は現在のハッシュ）
 						TargetUpdated: targetUpdated,
+						ToVersionMode: toVersionMode,
+						ToVersionID:   toVersionID,
 					}
+					a.logInfo(fmt.Sprintf("    Created edge with SourceDocID=%s, TargetDocID=%s, ToVersionMode=%s, TargetUpdated=%v", docID, targetDocID, toVersionMode, targetUpdated))
 					sourceHashShort := ""
 					if len(fileHash) >= 8 {
 						sourceHashShort = fileHash[:8]
@@ -2274,19 +3034,66 @@ func (a *App) GetGraphData() (*GraphData, error) {
 		if persistedEdge, exists := persistedLinks[edgeID]; exists && persistedEdge.TargetHash != "" {
 			// 永続化されたハッシュがある場合、それと比較
 			currentHash := ""
+
+			// まず、edge.Target（古いパス）で試す
 			if targetNode, exists := nodes[edge.Target]; exists {
 				currentHash = targetNode.Hash
+				a.logInfo(fmt.Sprintf("Target updated check for edge %s: found hash from nodes[%s]: %s", edgeID, edge.Target, currentHash[:8]))
 			} else if strings.HasPrefix(edge.Target, "doc:/") {
 				targetPath := strings.TrimPrefix(edge.Target, "doc:/")
 				targetFilePath := filepath.Join(a.dataDir, "content", targetPath)
 				if targetContent, err := os.ReadFile(targetFilePath); err == nil {
 					currentHash = gitvcs.CalculateHash(string(targetContent))
+					a.logInfo(fmt.Sprintf("Target updated check for edge %s: found hash from file %s: %s", edgeID, targetPath, currentHash[:8]))
+				} else {
+					a.logInfo(fmt.Sprintf("Target updated check for edge %s: file not found at %s (may be renamed)", edgeID, targetPath))
+				}
+			}
+
+			// edge.Targetでファイルが見つからない場合（リネーム後）、TargetDocIDを使って現在のパスを取得
+			if currentHash == "" && edge.TargetDocID != "" {
+				a.logInfo(fmt.Sprintf("Target updated check for edge %s: trying to resolve via TargetDocID %s", edgeID, edge.TargetDocID))
+				docMapPath := filepath.Join(a.dataDir, ".mdsys", "doc_map.json")
+				if docMapData, err := os.ReadFile(docMapPath); err == nil {
+					var docMap map[string]string
+					if err := json.Unmarshal(docMapData, &docMap); err == nil {
+						if currentPath, exists := docMap[edge.TargetDocID]; exists {
+							// doc_mapから取得したパスでファイルを読み込む
+							// currentPathは "content/..." 形式なので、filepath.FromSlashで正規化してから結合
+							normalizedPath := filepath.FromSlash(currentPath)
+							targetFilePath := filepath.Join(a.dataDir, normalizedPath)
+							a.logInfo(fmt.Sprintf("Target updated check: attempting to read file at resolved path (doc_id=%s): %s -> %s", edge.TargetDocID, currentPath, targetFilePath))
+							if targetContent, err := os.ReadFile(targetFilePath); err == nil {
+								currentHash = gitvcs.CalculateHash(string(targetContent))
+								a.logInfo(fmt.Sprintf("Target updated check: resolved path via doc_map for doc_id %s: %s (hash: %s)", edge.TargetDocID, currentPath, currentHash[:8]))
+							} else {
+								a.logError(fmt.Sprintf("Target updated check: failed to read file at resolved path %s (normalized: %s): %v", currentPath, targetFilePath, err))
+								// フォールバック: 直接パスを試す（マルチバイト文字の問題の可能性）
+								if targetContent2, err2 := os.ReadFile(filepath.Join(a.dataDir, currentPath)); err2 == nil {
+									currentHash = gitvcs.CalculateHash(string(targetContent2))
+									a.logInfo(fmt.Sprintf("Target updated check: succeeded with direct path join for doc_id %s: %s (hash: %s)", edge.TargetDocID, currentPath, currentHash[:8]))
+								} else {
+									a.logError(fmt.Sprintf("Target updated check: fallback also failed for %s: %v", currentPath, err2))
+								}
+							}
+						} else {
+							a.logInfo(fmt.Sprintf("Target updated check: doc_id %s not found in doc_map", edge.TargetDocID))
+						}
+					} else {
+						a.logError(fmt.Sprintf("Target updated check: failed to parse doc_map.json: %v", err))
+					}
+				} else {
+					a.logError(fmt.Sprintf("Target updated check: failed to read doc_map.json: %v", err))
 				}
 			}
 
 			if currentHash != "" && persistedEdge.TargetHash != currentHash {
 				edge.TargetUpdated = true
 				a.logInfo(fmt.Sprintf("Target updated detected for edge %s: old=%s, new=%s", edgeID, persistedEdge.TargetHash[:8], currentHash[:8]))
+			} else if currentHash == "" {
+				a.logInfo(fmt.Sprintf("Target updated check for edge %s: currentHash is empty, cannot determine if updated", edgeID))
+			} else {
+				a.logInfo(fmt.Sprintf("Target updated check for edge %s: hash unchanged (old=%s, new=%s)", edgeID, persistedEdge.TargetHash[:8], currentHash[:8]))
 			}
 			// 永続化されたハッシュを保持（リンク作成時のハッシュ）
 			edge.TargetHash = persistedEdge.TargetHash
@@ -2403,6 +3210,40 @@ func (a *App) GetGraphData() (*GraphData, error) {
 		}
 	}
 
+	// doc_idからパスへのマッピングを保存
+	docMapPath := filepath.Join(a.dataDir, ".mdsys", "doc_map.json")
+	docMap := make(map[string]string)
+
+	// 既存のマッピングを読み込む
+	if data, err := os.ReadFile(docMapPath); err == nil {
+		if err := json.Unmarshal(data, &docMap); err != nil {
+			a.logError(fmt.Sprintf("Failed to parse doc_map.json: %v", err))
+			docMap = make(map[string]string)
+		}
+	}
+
+	// 各ノードのdoc_idとパスのマッピングを更新
+	for _, node := range nodeList {
+		if node.DocID != "" && strings.HasPrefix(node.ID, "doc:/") {
+			path := strings.TrimPrefix(node.ID, "doc:/")
+			contentPath := filepath.Join("content", path)
+			docMap[node.DocID] = contentPath
+		}
+	}
+
+	// マッピングを保存
+	if docMapJSON, err := json.MarshalIndent(docMap, "", "  "); err == nil {
+		if err := os.MkdirAll(filepath.Dir(docMapPath), 0755); err == nil {
+			if err := os.WriteFile(docMapPath, docMapJSON, 0644); err == nil {
+				a.logInfo(fmt.Sprintf("Saved %d doc_id mappings to %s", len(docMap), docMapPath))
+			} else {
+				a.logError(fmt.Sprintf("Failed to write doc_map.json: %v", err))
+			}
+		}
+	} else {
+		a.logError(fmt.Sprintf("Failed to marshal doc_map: %v", err))
+	}
+
 	// デバッグ用：ノードIDとエッジの詳細をログ出力
 	a.logInfo(fmt.Sprintf("Generated graph with %d nodes and %d edges", len(nodeList), len(edgeList)))
 
@@ -2449,10 +3290,139 @@ func (a *App) ExportPreviewHTML(html string) (string, error) {
 }
 
 // ExportPDF renders given HTML as PDF to karte_data/export and returns the path
-func (a *App) ExportPDF(html string) (string, error) {
+func (a *App) ExportPDF(html string) error {
 	if html == "" {
-		return "", fmt.Errorf("empty html")
+		return fmt.Errorf("empty html")
 	}
+
+	// 非同期で実行
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				a.logError(fmt.Sprintf("ExportPDF panic recovered: %v", r))
+				runtime.EventsEmit(a.ctx, "pdf-export-error", map[string]interface{}{
+					"error": fmt.Sprintf("PDF export panic: %v", r),
+				})
+			}
+		}()
+
+		pdfPath, err := a.exportPDFInternal(html)
+		if err != nil {
+			a.logError(fmt.Sprintf("ExportPDF failed: %v", err))
+			runtime.EventsEmit(a.ctx, "pdf-export-error", map[string]interface{}{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		// ファイル情報を取得
+		info, err := os.Stat(pdfPath)
+		if err != nil {
+			a.logError(fmt.Sprintf("ExportPDF: Failed to stat PDF file: %v", err))
+			runtime.EventsEmit(a.ctx, "pdf-export-error", map[string]interface{}{
+				"error": fmt.Sprintf("Failed to stat PDF file: %v", err),
+			})
+			return
+		}
+
+		a.logInfo(fmt.Sprintf("PDF exported: %s (size: %d bytes)", pdfPath, info.Size()))
+		url := strings.ReplaceAll(pdfPath, "\\", "/")
+		runtime.EventsEmit(a.ctx, "pdf-export-completed", map[string]interface{}{
+			"pdfPath": url,
+			"size":    info.Size(),
+		})
+	}()
+
+	return nil
+}
+
+// exportPDFInternal performs the actual PDF export work
+func (a *App) exportPDFInternal(html string) (string, error) {
+	// Convert image URLs to data URIs for PDF export
+	// WKWebView cannot access HTTP URLs, so we need to embed images as data URIs
+	// Track temporary files for cleanup
+	var tempFiles []string
+	defer func() {
+		// Clean up all temporary files
+		for _, tmpFile := range tempFiles {
+			if err := os.Remove(tmpFile); err != nil {
+				a.logError(fmt.Sprintf("Failed to remove temp file: %s, error: %v", tmpFile, err))
+			} else {
+				a.logInfo(fmt.Sprintf("Cleaned up temp file: %s", tmpFile))
+			}
+		}
+	}()
+
+	// 画像変換の進捗を追跡するため、まず画像の数をカウント
+	originalHTMLSize := len(html)
+	imgRegex := regexp.MustCompile(`(<img[^>]+src=["'])([^"']+)(["'][^>]*>)`)
+	matches := imgRegex.FindAllString(html, -1)
+	totalImages := 0
+	for _, match := range matches {
+		parts := imgRegex.FindStringSubmatch(match)
+		if len(parts) >= 4 {
+			imgURL := parts[2]
+			if strings.HasPrefix(imgURL, "/image/") || strings.HasPrefix(imgURL, "data/image/") {
+				totalImages++
+			}
+		}
+	}
+
+	a.logInfo(fmt.Sprintf("PDF export: Starting image conversion (original HTML size: %d bytes, images: %d)", originalHTMLSize, totalImages))
+
+	// 画像変換開始イベント
+	if totalImages > 0 {
+		runtime.EventsEmit(a.ctx, "pdf-export-progress", map[string]interface{}{
+			"currentImage": 0,
+			"totalImages":  totalImages,
+			"htmlSize":     len(html),
+			"stage":        "converting-images",
+		})
+	}
+
+	conversionStartTime := time.Now()
+	html, tempFiles = a.convertImageURLsToDataURIs(html, totalImages)
+	conversionDuration := time.Since(conversionStartTime)
+
+	// HTMLサイズの監視と警告
+	finalHTMLSize := len(html)
+	sizeIncrease := finalHTMLSize - originalHTMLSize
+	a.logInfo(fmt.Sprintf("PDF export: Image conversion completed (duration: %v, original HTML: %d bytes, final HTML: %d bytes, increase: %d bytes)", conversionDuration, originalHTMLSize, finalHTMLSize, sizeIncrease))
+
+	// デバッグ: 変換後のHTMLの内容を確認
+	imgTagCount := strings.Count(html, "<img")
+	dataImageCount := strings.Count(html, "data:image")
+	a.logInfo(fmt.Sprintf("PDF export: DEBUG - After conversion: img tags=%d, data:image occurrences=%d", imgTagCount, dataImageCount))
+
+	// HTMLの最初の2000文字をログに出力（画像部分が含まれる可能性が高い）
+	htmlPreview := html
+	if len(htmlPreview) > 2000 {
+		htmlPreview = htmlPreview[:2000] + "...(truncated)"
+	}
+	a.logInfo(fmt.Sprintf("PDF export: DEBUG - HTML preview (first 2000 chars):\n%s", htmlPreview))
+
+	// data:imageが含まれている部分を抽出してログに出力
+	dataImageRegex := regexp.MustCompile(`data:image[^"']+`)
+	dataImageMatches := dataImageRegex.FindAllString(html, 10) // 最初の10個
+	if len(dataImageMatches) > 0 {
+		for i, match := range dataImageMatches {
+			preview := match
+			if len(preview) > 200 {
+				preview = preview[:200] + "...(truncated)"
+			}
+			a.logInfo(fmt.Sprintf("PDF export: DEBUG - data:image[%d] preview: %s", i, preview))
+		}
+	} else {
+		a.logError("PDF export: DEBUG - No data:image found in converted HTML!")
+	}
+
+	if finalHTMLSize > 1024*1024 {
+		a.logError(fmt.Sprintf("PDF export: WARNING - HTML size exceeds 1MB (%d bytes)", finalHTMLSize))
+	}
+	if finalHTMLSize > 2*1024*1024 {
+		a.logError(fmt.Sprintf("PDF export: ERROR - HTML size exceeds 2MB (%d bytes), PDF generation may fail", finalHTMLSize))
+	}
+
 	exportDir := filepath.Join(a.dataDir, "export")
 	if err := os.MkdirAll(exportDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create export dir: %v", err)
@@ -2460,12 +3430,199 @@ func (a *App) ExportPDF(html string) (string, error) {
 	base := fmt.Sprintf("export-%s.pdf", time.Now().Format("20060102-150405"))
 	pdfPath := filepath.Join(exportDir, base)
 	a.logInfo(fmt.Sprintf("ExportPDF start: out=%s html.len=%d", pdfPath, len(html)))
-	if err := pdfexport.ExportHTMLToPDF(html, pdfPath); err != nil {
+
+	// WKWebView読み込み開始イベント
+	runtime.EventsEmit(a.ctx, "pdf-export-progress", map[string]interface{}{
+		"currentImage": totalImages,
+		"totalImages":  totalImages,
+		"htmlSize":     len(html),
+		"stage":        "loading-webview",
+	})
+
+	a.logInfo("ExportPDF: Calling pdfexport.ExportHTMLToPDF...")
+	if err := pdfexport.ExportHTMLToPDF(html, pdfPath, a.logFilePath); err != nil {
 		a.logError(fmt.Sprintf("ExportPDF failed: %v", err))
-		return "", err
+		return "", fmt.Errorf("PDF export failed: %w", err)
 	}
-	a.logInfo(fmt.Sprintf("PDF exported: %s", pdfPath))
+	a.logInfo("ExportPDF: pdfexport.ExportHTMLToPDF returned successfully")
+
+	// PDF生成完了イベント
+	runtime.EventsEmit(a.ctx, "pdf-export-progress", map[string]interface{}{
+		"currentImage": totalImages,
+		"totalImages":  totalImages,
+		"htmlSize":     len(html),
+		"stage":        "generating-pdf",
+	})
+
+	// Verify that the PDF file was actually created
+	if _, err := os.Stat(pdfPath); os.IsNotExist(err) {
+		a.logError(fmt.Sprintf("ExportPDF: PDF file was not created at %s", pdfPath))
+		return "", fmt.Errorf("PDF file was not created: %s", pdfPath)
+	}
+
+	// Get file info to verify it's not empty
+	info, err := os.Stat(pdfPath)
+	if err != nil {
+		a.logError(fmt.Sprintf("ExportPDF: Failed to stat PDF file: %v", err))
+		return "", fmt.Errorf("failed to stat PDF file: %w", err)
+	}
+	if info.Size() == 0 {
+		a.logError(fmt.Sprintf("ExportPDF: PDF file is empty (0 bytes) at %s", pdfPath))
+		return "", fmt.Errorf("PDF file is empty: %s", pdfPath)
+	}
+
 	return pdfPath, nil
+}
+
+// convertImageURLsToDataURIs converts image URLs in HTML to data URIs
+// This is necessary for PDF export because WKWebView cannot access HTTP URLs
+// Returns the converted HTML and a list of temporary files that need to be cleaned up
+func (a *App) convertImageURLsToDataURIs(html string, totalImages int) (string, []string) {
+	var tempFiles []string
+	var currentImage int
+	var totalDataURISize int64 // 総Data URIサイズを追跡
+	// Match img tags with src attributes
+	imgRegex := regexp.MustCompile(`(<img[^>]+src=["'])([^"']+)(["'][^>]*>)`)
+
+	convertedHTML := imgRegex.ReplaceAllStringFunc(html, func(match string) string {
+		parts := imgRegex.FindStringSubmatch(match)
+		if len(parts) < 4 {
+			return match
+		}
+
+		prefix := parts[1]
+		imgURL := parts[2]
+		suffix := parts[3]
+
+		var imgPath string
+
+		imgURL = strings.ReplaceAll(imgURL, "\\", "/")
+
+		// Process URLs that start with /image/
+		if strings.HasPrefix(imgURL, "/image/") {
+			// Extract the image path (remove /image/ prefix)
+			// URL format: /image/data/image/xxx.webp -> actual path: data/image/xxx.webp
+			imgPath = strings.TrimPrefix(imgURL, "/image/")
+			a.logInfo(fmt.Sprintf("PDF export: Converting image URL: %s -> path: %s", imgURL, imgPath))
+		} else if strings.HasPrefix(imgURL, "data/image/") {
+			// Process paths that start with data/image/ directly (e.g., from Marp mode)
+			imgPath = imgURL
+			a.logInfo(fmt.Sprintf("PDF export: Converting image path: %s", imgPath))
+		} else {
+			// Skip other URLs (e.g., http://, https://, data: URIs already)
+			return match
+		}
+
+		// プログレスイベントを発行
+		currentImage++
+		if totalImages > 0 {
+			runtime.EventsEmit(a.ctx, "pdf-export-progress", map[string]interface{}{
+				"currentImage": currentImage,
+				"totalImages":  totalImages,
+				"htmlSize":     len(html),
+				"stage":        "converting-images",
+			})
+		}
+
+		// Convert to absolute file path
+		var absPath string
+		if filepath.IsAbs(imgPath) {
+			absPath = imgPath
+		} else {
+			absPath = filepath.Join(a.dataDir, filepath.FromSlash(imgPath))
+		}
+
+		a.logInfo(fmt.Sprintf("PDF export: Resolved absolute path: %s", absPath))
+
+		// Check file size before reading
+		fileInfo, err := os.Stat(absPath)
+		if err != nil {
+			a.logError(fmt.Sprintf("Failed to stat image file for PDF export: %s, error: %v", absPath, err))
+			return match // Return original if file cannot be accessed
+		}
+
+		// Check if file size exceeds limit
+		if fileInfo.Size() > maxImageSizeForPDF {
+			a.logError(fmt.Sprintf("Image file too large for PDF export: %s (size: %d bytes, limit: %d bytes)", absPath, fileInfo.Size(), maxImageSizeForPDF))
+			return match // Return original if file is too large
+		}
+
+		// Read image file
+		imgData, err := os.ReadFile(absPath)
+		if err != nil {
+			a.logError(fmt.Sprintf("Failed to read image file for PDF export: %s, error: %v", absPath, err))
+			return match // Return original if file cannot be read
+		}
+		originalSize := len(imgData)
+
+		// Determine MIME type and process image
+		ext := strings.ToLower(filepath.Ext(absPath))
+		var img image.Image
+
+		// Decode image
+		if ext == ".webp" {
+			// WebP画像の検証と変換
+			img, err = webp.Decode(bytes.NewReader(imgData))
+			if err != nil {
+				a.logError(fmt.Sprintf("Failed to decode WebP image for PDF export: %s, error: %v", absPath, err))
+				return match // Return original if WebP cannot be decoded
+			}
+			originalBounds := img.Bounds()
+			a.logInfo(fmt.Sprintf("PDF export: WebP image size: %s (width: %d, height: %d, file size: %d bytes)", absPath, originalBounds.Dx(), originalBounds.Dy(), originalSize))
+		} else if ext == ".svg" {
+			// SVGはリサイズできないので、そのまま使用
+			base64Data := base64.StdEncoding.EncodeToString(imgData)
+			dataURI := fmt.Sprintf("data:image/svg+xml;base64,%s", base64Data)
+			dataURISize := len(dataURI)
+			totalDataURISize += int64(dataURISize)
+			a.logInfo(fmt.Sprintf("PDF export: Converted SVG image %d/%d: %s -> data:image/svg+xml (original: %d bytes, data URI: %d bytes)", currentImage, totalImages, imgURL, originalSize, dataURISize))
+			return prefix + dataURI + suffix
+		} else {
+			// For non-WebP images, decode
+			img, _, err = image.Decode(bytes.NewReader(imgData))
+			if err != nil {
+				a.logError(fmt.Sprintf("Failed to decode image for PDF export: %s, error: %v", absPath, err))
+				return match // Return original if image cannot be decoded
+			}
+			originalBounds := img.Bounds()
+			a.logInfo(fmt.Sprintf("PDF export: Image size: %s (width: %d, height: %d, file size: %d bytes)", absPath, originalBounds.Dx(), originalBounds.Dy(), originalSize))
+		}
+
+		// Create optimized temporary PNG file
+		imageStartTime := time.Now()
+		tmpFile, err := a.createOptimizedImageTempFile(img, absPath)
+		if err != nil {
+			a.logError(fmt.Sprintf("Failed to create optimized temp file for PDF export: %s, error: %v", absPath, err))
+			return match // Return original if temp file creation fails
+		}
+
+		// Add to cleanup list
+		tempFiles = append(tempFiles, tmpFile)
+
+		// Read the temporary file and convert to data URI
+		tmpData, err := os.ReadFile(tmpFile)
+		if err != nil {
+			a.logError(fmt.Sprintf("Failed to read temp file for PDF export: %s, error: %v", tmpFile, err))
+			return match
+		}
+
+		// Encode to base64
+		base64Data := base64.StdEncoding.EncodeToString(tmpData)
+		dataURISize := len(base64Data) + len("data:image/png;base64,") // Data URIの実際のサイズ
+		totalDataURISize += int64(dataURISize)
+
+		// Create data URI (always PNG for optimized images)
+		dataURI := fmt.Sprintf("data:image/png;base64,%s", base64Data)
+		imageDuration := time.Since(imageStartTime)
+
+		a.logInfo(fmt.Sprintf("PDF export: Converted image %d/%d: %s -> data:image/png (original: %d bytes, temp file: %d bytes, data URI: %d bytes, duration: %v)", currentImage, totalImages, imgURL, originalSize, len(tmpData), dataURISize, imageDuration))
+
+		return prefix + dataURI + suffix
+	})
+
+	a.logInfo(fmt.Sprintf("PDF export: Image conversion summary - total images: %d, total Data URI size: %d bytes", totalImages, totalDataURISize))
+
+	return convertedHTML, tempFiles
 }
 
 // ---- Presenter multi-window APIs ----
@@ -2636,6 +3793,33 @@ func (a *App) GetImageFileURL(imagePath string) (string, error) {
 	return urlPath, nil
 }
 
+// GetPdfFileURL returns a URL for the PDF file that can be used in HTML embed/iframe elements.
+// The pdfPath should be relative to dataDir (e.g., "content/example.pdf").
+func (a *App) GetPdfFileURL(pdfPath string) (string, error) {
+	if pdfPath == "" {
+		return "", fmt.Errorf("pdf path is empty")
+	}
+
+	var absPath string
+	if filepath.IsAbs(pdfPath) {
+		absPath = pdfPath
+	} else {
+		absPath = filepath.Join(a.dataDir, filepath.FromSlash(pdfPath))
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("pdf file not found: %s", pdfPath)
+		}
+		return "", fmt.Errorf("failed to stat pdf file: %w", err)
+	}
+
+	urlPath := "/pdf/" + filepath.ToSlash(pdfPath)
+	a.logInfo(fmt.Sprintf("PDF file URL: %s (size: %d bytes)", urlPath, info.Size()))
+	return urlPath, nil
+}
+
 // createAudioHandler creates an HTTP handler that serves audio files.
 // This handler wraps the default asset handler and adds support for /audio/ paths.
 func (a *App) createAssetHandler() http.Handler {
@@ -2650,6 +3834,11 @@ func (a *App) createAssetHandler() http.Handler {
 		}
 		if strings.HasPrefix(r.URL.Path, "/image/") {
 			if a.serveMediaFile(w, r, "/image/", "image") {
+				return
+			}
+		}
+		if strings.HasPrefix(r.URL.Path, "/pdf/") {
+			if a.serveMediaFile(w, r, "/pdf/", "pdf") {
 				return
 			}
 		}
@@ -2709,6 +3898,8 @@ func (a *App) serveMediaFile(w http.ResponseWriter, r *http.Request, prefix, med
 		default:
 			mimeType = "audio/mpeg"
 		}
+	} else if mediaType == "pdf" {
+		mimeType = "application/pdf"
 	} else {
 		switch ext {
 		case ".jpg", ".jpeg":
@@ -2779,6 +3970,385 @@ func (a *App) extractTitleFromContent(content, defaultTitle string) string {
 	return fm.ExtractTitle(content, defaultTitle)
 }
 
+// RenameFile renames a markdown file and updates all references to it
+func (a *App) RenameFile(oldPath, newPath string) error {
+	// Validate paths
+	oldAbsPath, ok := a.resolveContentPath(oldPath)
+	if !ok {
+		return fmt.Errorf("invalid old path: %s", oldPath)
+	}
+
+	newAbsPath, ok := a.resolveContentPath(newPath)
+	if !ok {
+		return fmt.Errorf("invalid new path: %s", newPath)
+	}
+
+	// Check if old file exists
+	if _, err := os.Stat(oldAbsPath); os.IsNotExist(err) {
+		return fmt.Errorf("file does not exist: %s", oldPath)
+	}
+
+	// Check if new file already exists
+	if _, err := os.Stat(newAbsPath); err == nil {
+		return fmt.Errorf("target file already exists: %s", newPath)
+	}
+
+	// Read old file to get doc_id
+	oldContent, err := os.ReadFile(oldAbsPath)
+	if err != nil {
+		return fmt.Errorf("failed to read old file: %v", err)
+	}
+
+	frontMatter, _ := fm.ParseFrontMatter(string(oldContent))
+	if frontMatter == nil || frontMatter.DocID == "" {
+		return fmt.Errorf("file does not have doc_id: %s", oldPath)
+	}
+
+	docID := frontMatter.DocID
+	a.logInfo(fmt.Sprintf("Renaming file %s -> %s (doc_id: %s)", oldPath, newPath, docID))
+
+	// Ensure new directory exists
+	if err := os.MkdirAll(filepath.Dir(newAbsPath), 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %v", err)
+	}
+
+	// Move file
+	if err := os.Rename(oldAbsPath, newAbsPath); err != nil {
+		return fmt.Errorf("failed to rename file: %v", err)
+	}
+
+	// Update doc_map.json
+	docMapPath := filepath.Join(a.dataDir, ".mdsys", "doc_map.json")
+	docMap := make(map[string]string)
+
+	// Read existing mapping
+	if data, err := os.ReadFile(docMapPath); err == nil {
+		if err := json.Unmarshal(data, &docMap); err != nil {
+			a.logError(fmt.Sprintf("Failed to parse doc_map.json: %v", err))
+			docMap = make(map[string]string)
+		}
+	}
+
+	// Update mapping (doc_id -> content path)
+	oldContentPath := filepath.ToSlash(oldPath)
+	newContentPath := filepath.ToSlash(newPath)
+	docMap[docID] = newContentPath
+	a.logInfo(fmt.Sprintf("Updated doc_map: %s -> %s", docID, newContentPath))
+
+	// Save mapping
+	if docMapJSON, err := json.MarshalIndent(docMap, "", "  "); err == nil {
+		if err := os.WriteFile(docMapPath, docMapJSON, 0644); err != nil {
+			a.logError(fmt.Sprintf("Failed to write doc_map.json: %v", err))
+		}
+	}
+
+	// Collect files that reference this document based on links.json (doc_id ベース)
+	referencingSet := make(map[string]struct{})
+
+	linkInfoPath := filepath.Join(a.dataDir, ".mdsys", "links.json")
+	if linkData, err := os.ReadFile(linkInfoPath); err == nil {
+		var edges []GraphEdge
+		if err := json.Unmarshal(linkData, &edges); err == nil {
+			for _, edge := range edges {
+				// このドキュメントをターゲットとして参照しているエッジのみ対象
+				if edge.TargetDocID != "" && edge.TargetDocID == docID {
+					var refContentPath string
+					// SourceDocID から doc_map を引くのが理想
+					if edge.SourceDocID != "" {
+						if p, ok := docMap[edge.SourceDocID]; ok {
+							refContentPath = filepath.ToSlash(p)
+						}
+					}
+					// doc_map に無い場合は Source (doc:/...) からパスを組み立てる
+					if refContentPath == "" && strings.HasPrefix(edge.Source, "doc:/") {
+						sourcePath := strings.TrimPrefix(edge.Source, "doc:/")
+						refContentPath = filepath.ToSlash(filepath.Join("content", sourcePath))
+					}
+
+					// 自分自身（リネーム対象ファイル）は除外
+					if refContentPath != "" && refContentPath != newContentPath {
+						referencingSet[refContentPath] = struct{}{}
+					}
+				}
+			}
+			a.logInfo(fmt.Sprintf("RenameFile: doc_id-based references found: %d", len(referencingSet)))
+		} else {
+			a.logError(fmt.Sprintf("RenameFile: failed to parse links.json: %v", err))
+		}
+	} else {
+		a.logError(fmt.Sprintf("RenameFile: failed to read links.json: %v", err))
+	}
+
+	// 既存のパスベース探索で見つかったものもマージするためのスライス
+	contentDir := filepath.Join(a.dataDir, "content")
+	var referencingFiles []string
+
+	err = filepath.Walk(contentDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || !strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
+			return nil
+		}
+
+		// Skip the renamed file itself
+		if p == newAbsPath {
+			return nil
+		}
+
+		content, err := os.ReadFile(p)
+		if err != nil {
+			return nil // Skip files we can't read
+		}
+
+		// Check if content references old path
+		contentStr := string(content)
+		oldPathBase := strings.TrimSuffix(oldPath, ".md")
+		oldPathBaseLower := strings.ToLower(oldPathBase)
+
+		// Check for wiki links and markdown links
+		wikiLinkRegex := regexp.MustCompile(`\[\[([^|\]]+)(?:\|([^\]]+))?\]\]`)
+		markdownLinkRegex := regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
+
+		hasReference := false
+
+		// Check wiki links
+		matches := wikiLinkRegex.FindAllStringSubmatch(contentStr, -1)
+		for _, match := range matches {
+			if len(match) >= 2 {
+				title := strings.TrimSuffix(strings.ToLower(match[1]), ".md")
+				if title == oldPathBaseLower || title == strings.ToLower(oldPathBase) {
+					hasReference = true
+					break
+				}
+			}
+		}
+
+		// Check markdown links
+		if !hasReference {
+			matches = markdownLinkRegex.FindAllStringSubmatch(contentStr, -1)
+			for _, match := range matches {
+				if len(match) >= 3 {
+					url := match[2]
+					if strings.HasSuffix(strings.ToLower(url), ".md") {
+						urlBase := strings.TrimSuffix(strings.ToLower(url), ".md")
+						if urlBase == oldPathBaseLower ||
+							strings.HasSuffix(urlBase, "/"+oldPathBaseLower) ||
+							url == oldPath || url == oldContentPath {
+							hasReference = true
+							break
+						}
+					}
+				}
+			}
+		}
+
+		if hasReference {
+			relPath, err := filepath.Rel(a.dataDir, p)
+			if err == nil {
+				referencingSet[filepath.ToSlash(relPath)] = struct{}{}
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		a.logError(fmt.Sprintf("Error walking content directory: %v", err))
+	}
+
+	// マップから最終的なスライスを構築
+	for p := range referencingSet {
+		referencingFiles = append(referencingFiles, p)
+	}
+
+	a.logInfo(fmt.Sprintf("Found %d files referencing %s (doc_id: %s)", len(referencingFiles), oldPath, docID))
+
+	// Update all referencing files
+	for _, refPath := range referencingFiles {
+		refAbsPath := filepath.Join(a.dataDir, refPath)
+		refContent, err := os.ReadFile(refAbsPath)
+		if err != nil {
+			a.logError(fmt.Sprintf("Failed to read referencing file %s: %v", refPath, err))
+			continue
+		}
+
+		// Replace links
+		updatedContent, err := markdown.ReplaceLinksInContent(string(refContent), oldPath, newPath)
+		if err != nil {
+			a.logError(fmt.Sprintf("Failed to replace links in %s: %v", refPath, err))
+			continue
+		}
+
+		// Save updated content
+		if err := os.WriteFile(refAbsPath, []byte(updatedContent), 0644); err != nil {
+			a.logError(fmt.Sprintf("Failed to save updated file %s: %v", refPath, err))
+			continue
+		}
+
+		a.logInfo(fmt.Sprintf("Updated references in %s", refPath))
+	}
+
+	// Rebuild index
+	if err := a.BuildSite(); err != nil {
+		a.logError(fmt.Sprintf("Failed to rebuild site: %v", err))
+	}
+
+	// Commit to Git if vcs is enabled
+	if a.vcs != nil {
+		// Commit the renamed file
+		relNewPath, err := filepath.Rel(a.dataDir, newAbsPath)
+		if err == nil {
+			commitMessage := fmt.Sprintf("Rename: %s -> %s", oldPath, newPath)
+			if err := a.vcs.CommitFile(relNewPath, commitMessage); err != nil {
+				a.logError(fmt.Sprintf("Failed to commit renamed file: %v", err))
+			}
+		}
+
+		// Commit referencing files
+		for _, refPath := range referencingFiles {
+			relRefPath, err := filepath.Rel(a.dataDir, filepath.Join(a.dataDir, refPath))
+			if err == nil {
+				commitMessage := fmt.Sprintf("Update references after rename: %s -> %s", oldPath, newPath)
+				if err := a.vcs.CommitFile(relRefPath, commitMessage); err != nil {
+					a.logError(fmt.Sprintf("Failed to commit updated reference: %v", err))
+				}
+			}
+		}
+	}
+
+	// Emit file changed event
+	runtime.EventsEmit(a.ctx, "file-renamed", map[string]interface{}{
+		"oldPath": oldPath,
+		"newPath": newPath,
+		"docId":   docID,
+	})
+
+	a.logInfo(fmt.Sprintf("Successfully renamed file %s -> %s", oldPath, newPath))
+	return nil
+}
+
+// RenamePdfFile renames a PDF file under content/ without doc_id or link updates.
+// This is intentionally simpler than RenameFile, as PDFs are not part of the markdown link graph.
+func (a *App) RenamePdfFile(oldPath, newPath string) error {
+	// Basic validation: paths must be under content/ and have .pdf extension
+	if !strings.HasPrefix(oldPath, "content/") {
+		return fmt.Errorf("old path must be under content/: %s", oldPath)
+	}
+	if !strings.HasPrefix(newPath, "content/") {
+		return fmt.Errorf("new path must be under content/: %s", newPath)
+	}
+
+	oldExt := strings.ToLower(filepath.Ext(oldPath))
+	newExt := strings.ToLower(filepath.Ext(newPath))
+	if oldExt != ".pdf" || newExt != ".pdf" {
+		return fmt.Errorf("both old and new paths must have .pdf extension")
+	}
+
+	// Resolve to absolute paths safely
+	oldAbsPath, ok := a.resolveContentPath(oldPath)
+	if !ok {
+		return fmt.Errorf("invalid old path: %s", oldPath)
+	}
+
+	newAbsPath, ok := a.resolveContentPath(newPath)
+	if !ok {
+		return fmt.Errorf("invalid new path: %s", newPath)
+	}
+
+	// Check if old file exists
+	if _, err := os.Stat(oldAbsPath); os.IsNotExist(err) {
+		return fmt.Errorf("file does not exist: %s", oldPath)
+	}
+
+	// Check if new file already exists
+	if _, err := os.Stat(newAbsPath); err == nil {
+		return fmt.Errorf("target file already exists: %s", newPath)
+	}
+
+	a.logInfo(fmt.Sprintf("Renaming PDF %s -> %s", oldPath, newPath))
+
+	// Ensure new directory exists
+	if err := os.MkdirAll(filepath.Dir(newAbsPath), 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %v", err)
+	}
+
+	// Move file
+	if err := os.Rename(oldAbsPath, newAbsPath); err != nil {
+		return fmt.Errorf("failed to rename pdf file: %v", err)
+	}
+
+	return nil
+}
+
+// UpdateLinkToLatest updates a link to reference the latest version instead of a pinned version
+func (a *App) UpdateLinkToLatest(sourceDocID, targetDocID string) error {
+	a.logInfo(fmt.Sprintf("UpdateLinkToLatest: sourceDocID=%s, targetDocID=%s", sourceDocID, targetDocID))
+
+	// Load links.json
+	linkInfoPath := filepath.Join(a.dataDir, ".mdsys", "links.json")
+	var edges []GraphEdge
+
+	// Read existing links
+	if linkData, err := os.ReadFile(linkInfoPath); err == nil {
+		if err := json.Unmarshal(linkData, &edges); err != nil {
+			a.logError(fmt.Sprintf("Failed to parse links.json: %v", err))
+			return fmt.Errorf("failed to parse links.json: %v", err)
+		}
+	} else {
+		return fmt.Errorf("failed to read links.json: %v", err)
+	}
+
+	// Find and update the matching edge
+	found := false
+	for i := range edges {
+		if edges[i].SourceDocID == sourceDocID && edges[i].TargetDocID == targetDocID {
+			edges[i].ToVersionMode = "latest"
+			edges[i].TargetUpdated = false
+			// Update ToVersionID to current target hash
+			if strings.HasPrefix(edges[i].Target, "doc:/") {
+				targetPath := strings.TrimPrefix(edges[i].Target, "doc:/")
+				targetFilePath := filepath.Join(a.dataDir, "content", targetPath)
+				if targetContent, err := os.ReadFile(targetFilePath); err == nil {
+					currentHash := gitvcs.CalculateHash(string(targetContent))
+					edges[i].ToVersionID = currentHash
+					edges[i].TargetHash = currentHash
+				}
+			}
+			found = true
+			a.logInfo(fmt.Sprintf("Updated edge %s -> %s to latest version", edges[i].Source, edges[i].Target))
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("link not found: sourceDocID=%s, targetDocID=%s", sourceDocID, targetDocID)
+	}
+
+	// Save updated links
+	if linkInfoJSON, err := json.MarshalIndent(edges, "", "  "); err == nil {
+		if err := os.MkdirAll(filepath.Dir(linkInfoPath), 0755); err == nil {
+			if err := os.WriteFile(linkInfoPath, linkInfoJSON, 0644); err == nil {
+				a.logInfo(fmt.Sprintf("Saved updated link records to %s", linkInfoPath))
+			} else {
+				return fmt.Errorf("failed to write links.json: %v", err)
+			}
+		} else {
+			return fmt.Errorf("failed to create directory: %v", err)
+		}
+	} else {
+		return fmt.Errorf("failed to marshal links: %v", err)
+	}
+
+	// Emit event to refresh preview
+	runtime.EventsEmit(a.ctx, "link-updated", map[string]interface{}{
+		"sourceDocID": sourceDocID,
+		"targetDocID": targetDocID,
+	})
+
+	return nil
+}
+
 // extractLinks extracts various types of links from markdown content
 func (a *App) extractLinks(content string) []LinkInfo {
 	var links []LinkInfo
@@ -2813,7 +4383,9 @@ func (a *App) extractLinks(content string) []LinkInfo {
 	imgLinkRegex := regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
 	matches = imgLinkRegex.FindAllStringSubmatch(content, -1)
 	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d image links", len(matches)))
+	// imgLinkTrimRegex := regexp.MustCompile(`\s*".*?"`)
 	for _, match := range matches {
+		// src := imgLinkTrimRegex.ReplaceAllString(match[2], "")
 		src := match[2]
 		links = append(links, LinkInfo{Target: src, Kind: "img"})
 		runtime.LogInfo(a.ctx, fmt.Sprintf("  Image link: %s", src))
@@ -2948,7 +4520,7 @@ func (a *App) StartRecording() error {
 				if r := recover(); r != nil {
 					errMsg := fmt.Sprintf("panic in NewRealtimeService: %v", r)
 					a.logError(fmt.Sprintf("[Recording] %s", errMsg))
-					serviceErr = fmt.Errorf(errMsg)
+					serviceErr = fmt.Errorf("%s", errMsg)
 				}
 			}()
 
@@ -3682,6 +5254,25 @@ func (a *App) IsRecording() bool {
 	return a.isRecording
 }
 
+// checkUnsavedBeforeClose emits an event to JS to check for unsaved changes
+// JS will show a modal and call AllowClose() if user confirms closing
+func (a *App) checkUnsavedBeforeClose() {
+	runtime.EventsEmit(a.ctx, "check-unsaved-before-close", nil)
+}
+
+// AllowClose is called by JS after user confirms closing (save/discard)
+// This allows the window to close after user interaction
+func (a *App) AllowClose() {
+	// Set flag to allow closing
+	a.allowCloseMu.Lock()
+	a.allowCloseFlag = true
+	a.allowCloseMu.Unlock()
+
+	// Quit the application
+	// This will trigger OnBeforeClose again, but it will return false because allowCloseFlag is true
+	runtime.Quit(a.ctx)
+}
+
 // cleanupRecording cleans up recording resources
 func (a *App) cleanupRecording() {
 	a.logInfo("[Recording] cleanupRecording called")
@@ -3718,4 +5309,78 @@ func (a *App) cleanupRecording() {
 	}()
 
 	a.logInfo("[Recording] Cleanup completed")
+}
+
+// resizeImageIfNeeded resizes an image if its longer edge exceeds maxWidth, maintaining aspect ratio
+func resizeImageIfNeeded(img image.Image, maxWidth int) image.Image {
+	bounds := img.Bounds()
+	width := bounds.Dx()
+	height := bounds.Dy()
+
+	// 長辺がmaxWidth以下の場合はリサイズ不要
+	longerEdge := width
+	if height > width {
+		longerEdge = height
+	}
+
+	if longerEdge <= maxWidth {
+		return img
+	}
+
+	// 長辺をmaxWidthに合わせてリサイズ
+	var newWidth, newHeight int
+	if width > height {
+		// 横長画像: 横幅を基準
+		newWidth = maxWidth
+		newHeight = (height * maxWidth) / width
+	} else {
+		// 縦長画像: 高さを基準
+		newHeight = maxWidth
+		newWidth = (width * maxWidth) / height
+	}
+
+	// Create a new RGBA image for the resized image
+	resized := image.NewRGBA(image.Rect(0, 0, newWidth, newHeight))
+
+	// Use high-quality resampling (CatmullRom is good for downscaling)
+	// draw.Src is used instead of draw.Over for golang.org/x/image/draw
+	draw.CatmullRom.Scale(resized, resized.Bounds(), img, bounds, draw.Src, nil)
+
+	return resized
+}
+
+// createOptimizedImageTempFile creates an optimized PNG temporary file from an image
+// Returns the temporary file path and error
+// The image is resized if needed and encoded as PNG (lossless compression)
+func (a *App) createOptimizedImageTempFile(img image.Image, originalPath string) (string, error) {
+	// Resize if needed (longer edge <= 1920px)
+	originalBounds := img.Bounds()
+	img = resizeImageIfNeeded(img, maxImageWidthForPDF)
+	if img.Bounds().Dx() != originalBounds.Dx() || img.Bounds().Dy() != originalBounds.Dy() {
+		a.logInfo(fmt.Sprintf("PDF export: Resized image: %s (original: %dx%d, resized: %dx%d)", originalPath, originalBounds.Dx(), originalBounds.Dy(), img.Bounds().Dx(), img.Bounds().Dy()))
+	}
+
+	// Create temporary file
+	tmpDir := os.TempDir()
+	if tmpDir == "" {
+		tmpDir = "."
+	}
+	tmpFile := filepath.Join(tmpDir, fmt.Sprintf("karte-pdf-img-%d-%d.png", time.Now().UnixNano(), os.Getpid()))
+
+	// Encode as PNG (lossless compression)
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, img); err != nil {
+		return "", fmt.Errorf("failed to encode image to PNG: %w", err)
+	}
+
+	finalData := pngBuf.Bytes()
+
+	// Write to temporary file
+	if err := os.WriteFile(tmpFile, finalData, 0644); err != nil {
+		return "", fmt.Errorf("failed to write temporary file: %w", err)
+	}
+
+	a.logInfo(fmt.Sprintf("PDF export: Created optimized PNG temp file: %s (size: %d bytes)", tmpFile, len(finalData)))
+
+	return tmpFile, nil
 }

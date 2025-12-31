@@ -29,13 +29,37 @@ Karteは、Wailsフレームワークを使用して開発されたクロスプ�
 go install github.com/wailsapp/wails/v2/cmd/wails@latest
 ```
 
+### Windows 向けの設定
+
+#### 埋め込みフォントの配置
+
+埋め込みフォントとして`internal/pdf/fonts/NotoSansJP-Regular.ttf`を配置する。
+
+#### wkhtmltopdf.exeの配置
+
+wkhtmltopdf.exeをインストールし、`C:\\Program Files\\wkhtmltopdf\\bin\\wkhtmltopdf.exe`に配置する。  
+Download wkhtmltopdf [Downloadlink](https://wkhtmltopdf.org/downloads.html)
+
 ### アプリケーションのビルド
 
+マルチプラットフォーム用に`cmd/buildmatrix`を用意しています。`build/targets.json`に定義されたターゲット（デフォルト: Windows/macOS/Linux）をまとめて、あるいは個別にビルドできます。
+
 ```bash
-cd karte-desktop
-go mod tidy
-wails build
+# 依存関係も整える場合
+go run ./cmd/buildmatrix --all --prep
+
+# 特定ターゲットのみ
+go run ./cmd/buildmatrix --targets windows
 ```
+
+主なオプション:
+
+- `--targets windows,linux` … `build/targets.json`内の名前で絞り込み
+- `--all` … 全ターゲットを順番にビルド
+- `--prep` … `go mod tidy`と`npm install`をビルド前に実行
+- `--clean` … 各ターゲットの出力ディレクトリ（`dist/<name>`）を削除してから再生成
+
+`build/targets.json`を編集すると、新しいターゲットの追加や環境変数（`GOOS`/`GOARCH`等）、出力先ディレクトリ、追加の`wails build`フラグを柔軟に設定できます。
 
 ## 使い方
 
@@ -50,20 +74,7 @@ wails dev
 
 ### 本番ビルド
 
-#### macOS
-```bash
-wails build -platform darwin/universal
-```
-
-#### Windows
-```bash
-wails build -platform windows/amd64
-```
-
-#### Linux
-```bash
-wails build -platform linux/amd64
-```
+本番向けは上記の`buildmatrix`コマンドを使用してください。ビルド結果はターゲットごとに`dist/<target name>`配下へ整理され、`build/bin`は毎回クリーンアップされるため、異なるOS成果物が混在しません。
 
 ### アプリケーションの使用
 
@@ -160,6 +171,41 @@ karte-desktop/
 - **フロントエンド**: Vanilla JavaScript + HTML/CSS
 - **Markdown処理**: Goldmark
 - **ビルドシステム**: Wails CLI
+
+### テストの実行と推奨フロー
+
+1. **Go**: バックエンドのユニットテスト。
+   ```bash
+   go test ./...
+   ```
+2. **Node (フロントエンド)**: Viteで提供されるユニット/コンポーネントテスト（追加する場合は `package.json` にテストスクリプトを用意）。
+   ```bash
+   cd frontend
+   npm install
+   npm run test
+   ```
+3. **Playwright**: E2Eテスト。事前に Playwright をセットアップし、ブラウザをインストールしておきます。
+   ```bash
+   cd frontend
+   npm install
+   npx playwright install --with-deps
+   npx playwright test
+   ```
+
+推奨フローは「Go → Node → Playwright」の順で、ユニットテストから E2E まで段階的に確認します。バックエンドとフロントエンドでインターフェイスが変わった場合、該当レイヤーのテストを優先的に更新してから次の層へ進めます。
+
+### テスト命名規約とモック指針
+
+- **命名**: Goは `Test<対象>`、Node/Playwrightは `<機能名>.<シナリオ>.spec.(ts|js)` または `test.(ts|js)` として、対象機能と期待シナリオが分かる名前にします。
+- **モック**: 外部I/O（ファイル、ネットワーク、ブラウザAPI、OSコール）はモックし、副作用を遮断します。ユニットテストではモックをデフォルトとし、E2Eは実サービスを模したテストデータを用意する形で最小限にとどめます。
+- **共有ヘルパー**: モックやテストデータの共通化は各レイヤーの `internal`/`__tests__`/`tests` ディレクトリを利用し、テストコードからのみ参照されるようにします。
+
+### 新規機能のチェックリスト
+
+- [ ] Go・Node・Playwright の推奨フローに沿ってテストを追加／更新した
+- [ ] テスト名が対象とシナリオを示す命名規約に従っている
+- [ ] 外部依存をモックし、副作用を遮断した（必要なE2Eのみ実サービスに近いデータを利用）
+- [ ] 追加したモック／テストヘルパーが共有ディレクトリに整理されている
 
 ### カスタマイズ
 

@@ -1,6 +1,12 @@
-import { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS } from '../wailsjs/wailsjs/go/main/App';
+import * as AppModule from '../wailsjs/wailsjs/go/main/App';
+const { GetFileList, LoadFile, SaveFile, PreviewMarkdown, GetGraphData, CreateNewFile, ExportPDF, ExportPreviewHTML, GetCustomCSS, SetCustomCSS, ClearCustomCSS, ResolveConflict, ImportAudioFile, ImportAudioBase64, ImportImageFile, ImportImageBase64, ImportPdfFile, ImportPdfBase64, GetASRStatus, GetAudioFileURL, GetImageFileURL, GetPdfFileURL, GetImageList, GetImageMetadata, SaveImageMetadata, StartRecording, StopRecording, IsRecording, LogJS, RenamePdfFile, CaptureScreenInteractive, AllowClose } = AppModule;
+// RenameFile and UpdateLinkToLatest may not exist in generated bindings yet, so import them conditionally
+const RenameFile = AppModule.RenameFile || null;
+const UpdateLinkToLatest = AppModule.UpdateLinkToLatest || null;
 import { EventsOn, BrowserOpenURL } from '../wailsjs/wailsjs/runtime/runtime';
 import GraphModule from './graph-d3.js';
+import { createBrowserApi } from './test-support/browser-api.js';
+import { buildFileDisplayLabel, convertMarkdownToHtml, filterFilesByQuery } from './logic.js';
 
 // Check if running in browser (no Wails backend)
 const isBrowser = typeof window !== 'undefined' && !window.go;
@@ -24,14 +30,7 @@ const mockFunctions = {
     },
 
     async PreviewMarkdown(content) {
-        // Simple markdown to HTML conversion for testing
-        return content
-            .replace(/^# (.*$)/gim, '<h1>$1</h1>')
-            .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-            .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-            .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
-            .replace(/\*(.*)\*/gim, '<em>$1</em>')
-            .replace(/\n/gim, '<br>');
+        return convertMarkdownToHtml(content);
     },
 
     async GetGraphData() {
@@ -118,6 +117,26 @@ const mockFunctions = {
         return `/image/${imagePath}`;
     },
 
+    async ImportPdfFile(path) {
+        console.log('Mock ImportPdfFile called:', path);
+        return `content/mock-${Date.now()}.pdf`;
+    },
+
+    async ImportPdfBase64(name, data) {
+        console.log('Mock ImportPdfBase64 called:', name, data.length);
+        return `content/mock-${Date.now()}.pdf`;
+    },
+
+    async GetPdfFileURL(pdfPath) {
+        console.log('Mock GetPdfFileURL called:', pdfPath);
+        return `/pdf/${pdfPath}`;
+    },
+
+    async RenamePdfFile(oldPath, newPath) {
+        console.log('Mock RenamePdfFile called:', oldPath, '->', newPath);
+        return true;
+    },
+
     async GetImageList() {
         console.log('Mock GetImageList called');
         return [
@@ -153,11 +172,22 @@ const mockFunctions = {
 
     async LogJS(level, msg) {
         console.log(`[Mock LogJS] ${level}: ${msg}`);
+    },
+
+    async RenameFile(oldPath, newPath) {
+        console.log('Mock RenameFile called:', oldPath, '->', newPath);
+        return true;
+    },
+
+    async UpdateLinkToLatest(sourceDocID, targetDocID) {
+        console.log('Mock UpdateLinkToLatest called:', sourceDocID, targetDocID);
+        return true;
     }
 };
 
 // Use mock functions if in browser, otherwise use real Wails functions
-const api = isBrowser ? mockFunctions : {
+const browserApi = isBrowser ? createBrowserApi() : null;
+const api = isBrowser && browserApi ? browserApi : {
     GetFileList,
     LoadFile,
     SaveFile,
@@ -174,16 +204,22 @@ const api = isBrowser ? mockFunctions : {
     ImportAudioBase64,
     ImportImageFile,
     ImportImageBase64,
+    ImportPdfFile,
+    ImportPdfBase64,
     GetASRStatus,
     GetAudioFileURL,
     GetImageFileURL,
+    GetPdfFileURL,
     GetImageList,
     GetImageMetadata,
     StartRecording,
     StopRecording,
     IsRecording,
     SaveImageMetadata,
-    LogJS
+    LogJS,
+    RenameFile: RenameFile || (() => Promise.reject(new Error('RenameFile not available'))),
+    RenamePdfFile: RenamePdfFile || (() => Promise.reject(new Error('RenamePdfFile not available'))),
+    UpdateLinkToLatest: UpdateLinkToLatest || (() => Promise.reject(new Error('UpdateLinkToLatest not available')))
 };
 
 // Logging helper function that writes to app.log via Go backend
@@ -228,6 +264,11 @@ let statusClearTimer = null;
 let currentMetadataImagePath = null;
 let imageMetadataDirty = false;
 let imageMetadataLoading = false;
+let isDirty = false;
+let lastSavedContent = '';
+let isModalShowing = false;
+let closeHandlerRegistered = false;
+let isSaving = false;
 
 // DOM elements
 const statusEl = document.getElementById('status');
@@ -262,6 +303,7 @@ const imagePreviewClose = document.getElementById('imagePreviewClose');
 const imageMetadataEditor = document.getElementById('imageMetadataEditor');
 const imageMetadataSaveBtn = document.getElementById('imageMetadataSaveBtn');
 const imageMetadataStatus = document.getElementById('imageMetadataStatus');
+const captureScreenBtn = document.getElementById('captureScreenBtn');
 
 if (imageMetadataEditor) {
     imageMetadataEditor.disabled = true;
@@ -287,6 +329,18 @@ const filenameModal = document.getElementById('filenameModal');
 const filenameInput = document.getElementById('filenameInput');
 const createFileBtn = document.getElementById('createFileBtn');
 const cancelFileBtn = document.getElementById('cancelFileBtn');
+
+// Rename file modal elements
+const renameFileModal = document.getElementById('renameFileModal');
+const renameFileInput = document.getElementById('renameFileInput');
+const confirmRenameBtn = document.getElementById('confirmRenameBtn');
+const cancelRenameBtn = document.getElementById('cancelRenameBtn');
+
+// Unsaved changes confirmation modal elements
+const unsavedConfirmModal = document.getElementById('unsavedConfirmModal');
+const unsavedSaveBtn = document.getElementById('unsavedSaveBtn');
+const unsavedDiscardBtn = document.getElementById('unsavedDiscardBtn');
+const unsavedCancelBtn = document.getElementById('unsavedCancelBtn');
 
 // Custom CSS elements
 const customCssBtn = document.getElementById('customCssBtn');
@@ -316,6 +370,10 @@ const transcriptionProgressEl = document.getElementById('transcriptionProgress')
 const transcriptionProgressBar = transcriptionProgressEl?.querySelector('.transcription-progress-bar');
 const transcriptionProgressFill = transcriptionProgressEl?.querySelector('.transcription-progress-fill');
 const transcriptionProgressText = transcriptionProgressEl?.querySelector('.transcription-progress-text');
+const pdfExportProgressEl = document.getElementById('pdfExportProgress');
+const pdfExportProgressBar = pdfExportProgressEl?.querySelector('.transcription-progress-bar');
+const pdfExportProgressFill = pdfExportProgressEl?.querySelector('.transcription-progress-fill');
+const pdfExportProgressText = pdfExportProgressEl?.querySelector('.transcription-progress-text');
 
 // Audio player elements
 const audioPlayerContainer = document.getElementById('audioPlayerContainer');
@@ -324,6 +382,127 @@ const audioPlayer = document.getElementById('audioPlayer');
 let customCssCache = '';
 let currentConflictInfo = null;
 let asrStatusCheckInterval = null;
+
+function setDirtyState(flag) {
+    if (isDirty === flag) {
+        return;
+    }
+    isDirty = flag;
+    updateUnsavedIndicator();
+}
+
+function updateUnsavedIndicator() {
+    if (tree) {
+        const items = tree.querySelectorAll('.item');
+        items.forEach((item) => {
+            const isCurrent = item.dataset.path === currentPath;
+            item.classList.toggle('unsaved', isCurrent && isDirty);
+        });
+    }
+    if (saveBtn) {
+        saveBtn.classList.toggle('unsaved', isDirty);
+    }
+}
+
+async function confirmNavigationIfDirty() {
+    if (!isDirty) {
+        return true;
+    }
+
+    // 保存処理中または既にモーダルが表示されている場合は、新しいモーダルを表示しない
+    if (isModalShowing || isSaving) {
+        return false; // キャンセル扱い
+    }
+
+    return new Promise((resolve) => {
+        if (!unsavedConfirmModal) {
+            // フォールバック: モーダルが存在しない場合はconfirmを使用
+            const wantsSave = window.confirm('未保存の変更があります。保存してから続行しますか？\nOK: 保存して続行 / キャンセル: 破棄するか選択');
+            if (wantsSave) {
+                save().then(() => resolve(true)).catch(() => resolve(false));
+                return;
+            }
+            const discard = window.confirm('変更を破棄して続行しますか？');
+            if (discard) {
+                lastSavedContent = ta?.value || '';
+                setDirtyState(false);
+                resolve(true);
+            } else {
+                resolve(false);
+            }
+            return;
+        }
+
+        // モーダル表示中フラグを設定
+        isModalShowing = true;
+
+        // 既存のイベントリスナーをクリアするために、一度削除して再追加
+        const hideModal = () => {
+            unsavedConfirmModal.style.display = 'none';
+            isModalShowing = false; // フラグをリセット
+        };
+
+        const handleSave = async () => {
+            try {
+                await save();
+                // save()が完了してsetDirtyState(false)が呼ばれるまで、モーダルを表示したままにする
+                // これにより、保存処理中に別のイベントが発生しても新しいモーダルが表示されない
+                hideModal();
+                resolve(true);
+            } catch (error) {
+                console.error('Save failed during navigation confirm:', error);
+                hideModal();
+                resolve(false);
+            }
+        };
+
+        const handleDiscard = () => {
+            hideModal();
+            lastSavedContent = ta?.value || '';
+            setDirtyState(false);
+            resolve(true);
+        };
+
+        const handleCancel = () => {
+            hideModal();
+            resolve(false);
+        };
+
+        // 毎回最新の要素を取得（グローバル変数ではなく）
+        const saveBtn = document.getElementById('unsavedSaveBtn');
+        const discardBtn = document.getElementById('unsavedDiscardBtn');
+        const cancelBtn = document.getElementById('unsavedCancelBtn');
+
+        if (!saveBtn || !discardBtn || !cancelBtn) {
+            console.error('Unsaved confirm modal buttons not found');
+            isModalShowing = false; // フラグをリセット
+            resolve(false);
+            return;
+        }
+
+        // 既存のイベントリスナーを削除してから新しいものを追加
+        const newSaveBtn = saveBtn.cloneNode(true);
+        const newDiscardBtn = discardBtn.cloneNode(true);
+        const newCancelBtn = cancelBtn.cloneNode(true);
+        saveBtn.parentNode.replaceChild(newSaveBtn, saveBtn);
+        discardBtn.parentNode.replaceChild(newDiscardBtn, discardBtn);
+        cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
+
+        newSaveBtn.onclick = handleSave;
+        newDiscardBtn.onclick = handleDiscard;
+        newCancelBtn.onclick = handleCancel;
+
+        // モーダル外クリックでキャンセル
+        const handleModalClick = (e) => {
+            if (e.target === unsavedConfirmModal) {
+                handleCancel();
+            }
+        };
+        unsavedConfirmModal.onclick = handleModalClick;
+
+        unsavedConfirmModal.style.display = 'flex';
+    });
+}
 
 // Initialize the application
 async function init() {
@@ -357,6 +536,12 @@ async function init() {
                 updateGraph();
             });
 
+            // Link updated event (when link is updated to latest version)
+            EventsOn('link-updated', (data) => {
+                console.log('Link updated:', data);
+                updatePreview();
+            });
+
             // Conflict detection events
             EventsOn('conflict-detected', (conflictInfo) => {
                 console.log('Conflict detected:', conflictInfo);
@@ -379,6 +564,28 @@ async function init() {
             EventsOn('audio-transcribed', handleAudioTranscribedEvent);
             EventsOn('audio-transcribe-progress', handleAudioTranscribeProgress);
             EventsOn('image-imported', handleImageImportedEvent);
+            EventsOn('pdf-export-progress', handlePDFExportProgress);
+            EventsOn('pdf-export-completed', (payload) => {
+                hidePDFExportProgress();
+                if (exportPdfBtn) {
+                    exportPdfBtn.disabled = false;
+                }
+                const pdfPath = payload.pdfPath || payload.PdfPath || '';
+                const size = payload.size || payload.Size || 0;
+                statusEl.textContent = `PDF exported: ${pdfPath} (${(size / 1024).toFixed(1)} KB)`;
+                if (pdfPath) {
+                    BrowserOpenURL(pdfPath);
+                }
+            });
+            EventsOn('pdf-export-error', (payload) => {
+                hidePDFExportProgress();
+                if (exportPdfBtn) {
+                    exportPdfBtn.disabled = false;
+                }
+                const error = payload.error || payload.Error || 'PDF export failed';
+                statusEl.textContent = error;
+                alert(error);
+            });
 
             // Initialize ASR status check
             updateASRStatus();
@@ -433,6 +640,11 @@ async function init() {
 // Create new file
 async function createNewFile() {
     console.log('Create new file function called');
+
+    const ok = await confirmNavigationIfDirty();
+    if (!ok) {
+        return;
+    }
 
     // Show modal instead of prompt
     showFilenameModal();
@@ -514,56 +726,288 @@ async function loadFileList() {
 
 // Render file list in sidebar
 function renderFileList() {
+    if (!tree) {
+        return;
+    }
+
     tree.innerHTML = '';
     const frag = document.createDocumentFragment();
-    const qq = (inp.value || '').toLowerCase();
+    const filteredFiles = filterFilesByQuery(files, inp?.value || '');
 
-    console.log('Rendering file list, files:', files);
+    console.log('Rendering file list, files:', filteredFiles);
 
-    for (const file of files) {
-        console.log('Processing file:', file);
-
-        // Check if file object is valid
-        if (!file || typeof file !== 'object') {
-            console.warn('Invalid file object:', file);
-            continue;
-        }
-
-        // Check if path property exists
-        if (!file.path) {
-            console.warn('File missing path property:', file);
-            continue;
-        }
-
-        if (qq && !(file.path.toLowerCase().includes(qq) || (file.title && file.title.toLowerCase().includes(qq)))) {
+    for (const file of filteredFiles) {
+        const label = buildFileDisplayLabel(file);
+        if (!label) {
             continue;
         }
 
         const a = document.createElement('a');
         a.className = 'item' + (file.path === currentPath ? ' active' : '');
-        a.textContent = (file.title || 'Untitled') + '  —  ' + file.path.replace(/^content\//, '');
+        a.dataset.path = file.path;
+        a.textContent = label;
+        const dot = document.createElement('span');
+        dot.className = 'unsaved-dot';
+        a.prepend(dot);
+        if (file.path === currentPath && isDirty) {
+            a.classList.add('unsaved');
+        }
         a.href = '#';
-        a.onclick = (e) => {
+        a.onclick = async (e) => {
             e.preventDefault();
             console.log('File clicked:', file);
             console.log('File path:', file.path);
             loadFile(file.path);
         };
+
+        // Add right-click context menu for rename
+        a.oncontextmenu = (e) => {
+            e.preventDefault();
+            console.log('Context menu (rename) on file:', file.path);
+            jsLog('INFO', 'rename: contextmenu-event', file.path);
+            showRenameMenu(e, file);
+        };
+
+        // Double-click to rename
+        a.ondblclick = (e) => {
+            e.preventDefault();
+            console.log('Double-click (rename) on file:', file.path);
+            jsLog('INFO', 'rename: dblclick-event', file.path);
+            showRenameMenu(e, file);
+        };
+
+        jsLog('DEBUG', 'rename: handlers-attached', file.path);
+
         frag.appendChild(a);
     }
     tree.appendChild(frag);
+    updateUnsavedIndicator();
+}
+
+// ---- Rename (file name change) ----
+
+// Store the file to be renamed (used by modal handlers)
+let fileToRename = null;
+
+// Show rename file modal
+function showRenameFileModal(file) {
+    if (!file || !file.path) {
+        jsLog('ERROR', 'rename: invalid-file', 'file or file.path is missing');
+        console.error('showRenameFileModal: file or file.path is missing');
+        return;
+    }
+
+    fileToRename = file;
+    const oldPath = file.path; // e.g. "content/A.md" or "content/A.pdf"
+    const currentName = oldPath.replace(/^content\//, '');
+    const isMarkdown = /\.md$/i.test(currentName);
+    const isPdf = /\.pdf$/i.test(currentName);
+
+    // Remove extension (.md or .pdf) for display
+    let currentNameWithoutExt = currentName;
+    if (isMarkdown || isPdf) {
+        currentNameWithoutExt = currentName.replace(/\.[^.]+$/, '');
+    }
+
+    jsLog('INFO', 'rename: show-modal', 'oldPath=' + oldPath, 'currentName=' + currentName, 'displayName=' + currentNameWithoutExt);
+    console.log('Showing rename modal for:', currentName, '(displaying without extension:', currentNameWithoutExt + ')');
+
+    if (renameFileInput) {
+        renameFileInput.value = currentNameWithoutExt;
+        renameFileModal.style.display = 'flex';
+        renameFileInput.focus();
+        renameFileInput.select(); // Select all text for easy editing
+    } else {
+        jsLog('ERROR', 'rename: modal-element-missing', 'renameFileInput not found');
+        console.error('renameFileInput element not found');
+    }
+}
+
+// Hide rename file modal
+function hideRenameFileModal() {
+    if (renameFileModal) {
+        renameFileModal.style.display = 'none';
+    }
+    fileToRename = null;
+}
+
+// Handle file rename from modal
+async function handleFileRename() {
+    if (!fileToRename || !fileToRename.path) {
+        jsLog('ERROR', 'rename: no-file-to-rename', 'fileToRename is missing');
+        console.error('handleFileRename: fileToRename is missing');
+        return;
+    }
+
+    const newName = renameFileInput ? renameFileInput.value.trim() : '';
+    const oldPath = fileToRename.path; // e.g. "content/A.md" or "content/A.pdf"
+    const currentName = oldPath.replace(/^content\//, '');
+    const isMarkdown = /\.md$/i.test(currentName);
+    const isPdf = /\.pdf$/i.test(currentName);
+
+    // Remove extension for comparison (since modal displays without extension)
+    let currentNameWithoutExt = currentName;
+    if (isMarkdown || isPdf) {
+        currentNameWithoutExt = currentName.replace(/\.[^.]+$/, '');
+    }
+
+    jsLog('INFO', 'rename: handle-rename', 'oldPath=' + oldPath, 'currentName=' + currentName, 'newName=' + newName);
+
+    if (!newName) {
+        jsLog('INFO', 'rename: empty-input', 'User entered empty string');
+        statusEl.textContent = 'ファイル名が空です。';
+        return;
+    }
+
+    // Compare without extension (since extension will be added automatically)
+    if (newName === currentNameWithoutExt) {
+        jsLog('INFO', 'rename: no-change', currentNameWithoutExt, '->', newName);
+        statusEl.textContent = 'ファイル名が変更されていません。';
+        hideRenameFileModal();
+        return;
+    }
+
+    hideRenameFileModal();
+
+    try {
+        // Determine extension based on current file type
+        const targetExt = isPdf ? '.pdf' : '.md';
+
+        // Ensure extension is correct (.md or .pdf)
+        let finalName = newName;
+        if (!finalName.toLowerCase().endsWith(targetExt)) {
+            // Remove any existing extension and add targetExt
+            const nameWithoutExt = finalName.replace(/\.[^.]*$/, '');
+            finalName = nameWithoutExt + targetExt;
+            jsLog('INFO', 'rename: added-extension', 'original=' + newName, 'ext=' + targetExt, 'final=' + finalName);
+        }
+
+        // Ensure path starts with content/
+        const newPath = finalName.startsWith('content/')
+            ? finalName
+            : 'content/' + finalName;
+
+        const newLabel = newPath.replace(/^content\//, '');
+        statusEl.textContent = `Renaming ${currentName} → ${newLabel} ...`;
+        console.log('Calling rename API:', oldPath, '->', newPath);
+        jsLog('INFO', 'rename: call-api', oldPath, '->', newPath);
+
+        if (isPdf) {
+            await api.RenamePdfFile(oldPath, newPath);
+        } else {
+            await api.RenameFile(oldPath, newPath);
+        }
+
+        statusEl.textContent = 'リネームしました: ' + newLabel;
+        jsLog('INFO', 'rename: success', oldPath, '->', newPath);
+
+        // Reload file list and graph
+        jsLog('INFO', 'rename: reloading-file-list');
+        await loadFileList();
+        // Explicitly render file list to ensure UI is updated
+        renderFileList();
+        jsLog('INFO', 'rename: file-list-rendered');
+
+        try {
+            await updateGraph();
+            jsLog('INFO', 'rename: graph-updated');
+        } catch (err) {
+            console.warn('Failed to update graph after rename:', err);
+            jsLog('WARN', 'rename: graph-update-failed', err?.message || String(err));
+        }
+
+        // Open the renamed file
+        jsLog('INFO', 'rename: opening-renamed-file', newPath);
+        currentPath = newPath;
+        await loadFile(newPath);
+
+        // Ensure sidebar is updated with active state after loading
+        renderFileList();
+        jsLog('INFO', 'rename: file-view-updated-complete');
+    } catch (error) {
+        console.error('Failed to rename file:', error);
+        statusEl.textContent = 'リネームに失敗しました: ' + (error?.message || error);
+        jsLog('ERROR', 'rename: failed', error?.message || String(error));
+    }
+}
+
+// Common interactive rename handler (now uses modal)
+async function renameFileInteractive(file) {
+    jsLog('INFO', 'rename: function-called', file?.path || 'no file');
+    console.log('renameFileInteractive called with file:', file);
+    showRenameFileModal(file);
+}
+
+// Simple context-menu handler (currently just prompts for new name)
+function showRenameMenu(e, file) {
+    jsLog('INFO', 'rename: showRenameMenu-called', file?.path || 'no file');
+    console.log('showRenameMenu called with file:', file, 'event:', e);
+
+    // For now we don't render a custom menu; we just reuse the interactive prompt.
+    // This keeps UIシンプル and avoids extra DOM elements.
+    jsLog('INFO', 'rename: calling-renameFileInteractive');
+    renameFileInteractive(file);
 }
 
 // Load a file
 async function loadFile(path) {
     console.log('loadFile called with path:', path);
+    if (isDirty) {
+        const ok = await confirmNavigationIfDirty();
+        if (!ok) {
+            console.log('Navigation cancelled due to unsaved changes');
+            return;
+        }
+    }
     try {
         statusEl.textContent = 'Loading...';
         console.log('Calling LoadFile with path:', path);
         const content = await api.LoadFile(path);
         console.log('LoadFile returned content, length:', content.length);
-        ta.value = content;
-        currentPath = path;
+
+        // Check if this is a PDF file
+        const isPdf = path.toLowerCase().endsWith('.pdf');
+
+        if (isPdf) {
+            // PDF閲覧モード: エディタを非表示、プレビューにPDFを表示
+            ta.value = '';
+            currentPath = path;
+            lastSavedContent = '';
+            setDirtyState(false);
+
+            // Hide editor
+            if (ta) {
+                ta.style.display = 'none';
+            }
+            const row = document.querySelector('.row');
+            if (row) {
+                row.classList.add('pdf-mode');
+            }
+
+            // Update preview with PDF
+            await updatePreview();
+        } else {
+            // 通常のマークダウンファイル
+            ta.value = content;
+            currentPath = path;
+            lastSavedContent = content;
+            setDirtyState(false);
+
+            // Show editor
+            if (ta) {
+                ta.style.display = '';
+            }
+            const row = document.querySelector('.row');
+            if (row) {
+                row.classList.remove('pdf-mode');
+            }
+
+            // Update preview
+            await updatePreview();
+
+            // Also update audio player directly (in case updatePreview didn't call it)
+            await updateAudioPlayer(content);
+        }
 
         // Update active file in sidebar
         document.querySelectorAll('.item').forEach(item => {
@@ -577,12 +1021,6 @@ async function loadFile(path) {
                 break;
             }
         }
-
-        // Update preview
-        await updatePreview();
-
-        // Also update audio player directly (in case updatePreview didn't call it)
-        await updateAudioPlayer(content);
 
         statusEl.textContent = 'Loaded';
         console.log('File loaded successfully');
@@ -600,21 +1038,73 @@ async function save() {
         return;
     }
 
+    // Prevent accidentally overwriting PDF files with text buffer
+    if (currentPath.toLowerCase().endsWith('.pdf')) {
+        console.warn('Save skipped: current file is a PDF:', currentPath);
+        statusEl.textContent = 'PDF閲覧中は保存できません';
+        return;
+    }
+
+    // 保存処理中フラグを設定
+    isSaving = true;
+
     try {
         statusEl.textContent = 'Saving...';
         console.log('Calling SaveFile with path:', currentPath, 'content length:', ta.value.length);
         await api.SaveFile(currentPath, ta.value);
         statusEl.textContent = 'Saved';
         console.log('File saved successfully');
+        lastSavedContent = ta.value;
+        setDirtyState(false);
     } catch (error) {
         console.error('Failed to save file:', error);
         statusEl.textContent = 'Save failed: ' + error.message;
+    } finally {
+        // 保存処理中フラグをリセット
+        isSaving = false;
     }
 }
 
 // Update preview
 async function updatePreview() {
     try {
+        // Check if current file is a PDF
+        if (currentPath && currentPath.toLowerCase().endsWith('.pdf')) {
+            try {
+                const pdfUrl = await api.GetPdfFileURL(currentPath);
+                // Create HTML with embedded PDF
+                const pdfHtml = `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>PDF Viewer</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #525252;
+        }
+        embed {
+            width: 100%;
+            height: 100vh;
+            border: none;
+        }
+    </style>
+</head>
+<body>
+    <embed src="${pdfUrl}" type="application/pdf" />
+</body>
+</html>`;
+                pv.srcdoc = pdfHtml;
+                return;
+            } catch (error) {
+                console.error('Failed to load PDF:', error);
+                pv.srcdoc = `<html><body><p>PDFの読み込みに失敗しました: ${error.message}</p></body></html>`;
+                return;
+            }
+        }
+
         const content = ta.value;
         const caretIndex = typeof ta.selectionStart === 'number' ? ta.selectionStart : 0;
         const caretLine = getCaretLineNumber(content, caretIndex);
@@ -747,6 +1237,8 @@ async function updatePreview() {
             // Setup drop handlers after iframe loads (for Marp)
             pv.addEventListener('load', () => {
                 setupPreviewImageDrop();
+                // Make updateLinkToLatest available in iframe context
+                setupUpdateLinkToLatestHandler();
             }, { once: true });
 
             // Handle audio player even for Marp presentations
@@ -779,6 +1271,8 @@ async function updatePreview() {
         // Setup drop handlers after iframe loads
         pv.addEventListener('load', () => {
             setupPreviewImageDrop();
+            // Make updateLinkToLatest available in iframe context
+            setupUpdateLinkToLatestHandler();
         }, { once: true });
 
         // Handle audio player
@@ -1308,6 +1802,34 @@ function setupEventListeners() {
         });
     }
 
+    // Rename file modal event listeners
+    if (confirmRenameBtn) {
+        confirmRenameBtn.onclick = handleFileRename;
+    }
+
+    if (cancelRenameBtn) {
+        cancelRenameBtn.onclick = hideRenameFileModal;
+    }
+
+    // Close rename modal when clicking outside
+    if (renameFileModal) {
+        renameFileModal.onclick = (e) => {
+            if (e.target === renameFileModal) {
+                hideRenameFileModal();
+            }
+        };
+    }
+
+    if (renameFileInput) {
+        renameFileInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                handleFileRename();
+            } else if (e.key === 'Escape') {
+                hideRenameFileModal();
+            }
+        });
+    }
+
     // Editor input with debouncing
     let inputTimeout = null;
     ta.addEventListener('input', () => {
@@ -1315,6 +1837,7 @@ function setupEventListeners() {
         inputTimeout = setTimeout(() => {
             updatePreview();
         }, 300);
+        setDirtyState(currentPath && ta.value !== lastSavedContent);
     });
 
     // Setup editor drop handler for images
@@ -1370,6 +1893,41 @@ function setupEventListeners() {
             switchToTab(tabName);
         });
     });
+
+    // Handle window close with custom modal (Wails OnBeforeClose)
+    if (!isBrowser && !closeHandlerRegistered) {
+        closeHandlerRegistered = true; // フラグを設定して重複登録を防ぐ
+        EventsOn('check-unsaved-before-close', async () => {
+            // 既にモーダルが表示されている場合は何もしない
+            if (isModalShowing) {
+                return;
+            }
+
+            if (isDirty) {
+                const result = await confirmNavigationIfDirty();
+                if (result) {
+                    // User confirmed (saved or discarded), allow closing
+                    if (AllowClose) {
+                        AllowClose();
+                    }
+                }
+                // If result is false, user cancelled, so window won't close
+            } else {
+                // No unsaved changes, allow closing
+                if (AllowClose) {
+                    AllowClose();
+                }
+            }
+        });
+    } else if (isBrowser) {
+        // Browser mode: use beforeunload
+        window.addEventListener('beforeunload', (e) => {
+            if (isDirty) {
+                e.preventDefault();
+                e.returnValue = '';
+            }
+        });
+    }
 
     setupDragAndDrop();
     setupRecording();
@@ -1476,6 +2034,39 @@ function setupPreviewImageDrop() {
 function setupImageGallery() {
     // Load initial gallery
     loadImageGallery();
+
+    // Setup capture screen button
+    if (captureScreenBtn) {
+        // Disable in pure browser mode (no backend)
+        if (isBrowser || !CaptureScreenInteractive) {
+            captureScreenBtn.disabled = true;
+            captureScreenBtn.title = 'スクリーンショットはデスクトップアプリでのみ利用できます';
+        } else {
+            captureScreenBtn.addEventListener('click', async () => {
+                if (captureScreenBtn.disabled) {
+                    return;
+                }
+                try {
+                    captureScreenBtn.disabled = true;
+                    setStatusMessage('スクリーンショットを取得中...', 0);
+                    const path = await CaptureScreenInteractive();
+                    if (path && typeof path === 'string') {
+                        console.log('Screenshot saved to:', path);
+                        setStatusMessage('スクリーンショットを保存しました', 3000);
+                    } else {
+                        setStatusMessage('スクリーンショットが保存されませんでした', 3000);
+                    }
+                    await loadImageGallery();
+                } catch (error) {
+                    console.error('Failed to capture screenshot:', error);
+                    const msg = (error && (error.message || String(error))) || 'スクリーンショットに失敗しました';
+                    setStatusMessage(msg, 5000);
+                } finally {
+                    captureScreenBtn.disabled = false;
+                }
+            });
+        }
+    }
 
     // Setup toggle button in top bar
     if (galleryToggle) {
@@ -2187,6 +2778,7 @@ function setupRecording() {
                 const newContent = content + '\n\n## Transcript\n\n' + partialMarkerStart + text + partialMarkerEnd + '\n';
                 const cursorPos = ta.selectionStart;
                 ta.value = newContent;
+                setDirtyState(currentPath && ta.value !== lastSavedContent);
                 scheduleRecordingPreviewUpdate();
                 if (cursorPos <= content.length) {
                     ta.setSelectionRange(cursorPos, cursorPos);
@@ -2217,6 +2809,7 @@ function setupRecording() {
             }
 
             ta.value = newContent;
+            setDirtyState(currentPath && ta.value !== lastSavedContent);
             scheduleRecordingPreviewUpdate();
 
             const transcriptStart = headerIndex;
@@ -2247,6 +2840,7 @@ function setupRecording() {
                 const newContent = content + '\n\n## Transcript\n\n' + finalLine + '\n';
                 const cursorPos = ta.selectionStart;
                 ta.value = newContent;
+                setDirtyState(currentPath && ta.value !== lastSavedContent);
                 scheduleRecordingPreviewUpdate();
                 if (cursorPos <= content.length) {
                     ta.setSelectionRange(cursorPos, cursorPos);
@@ -2287,6 +2881,7 @@ function setupRecording() {
             }
 
             ta.value = newContent;
+            setDirtyState(currentPath && ta.value !== lastSavedContent);
             scheduleRecordingPreviewUpdate();
 
             const transcriptStart = headerIndex;
@@ -2362,6 +2957,7 @@ function setupDragAndDrop() {
 
         const hasAudio = files.some((file) => isSupportedAudioFile(file.name));
         const hasImage = files.some((file) => isSupportedImageFile(file.name));
+        const hasPdf = files.some((file) => isSupportedPdfFile(file.name));
 
         const tasks = [];
         if (hasAudio) {
@@ -2369,6 +2965,9 @@ function setupDragAndDrop() {
         }
         if (hasImage) {
             tasks.push(handleImageDrop(files));
+        }
+        if (hasPdf) {
+            tasks.push(handlePdfDrop(files));
         }
 
         if (tasks.length === 0) {
@@ -2390,6 +2989,11 @@ function isSupportedAudioFile(name = '') {
 function isSupportedImageFile(name = '') {
     const lower = (name || '').toLowerCase();
     return supportedImageExt.some((ext) => lower.endsWith(ext));
+}
+
+function isSupportedPdfFile(name = '') {
+    const lower = (name || '').toLowerCase();
+    return lower.endsWith('.pdf');
 }
 
 async function handleAudioDrop(fileList) {
@@ -2468,6 +3072,48 @@ async function handleImageDrop(fileList) {
     setStatusMessage('画像ファイルを保存しました。', 3000);
     // Reload image gallery after import
     await loadImageGallery();
+}
+
+async function handlePdfDrop(fileList) {
+    if (!fileList || fileList.length === 0) {
+        return;
+    }
+    if (!api.ImportPdfFile) {
+        console.warn('ImportPdfFile API is unavailable in this environment');
+        return;
+    }
+
+    const files = Array.from(fileList).filter((file) => isSupportedPdfFile(file.name));
+    if (files.length === 0) {
+        setStatusMessage('対応していないファイル形式です (pdf)', 3000);
+        return;
+    }
+
+    for (const file of files) {
+        try {
+            setStatusMessage(`PDFを取り込み中: ${file.name}`);
+            if (file.path) {
+                const pdfPath = await api.ImportPdfFile(file.path);
+                // Load the imported PDF file
+                await loadFile(pdfPath);
+            } else if (api.ImportPdfBase64 && file.arrayBuffer) {
+                const buffer = await file.arrayBuffer();
+                const base64 = arrayBufferToBase64(buffer);
+                const pdfPath = await api.ImportPdfBase64(file.name || `document-${Date.now()}.pdf`, base64);
+                // Load the imported PDF file
+                await loadFile(pdfPath);
+            } else {
+                console.warn('Cannot access data for dropped PDF:', file.name);
+                setStatusMessage('PDFデータにアクセスできませんでした', 4000);
+            }
+        } catch (error) {
+            console.error('ImportPdfFile failed', error);
+            setStatusMessage(`PDF取り込みに失敗: ${error?.message || error}`, 4000);
+        }
+    }
+
+    await loadFileList();
+    setStatusMessage('PDFファイルを保存しました。', 3000);
 }
 
 function arrayBufferToBase64(buffer) {
@@ -2621,6 +3267,91 @@ function hideTranscriptionProgress() {
     transcriptionProgressFill.style.width = '0%';
     currentTranscriptionAudioPath = null;
     currentTranscriptionTotalSegments = 0;
+}
+
+// Handle PDF export progress
+let currentPDFExportTotalImages = 0;
+
+function handlePDFExportProgress(payload) {
+    if (!payload) {
+        return;
+    }
+
+    const currentImage = payload.currentImage || payload.CurrentImage || 0;
+    const totalImages = payload.totalImages || payload.TotalImages || 0;
+    const htmlSize = payload.htmlSize || payload.HtmlSize || 0;
+    const stage = payload.stage || payload.Stage || '';
+
+    // Start progress if this is a new export
+    if (totalImages !== currentPDFExportTotalImages) {
+        currentPDFExportTotalImages = totalImages;
+        showPDFExportProgress(totalImages, htmlSize);
+    }
+
+    // Update progress bar
+    if (pdfExportProgressFill && totalImages > 0) {
+        const progress = Math.min(100, (currentImage / totalImages) * 100);
+        pdfExportProgressFill.style.width = `${progress}%`;
+        pdfExportProgressFill.classList.remove('indeterminate');
+    } else if (pdfExportProgressFill && totalImages === 0) {
+        // Fallback to indeterminate if total images unknown
+        pdfExportProgressFill.classList.add('indeterminate');
+    }
+
+    // Update progress text
+    if (pdfExportProgressText) {
+        let stageText = '';
+        if (stage === 'converting-images') {
+            stageText = '画像を変換中';
+        } else if (stage === 'loading-webview') {
+            stageText = 'WebViewを読み込み中';
+        } else if (stage === 'generating-pdf') {
+            stageText = 'PDFを生成中';
+        } else {
+            stageText = '処理中';
+        }
+
+        if (totalImages > 0) {
+            pdfExportProgressText.textContent = `PDF出力中: ${stageText} (${currentImage}/${totalImages}枚の画像を処理済み)`;
+        } else {
+            pdfExportProgressText.textContent = `PDF出力中: ${stageText}`;
+        }
+    }
+}
+
+function showPDFExportProgress(totalImages, htmlSize) {
+    if (!pdfExportProgressEl || !pdfExportProgressFill) {
+        return;
+    }
+
+    pdfExportProgressEl.style.display = 'flex';
+
+    // Reset progress bar
+    if (totalImages > 0) {
+        pdfExportProgressFill.style.width = '0%';
+        pdfExportProgressFill.classList.remove('indeterminate');
+    } else {
+        pdfExportProgressFill.classList.add('indeterminate');
+    }
+
+    if (pdfExportProgressText) {
+        if (totalImages > 0) {
+            pdfExportProgressText.textContent = `PDF出力中: 画像を変換中 (0/${totalImages}枚の画像を処理済み)`;
+        } else {
+            pdfExportProgressText.textContent = 'PDF出力中: 処理中...';
+        }
+    }
+}
+
+function hidePDFExportProgress() {
+    if (!pdfExportProgressEl || !pdfExportProgressFill) {
+        return;
+    }
+
+    pdfExportProgressEl.style.display = 'none';
+    pdfExportProgressFill.classList.remove('indeterminate');
+    pdfExportProgressFill.style.width = '0%';
+    currentPDFExportTotalImages = 0;
 }
 
 function setStatusMessage(message, durationMs = 0) {
@@ -2856,9 +3587,15 @@ async function exportPdf() {
         }
 
         if (!isBrowser) {
-            const pdfPath = await api.ExportPDF(html);
-            statusEl.textContent = 'PDF exported: ' + pdfPath;
-            BrowserOpenURL('file://' + pdfPath);
+            // 非同期でPDFエクスポートを開始
+            showPDFExportProgress(0, html.length);
+            try {
+                await api.ExportPDF(html);
+                // イベントで完了を待つ（exportPdfCompletedハンドラーで処理）
+            } catch (error) {
+                hidePDFExportProgress();
+                throw error;
+            }
         } else {
             // In browser, open print dialog
             const win = window.open('about:blank', '_blank', 'noopener');
@@ -2873,13 +3610,16 @@ async function exportPdf() {
         }
     } catch (error) {
         console.error('Export PDF failed:', error);
+        hidePDFExportProgress();
         const msg = (error && (error.message || String(error))) || 'Export PDF failed';
         statusEl.textContent = msg;
         alert(msg);
     }
     finally {
-        if (exportPdfBtn) {
-            exportPdfBtn.disabled = false;
+        // ボタンの有効化はイベントハンドラーで行う（非同期完了時）
+        // エラー時のみここで有効化
+        if (exportPdfBtn && !exportPdfBtn.disabled) {
+            // 既に有効化されている場合は何もしない
         }
     }
 }
@@ -3084,6 +3824,64 @@ if (resolveConflictBtn && cancelConflictBtn) {
     cancelConflictBtn.addEventListener('click', () => {
         hideConflictResolutionModal();
     });
+}
+
+// Update link to latest version (called from HTML onclick)
+async function updateLinkToLatest(button) {
+    const sourceDocID = button.getAttribute('data-source-doc-id');
+    const targetDocID = button.getAttribute('data-target-doc-id');
+
+    if (!sourceDocID || !targetDocID) {
+        console.error('Missing doc IDs for link update');
+        return;
+    }
+
+    try {
+        await api.UpdateLinkToLatest(sourceDocID, targetDocID);
+        // Preview will be updated automatically via link-updated event
+        setStatusMessage('リンクを最新版に更新しました', 2000);
+    } catch (error) {
+        console.error('Failed to update link to latest:', error);
+        setStatusMessage('リンクの更新に失敗しました: ' + error.message, 5000);
+    }
+}
+
+// Make updateLinkToLatest available globally for onclick handlers
+window.updateLinkToLatest = updateLinkToLatest;
+
+// Setup updateLinkToLatest handler in preview iframe
+function setupUpdateLinkToLatestHandler() {
+    if (!pv) {
+        return;
+    }
+
+    try {
+        const iframeWindow = pv.contentWindow;
+        const iframeDoc = pv.contentDocument || iframeWindow?.document;
+        if (!iframeWindow || !iframeDoc) {
+            // Retry after a short delay
+            setTimeout(() => setupUpdateLinkToLatestHandler(), 100);
+            return;
+        }
+
+        // Make updateLinkToLatest available in iframe context
+        iframeWindow.updateLinkToLatest = updateLinkToLatest;
+
+        // Also setup event listeners for buttons (as fallback if onclick doesn't work)
+        const updateButtons = iframeDoc.querySelectorAll('.update-to-latest-btn');
+        updateButtons.forEach(button => {
+            // Remove existing listeners to avoid duplicates
+            const newButton = button.cloneNode(true);
+            button.parentNode.replaceChild(newButton, button);
+
+            newButton.addEventListener('click', (e) => {
+                e.preventDefault();
+                updateLinkToLatest(newButton);
+            });
+        });
+    } catch (error) {
+        console.error('Failed to setup updateLinkToLatest handler in iframe:', error);
+    }
 }
 
 // Initialize when DOM is loaded

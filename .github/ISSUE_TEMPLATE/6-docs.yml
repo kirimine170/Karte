@@ -1,0 +1,43 @@
+# .github/ISSUE_TEMPLATE/6-docs.yml
+name: "ドキュメント / Docs"
+description: "README や設計資料などの更新・追加"
+title: "[Docs]: "
+labels:
+  - type/docs
+  - status/triage
+
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: 概要
+      placeholder: 例）README を現状の機能に合わせて更新する
+    validations:
+      required: true
+
+  - type: textarea
+    id: target
+    attributes:
+      label: 対象ドキュメント
+      placeholder: 例）README.md, docs/ocr-design.md
+    validations:
+      required: true
+
+  - type: textarea
+    id: changes
+    attributes:
+      label: 変更内容
+      description: 追加・変更したい点を箇条書きで
+      placeholder: |
+        - インストール手順を現行の CI に合わせて更新
+        - OCR 機能の使い方セクションを追加
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: 補足
+      description: スクリーンショット案や図のイメージなど
+    validations:
+      required: false

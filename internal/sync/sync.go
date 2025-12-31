@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ type SyncManager struct {
 	PeersMutex sync.RWMutex
 	listener   net.Listener
 	port       int
+	fileMgr    FileManager
 }
 
 // Peer represents a connected peer
@@ -33,6 +35,20 @@ type Peer struct {
 	Conn     net.Conn
 }
 
+// FileManager abstracts file operations for synchronization.
+type FileManager interface {
+	MkdirAll(path string, perm fs.FileMode) error
+	WriteFile(name string, data []byte, perm fs.FileMode) error
+}
+
+// OSFileManager implements FileManager using the os package.
+type OSFileManager struct{}
+
+func (OSFileManager) MkdirAll(path string, perm fs.FileMode) error { return os.MkdirAll(path, perm) }
+func (OSFileManager) WriteFile(name string, data []byte, perm fs.FileMode) error {
+	return os.WriteFile(name, data, perm)
+}
+
 // FileChange represents a file change event
 type FileChange struct {
 	Path    string    `json:"path"`
@@ -43,11 +59,20 @@ type FileChange struct {
 
 // NewSyncManager creates a new sync manager
 func NewSyncManager(ctx context.Context, root string) *SyncManager {
+	return NewSyncManagerWithFileManager(ctx, root, OSFileManager{})
+}
+
+// NewSyncManagerWithFileManager creates a new sync manager with injected FileManager.
+func NewSyncManagerWithFileManager(ctx context.Context, root string, fileMgr FileManager) *SyncManager {
+	if fileMgr == nil {
+		fileMgr = OSFileManager{}
+	}
 	return &SyncManager{
-		ctx:   ctx,
-		root:  root,
-		Peers: make(map[string]*Peer),
-		port:  8080, // Default port for sync
+		ctx:     ctx,
+		root:    root,
+		Peers:   make(map[string]*Peer),
+		port:    8080, // Default port for sync
+		fileMgr: fileMgr,
 	}
 }
 
@@ -289,16 +314,18 @@ func (sm *SyncManager) applyFileChange(change FileChange) error {
 
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(fullPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := sm.fileMgr.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create directory: %v", err)
 	}
 
 	// Write file
-	err := os.WriteFile(fullPath, []byte(change.Content), 0644)
+	err := sm.fileMgr.WriteFile(fullPath, []byte(change.Content), 0644)
 	if err != nil {
 		return fmt.Errorf("failed to write file: %v", err)
 	}
 
-	runtime.LogInfo(sm.ctx, fmt.Sprintf("Applied file change from peer: %s", change.Path))
+	if sm.ctx != nil {
+		runtime.LogInfo(sm.ctx, fmt.Sprintf("Applied file change from peer: %s", change.Path))
+	}
 	return nil
 }

@@ -15,6 +15,7 @@ type FrontMatter struct {
 	Tags  string         `yaml:"tags"` // Comma-separated tags string
 	Theme string         `yaml:"theme"`
 	Marp  bool           `yaml:"marp"` // Marp presentation mode
+	DocID string         `yaml:"doc_id"` // Document ID (logical document identifier)
 	Raw   map[string]any // Capture remaining custom fields
 }
 
@@ -44,6 +45,10 @@ func (fm *FrontMatter) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	if marp, ok := raw["marp"].(bool); ok {
 		fm.Marp = marp
 		delete(raw, "marp")
+	}
+	if docID, ok := raw["doc_id"].(string); ok {
+		fm.DocID = docID
+		delete(raw, "doc_id")
 	}
 
 	// Store remaining fields in Raw
@@ -171,11 +176,16 @@ func FormatFrontMatter(fm *FrontMatter) string {
 		lines = append(lines, fmt.Sprintf(`theme: "%s"`, escapeYAMLString(fm.Theme)))
 	}
 
+	// Format doc_id with quotes
+	if fm.DocID != "" {
+		lines = append(lines, fmt.Sprintf(`doc_id: "%s"`, escapeYAMLString(fm.DocID)))
+	}
+
 	// Format custom fields from Raw
 	if fm.Raw != nil {
 		for key, value := range fm.Raw {
 			// Skip already handled fields
-			if key == "title" || key == "tags" || key == "theme" {
+			if key == "title" || key == "tags" || key == "theme" || key == "doc_id" {
 				continue
 			}
 			// Format with quotes for string values
@@ -226,6 +236,15 @@ func ExtractTheme(content string) string {
 	fm, _ := ParseFrontMatter(content)
 	if fm != nil && fm.Theme != "" {
 		return fm.Theme
+	}
+	return ""
+}
+
+// ExtractDocID extracts doc_id from frontmatter
+func ExtractDocID(content string) string {
+	fm, _ := ParseFrontMatter(content)
+	if fm != nil && fm.DocID != "" {
+		return fm.DocID
 	}
 	return ""
 }

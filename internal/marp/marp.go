@@ -579,6 +579,50 @@ func processInlineFormatting(text string) string {
 		return fmt.Sprintf("<CODE_PLACEHOLDER>%s</CODE_PLACEHOLDER>", escapedContent)
 	})
 
+	// Links: [text](url) or [text](url "title")
+	// Process before HTML escaping to preserve link tags
+	// Match pattern: [text](url) or [text](url "title")
+	// Note: Must NOT match images (![alt](path)), so we check that the character before [ is not !
+	linkRegex := regexp.MustCompile(`([^!]|^)\[([^\]]+)\]\(([^)]+)\)`)
+	text = linkRegex.ReplaceAllStringFunc(text, func(match string) string {
+		parts := linkRegex.FindStringSubmatch(match)
+		if len(parts) < 4 {
+			return match
+		}
+		prefix := parts[1] // Character before [ (should not be !)
+		linkText := parts[2]
+		urlAndTitle := parts[3] // This may contain url "title"
+
+		// Parse url and title from urlAndTitle
+		// Format: url or url "title"
+		var url, title string
+		titleMatch := regexp.MustCompile(`^(.+?)\s+"([^"]+)"$`).FindStringSubmatch(urlAndTitle)
+		if len(titleMatch) >= 3 {
+			// Has title
+			url = titleMatch[1]
+			title = titleMatch[2]
+		} else {
+			// No title, entire string is url
+			url = urlAndTitle
+			title = ""
+		}
+
+		// Escape link text and title for HTML attributes, but keep url unescaped for URL processing
+		escapedLinkText := html.EscapeString(linkText)
+		escapedTitle := html.EscapeString(title)
+
+		// Convert .md links to .html links for proper navigation
+		// If url ends with .md, replace with .html
+		if strings.HasSuffix(strings.ToLower(url), ".md") {
+			url = strings.TrimSuffix(url, ".md") + ".html"
+		}
+
+		// Build link tag with unescaped url (will be properly escaped in the final output)
+		// Use special markers to protect the url from HTML escaping
+		// Include prefix to preserve context
+		return prefix + fmt.Sprintf("<LINK_PLACEHOLDER>__LINK_URL_START__%s__LINK_URL_END____LINK_TEXT_START__%s__LINK_TEXT_END____LINK_TITLE_START__%s__LINK_TITLE_END__</LINK_PLACEHOLDER>", url, escapedLinkText, escapedTitle)
+	})
+
 	// Images: ![alt](path "title") or ![alt](path)
 	// Process before HTML escaping to preserve image tags
 	// Match pattern: ![alt](path) or ![alt](path "title")
@@ -634,6 +678,65 @@ func processInlineFormatting(text string) string {
 	text = strings.ReplaceAll(text, "&lt;/EM_PLACEHOLDER&gt;", "</em>")
 	text = strings.ReplaceAll(text, "&lt;CODE_PLACEHOLDER&gt;", "<code>")
 	text = strings.ReplaceAll(text, "&lt;/CODE_PLACEHOLDER&gt;", "</code>")
+
+	// Replace link placeholder (link tags should not be escaped)
+	// First, handle escaped placeholders
+	text = strings.ReplaceAll(text, "&lt;LINK_PLACEHOLDER&gt;", "<LINK_PLACEHOLDER>")
+	text = strings.ReplaceAll(text, "&lt;/LINK_PLACEHOLDER&gt;", "</LINK_PLACEHOLDER>")
+
+	// Extract and restore link tags
+	linkPlaceholderRegex := regexp.MustCompile(`<LINK_PLACEHOLDER>(.*?)</LINK_PLACEHOLDER>`)
+	text = linkPlaceholderRegex.ReplaceAllStringFunc(text, func(match string) string {
+		content := linkPlaceholderRegex.FindStringSubmatch(match)[1]
+		// Decode HTML entities in the content
+		content = strings.ReplaceAll(content, "&amp;", "&")
+		content = strings.ReplaceAll(content, "&lt;", "<")
+		content = strings.ReplaceAll(content, "&gt;", ">")
+		content = strings.ReplaceAll(content, "&quot;", "\"")
+		content = strings.ReplaceAll(content, "&#39;", "'")
+
+		// Extract url, linkText, and title from markers
+		urlMatch := regexp.MustCompile(`__LINK_URL_START__(.*?)__LINK_URL_END__`).FindStringSubmatch(content)
+		textMatch := regexp.MustCompile(`__LINK_TEXT_START__(.*?)__LINK_TEXT_END__`).FindStringSubmatch(content)
+		titleMatch := regexp.MustCompile(`__LINK_TITLE_START__(.*?)__LINK_TITLE_END__`).FindStringSubmatch(content)
+
+		if len(urlMatch) < 2 || len(textMatch) < 2 {
+			// Log error for debugging
+			fmt.Printf("[Marp] Failed to parse link placeholder: content=%q\n", content)
+			return match // Return original if parsing fails
+		}
+
+		linkURL := urlMatch[1]
+		linkText := textMatch[1]
+		linkTitle := ""
+		if len(titleMatch) >= 2 && titleMatch[1] != "" {
+			linkTitle = titleMatch[1]
+		}
+
+		// Decode any HTML entities that might have been encoded in the url
+		linkURL = strings.ReplaceAll(linkURL, "&amp;", "&")
+		linkURL = strings.ReplaceAll(linkURL, "&lt;", "<")
+		linkURL = strings.ReplaceAll(linkURL, "&gt;", ">")
+		linkURL = strings.ReplaceAll(linkURL, "&quot;", "\"")
+		linkURL = strings.ReplaceAll(linkURL, "&#34;", "\"")
+		linkURL = strings.ReplaceAll(linkURL, "&#39;", "'")
+		linkURL = strings.ReplaceAll(linkURL, "&amp;#34;", "\"")
+		linkURL = strings.ReplaceAll(linkURL, "&amp;#39;", "'")
+
+		// Escape url for HTML attribute (but keep it as a URL path)
+		escapedURL := html.EscapeString(linkURL)
+
+		// Build link tag
+		linkTag := fmt.Sprintf(`<a href="%s"`, escapedURL)
+		if linkTitle != "" {
+			linkTag += fmt.Sprintf(` title="%s"`, linkTitle)
+		}
+		linkTag += fmt.Sprintf(`>%s</a>`, linkText)
+
+		fmt.Printf("[Marp] Generated link tag: %s (url: %s, text: %s, title: %s)\n", linkTag, linkURL, linkText, linkTitle)
+
+		return linkTag
+	})
 
 	// Replace image placeholder (image tags should not be escaped)
 	// First, handle escaped placeholders
