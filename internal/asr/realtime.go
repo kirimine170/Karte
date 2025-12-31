@@ -34,7 +34,7 @@ func NewRealtimeService(cfg *Config) (*RealtimeService, error) {
 func NewRealtimeServiceWithLogger(cfg *Config, logFunc LogFunc) (*RealtimeService, error) {
 	log := func(format string, args ...interface{}) {
 		msg := fmt.Sprintf("[RealtimeASR] "+format, args...)
-		fmt.Printf(msg + "\n")
+		fmt.Printf("%s\n", msg)
 		if logFunc != nil {
 			logFunc(format, args...)
 		}

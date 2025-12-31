@@ -871,7 +871,7 @@ func ExportHTMLToPDF(html string, outPath string, logPath string) error {
 	cerr := C.exportHTMLToPDFMac(cHtml, cOut, cLogPath)
 	if cerr != nil {
 		defer C.free(unsafe.Pointer(cerr))
-		return fmt.Errorf(C.GoString(cerr))
+		return fmt.Errorf("%s", C.GoString(cerr))
 	}
 	return nil
 }
