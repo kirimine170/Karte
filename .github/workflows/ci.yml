@@ -72,7 +72,15 @@ jobs:
 
       - name: Install PortAudio (Windows)
         if: runner.os == 'Windows'
-        run: choco install -y portaudio
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          # vcpkgを使用してPortAudioをインストール
+          git clone https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
+          & "$env:VCPKG_ROOT\vcpkg\bootstrap-vcpkg.bat"
+          & "$env:VCPKG_ROOT\vcpkg\vcpkg.exe" install portaudio:x64-windows
+          # vcpkgをPATHに追加（将来的に使用する場合）
+          echo "$env:VCPKG_ROOT" >> $env:GITHUB_PATH
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
