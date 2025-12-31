@@ -36,6 +36,9 @@ jobs:
         working-directory: frontend
         run: npm run build --if-present
 
+      - name: Install system dependencies
+        run: brew install portaudio
+
       - name: Backend tests
         run: |
           mkdir -p reports
