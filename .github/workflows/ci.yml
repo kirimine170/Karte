@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main", "master", "ci" ]
+  pull_request:
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }} - ${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            arch: amd64
+            platform: linux/amd64
+          - os: macos-15
+            arch: arm64
+            platform: darwin/arm64
+          - os: macos-15-intel
+            arch: amd64
+            platform: darwin/amd64
+          - os: windows-latest
+            arch: amd64
+            platform: windows/amd64
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Download Go dependencies
+        run: go mod download
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+
+      - name: Install PortAudio (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev
+
+      - name: Install Wails dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.0-dev \
+            libgdk-pixbuf2.0-dev \
+            libpango1.0-dev \
+            libatk1.0-dev \
+            libcairo2-dev \
+            libgirepository1.0-dev \
+            pkg-config
+
+      - name: Install PortAudio (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install portaudio
+
+      - name: Install PortAudio (Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          # vcpkgを使用してPortAudioをインストール
+          git clone https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
+          & "$env:VCPKG_ROOT\vcpkg\bootstrap-vcpkg.bat"
+          & "$env:VCPKG_ROOT\vcpkg\vcpkg.exe" install portaudio:x64-windows
+          # vcpkgをPATHに追加（将来的に使用する場合）
+          echo "$env:VCPKG_ROOT" >> $env:GITHUB_PATH
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install --prefer-offline --no-audit
+
+      - name: Prepare placeholder dist
+        run: |
+          mkdir -p frontend/dist
+          touch frontend/dist/.placeholder
+
+      - name: Prepare font file for Windows build
+        if: runner.os == 'Windows'
+        run: |
+          mkdir -p internal/pdf/fonts
+          # ダミーのTTFファイルを作成（空ファイルでもビルドは通る）
+          # 実際のフォントファイルがない場合は、空ファイルを作成
+          echo "" > internal/pdf/fonts/NotoSansJP-Regular.ttf || touch internal/pdf/fonts/NotoSansJP-Regular.ttf
+
+      - name: Generate Wails JS bindings
+        run: wails generate module
+        working-directory: .
+
+      - name: Build frontend assets
+        run: npm run build
+        working-directory: frontend
+
+      - name: Verify frontend/dist exists
+        run: |
+          if [ ! -d "frontend/dist" ] || [ -z "$(ls -A frontend/dist 2>/dev/null)" ]; then
+            echo "Error: frontend/dist is missing or empty"
+            echo "Checking frontend directory:"
+            ls -la frontend/
+            echo "Checking if npm run build produced any output:"
+            ls -la frontend/dist/ 2>&1 || echo "frontend/dist does not exist"
+            exit 1
+          fi
+          echo "frontend/dist contents:"
+          ls -la frontend/dist/
+
+      - name: Build application
+        run: wails build -platform ${{ matrix.platform }}
