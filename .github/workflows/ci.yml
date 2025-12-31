@@ -98,6 +98,14 @@ jobs:
           mkdir -p frontend/dist
           touch frontend/dist/.placeholder
 
+      - name: Prepare font file for Windows build
+        if: runner.os == 'Windows'
+        run: |
+          mkdir -p internal/pdf/fonts
+          # ダミーのTTFファイルを作成（空ファイルでもビルドは通る）
+          # 実際のフォントファイルがない場合は、空ファイルを作成
+          echo "" > internal/pdf/fonts/NotoSansJP-Regular.ttf || touch internal/pdf/fonts/NotoSansJP-Regular.ttf
+
       - name: Generate Wails JS bindings
         run: wails generate module
         working-directory: .
