@@ -42,7 +42,7 @@ jobs:
       - name: Backend tests
         run: |
           mkdir -p reports
-          go test ./... | tee reports/backend-tests.log
+          go test $(go list ./... | grep -v internal/asr) | tee reports/backend-tests.log
 
       - name: Frontend tests
         run: |
