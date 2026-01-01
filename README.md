@@ -35,7 +35,7 @@ Wails CLI がまだ導入されていない場合は `go install github.com/wail
   - [x] Apple Silicon
   - [ ] Intel
 - Windows
-  - [x] Windows 11
+  - [ ] Windows 11（依存ライブラリのプラットフォーム分岐未対応のため検証中）
   - [ ] Windows 10
 - Linux
   - [ ] Ubuntu 22.04 LTS
