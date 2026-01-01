@@ -18,6 +18,59 @@
     --input-color-unhover: #ffffff;
     --loading-color: #7c3aed;
     --closebutton-color: #7c3aed;
+
+    /* Karte Theme Variables */
+    --font-ui: "メイリオ", "Hiragino Kaku Gothic ProN", system-ui, sans-serif;
+    --font-mono: "SF Mono", "Menlo", "Consolas", "Courier New", monospace;
+    --font-size-base: 14px;
+    --font-size-code: 0.95em;
+    --line-height-base: 1.7;
+    --font-weight-heading: 700;
+    --font-weight-table-header: 600;
+
+    --radius-xs: 4px;
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 10px;
+
+    --spacing-page-y: 24px;
+    --spacing-page-x: 32px;
+    --spacing-code-block-y: 12px;
+    --spacing-code-block-x: 14px;
+    --spacing-table-cell-y: 6px;
+    --spacing-table-cell-x: 10px;
+
+    --border-subtle-width: 1px;
+    --border-subtle-color: rgba(130, 142, 166, 0.35);
+    --border-accent-width: 4px;
+    --border-accent-color: #c2b4ff;
+
+    --shadow-image: 0 4px 12px rgba(130, 142, 166, 0.18);
+
+    --color-aqua-100: #cceaf3;
+    --color-purple-200: #c2b4ff;
+    --color-lavender-100: #e3e2ff;
+    --color-slate-300: #828ea6;
+
+    --color-text-body: #333344;
+    --color-text-heading: #4b4b66;
+    --color-text-code: #383854;
+    --color-text-quote: #4c5460;
+
+    --color-surface-inline-code-bg: #e3e2ff;
+    --color-surface-code-block-bg: #f3f3ff;
+    --color-surface-table-header-bg: #e3e2ff;
+
+    --gradient-page-bg: linear-gradient(180deg, #f9f9ff 0%, #f5f4ff 45%, #f7fbff 100%);
+    --gradient-hr: linear-gradient(to right, transparent 0%, #c2b4ff 50%, transparent 100%);
+
+    --color-lavender-35: rgba(227, 226, 255, 0.35);
+    --color-purple-12: rgba(194, 180, 255, 0.12);
+    --color-aqua-35: rgba(204, 234, 243, 0.35);
+    --color-aqua-25: rgba(204, 234, 243, 0.25);
+    --color-aqua-80: rgba(204, 234, 243, 0.8);
+    --color-slate-35: rgba(130, 142, 166, 0.35);
+    --color-slate-18: rgba(130, 142, 166, 0.18);
   }
 
   :root[data-theme="dark"] {
@@ -97,11 +150,21 @@
   }
 
   body {
-    background: var(--bg);
+    background: var(--gradient-page-bg);
     color: var(--ink);
-    font: 13px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Meiryo", sans-serif;
+    font: var(--font-size-base)/var(--line-height-base) var(--font-ui);
     display: flex;
     flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  .app-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+    background: var(--gradient-page-bg);
   }
 
   a {
@@ -110,13 +173,44 @@
   }
 
   .bar {
-    height: 44px;
+    height: auto;
+    min-height: 44px;
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 10px;
-    padding: 0 12px;
-    border-bottom: 1px solid var(--line);
-    background: linear-gradient(180deg, color-mix(in srgb, var(--main-background) 98%, transparent), transparent)
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--border-subtle-color);
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(8px);
+    flex-shrink: 0;
+  }
+
+  .bar-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .bar-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .logo {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--color-text-heading);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .logo::before {
+    content: '📄';
+    font-size: 24px;
+    color: var(--color-purple-200);
   }
 
   .logo {
@@ -134,66 +228,95 @@
     color: var(--mute)
   }
 
-  .layout {
+  .main-container {
     flex: 1 1 auto;
     min-height: 0;
-    display: grid;
-    grid-template-columns: 260px 1fr;
-  }
-
-  .layout.sidebar-hidden {
-    grid-template-columns: 0 1fr;
-  }
-
-  .layout.sidebar-hidden .side {
-    display: none;
+    display: flex;
+    overflow: hidden;
   }
 
   .side {
-    border-right: 1px solid var(--line);
-    padding: 12px;
-    background: var(--panel);
-    transition: width 0.2s;
+    width: 256px;
+    border-right: 1px solid var(--border-subtle-color);
+    padding: 0;
+    background: rgba(255, 255, 255, 0.5);
+    transition: width 0.2s, opacity 0.2s;
     display: flex;
     flex-direction: column;
     min-height: 0;
+    flex-shrink: 0;
+  }
+
+  .main-container.sidebar-hidden .side {
+    width: 0;
+    opacity: 0;
+    overflow: hidden;
+    border-right: none;
   }
 
   .search {
     display: flex;
     gap: 6px;
-    margin-bottom: 10px;
+    padding: 16px;
+    border-bottom: 1px solid var(--border-subtle-color);
     flex-shrink: 0;
+    position: relative;
+  }
+
+  .search::before {
+    content: '🔍';
+    position: absolute;
+    left: 28px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 16px;
+    height: 16px;
+    pointer-events: none;
+    opacity: 0.5;
   }
 
   .search input {
     flex: 1;
-    background: var(--panel);
-    border: 1px solid var(--line);
+    background: white;
+    border: 1px solid var(--border-subtle-color);
     color: var(--ink);
-    padding: 8px 10px;
-    border-radius: 8px;
-    outline: 0
+    padding: 8px 10px 8px 36px;
+    border-radius: var(--radius-sm);
+    outline: 0;
+    font-size: 14px;
+  }
+
+  .search input:focus {
+    border-color: var(--border-accent-color);
+    box-shadow: 0 0 0 2px var(--color-purple-12);
   }
 
   .tree {
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
-    overflow-x: auto;
+    overflow-x: hidden;
+    padding: 8px;
   }
 
   .item {
-    padding: 6px 8px;
-    border-radius: 8px;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
     color: var(--ink);
     border: 1px solid transparent;
-    display: block
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-size: 14px;
   }
 
   .item:hover {
-    background: var(--backgroundcolor-unhover);
-    border-color: var(--line)
+    background: rgba(227, 226, 255, 0.5);
+    border-color: transparent;
   }
 
   .item .unsaved-dot {
@@ -221,16 +344,54 @@
   }
 
   .item.active {
-    background: var(--opened-tab-backgroundcolor);
-    border-color: var(--borderline-color)
+    background: var(--color-lavender-100);
+    color: var(--color-text-heading);
+    font-weight: 500;
   }
 
-  .main {
-    display: flex;
-    flex-direction: column;
-    padding: var(--gap2);
+  .content-area {
     flex: 1 1 auto;
     min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr 400px;
+    gap: 16px;
+    padding: 16px;
+    overflow: hidden;
+  }
+
+  @media (max-width: 1024px) {
+    .content-area {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .content-area .gallery-area {
+      display: none;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .content-area {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .editor-pane-wrapper {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  .gallery-area {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  .gallery-area.hidden {
+    display: none;
   }
 
   .tabs {
@@ -239,10 +400,12 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    margin-bottom: var(--gap);
-    border-bottom: 1px solid var(--line);
+    padding: 0 16px;
+    border-bottom: 1px solid var(--border-subtle-color);
     flex-shrink: 0;
     width: 100%;
+    background: white;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   }
 
   .tab {
@@ -420,34 +583,39 @@
     min-height: 0;
     position: relative;
     overflow: hidden;
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    background: var(--panel);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .graph-container>div:last-child {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
   }
 
   textarea {
     width: 100%;
     height: 100%;
-    border: 1px solid var(--line);
-    background: var(--panel);
+    border: none;
+    background: transparent;
     color: var(--ink);
-    padding: 12px;
-    border-radius: var(--radius);
+    padding: 16px;
+    border-radius: 0;
     resize: none;
     outline: none;
-    font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    font: var(--font-size-base)/var(--line-height-base) var(--font-mono);
   }
 
   textarea:focus {
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent) inset
+    outline: none;
   }
 
   iframe {
     width: 100%;
     height: 100%;
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    background: var(--bg)
+    border: none;
+    border-radius: 0;
+    background: white;
   }
 
   .preview-container {
@@ -455,6 +623,20 @@
     flex-direction: column;
     min-height: 0;
     flex: 1;
+    overflow: hidden;
+  }
+
+  .preview-pane-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-subtle-color);
+    flex-shrink: 0;
+  }
+
+  .preview-pane-header h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-text-heading);
+    margin: 0;
   }
 
   .audio-player-container {
@@ -478,179 +660,35 @@
     background-color: var(--panel);
   }
 
-  .row {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    /* 3列 */
-    grid-template-rows: 1fr 1fr;
-    /* 2行 */
-    gap: var(--gap);
-    flex: 1 1 auto;
-    min-height: 0;
-  }
-
-  /* デフォルトの配置 */
   .editor-pane {
-    grid-column: 1;
-    grid-row: 1 / 3;
-    /* 1-2行目を占有 */
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    background: white;
+    border: 1px solid var(--border-subtle-color);
+    border-radius: var(--radius-lg);
   }
 
   .preview-pane {
-    grid-column: 2;
-    grid-row: 1 / 3;
-    /* 1-2行目を占有 */
-  }
-
-  .image-gallery-container {
-    grid-column: 3;
-    grid-row: 1;
-    /* 1行目のみ */
-  }
-
-  .csv-gallery-container {
-    grid-column: 3;
-    grid-row: 2;
-    /* 2行目のみ */
-  }
-
-  /* 画像が非表示の時、CSVが1-2行目を占有（位置は右列のまま） */
-  .row.gallery-hidden {
-    grid-template-columns: 1fr 1fr 1fr;
-    /* 3列を維持 */
-  }
-
-  .row.gallery-hidden .image-gallery-container {
-    display: none;
-  }
-
-  .row.gallery-hidden .csv-gallery-container {
-    grid-column: 3;
-    /* 右列に固定 */
-    grid-row: 1 / 3;
-    /* 1-2行目を占有 */
-  }
-
-  /* CSVが非表示の時、画像が1-2行目を占有 */
-  .csv-gallery-container[style*="display: none"] {
-    display: none !important;
-  }
-
-  .row:has(.csv-gallery-container[style*="display: none"]) .image-gallery-container {
-    grid-row: 1 / 3;
-    /* 1-2行目を占有 */
-  }
-
-  /* 両方非表示の時は2列レイアウト（エディタとプレビューのみ） */
-  .row.gallery-hidden:has(.csv-gallery-container[style*="display: none"]) {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .row.gallery-hidden:has(.csv-gallery-container[style*="display: none"]) .editor-pane {
-    grid-column: 1;
-    grid-row: 1 / 3;
-  }
-
-  .row.gallery-hidden:has(.csv-gallery-container[style*="display: none"]) .preview-pane {
-    grid-column: 2;
-    grid-row: 1 / 3;
-  }
-
-  /* 4ペイン: 各カラムは内部スクロールを持つ */
-  .editor-pane,
-  .preview-pane,
-  .gallery-pane {
     display: flex;
     flex-direction: column;
+    height: 100%;
     min-height: 0;
+    overflow: hidden;
+    background: white;
+    border: 1px solid var(--border-subtle-color);
+    border-radius: var(--radius-lg);
   }
-
 
   .editor-pane-body,
-  .preview-pane-body,
-  .gallery-pane-body {
+  .preview-pane-body {
     flex: 1 1 auto;
     min-height: 0;
-    /* エディタとプレビューは内側要素（textarea/iframe）がスクロールを持つので、
-       外側ラッパではスクロールを発生させない */
     overflow: hidden;
-  }
-
-  /* PDFモード: エディタは常に非表示 */
-  .row.pdf-mode .editor-pane {
-    display: none;
-  }
-
-  /* PDFモード: 基本レイアウト（画像とCSVが両方表示される場合に対応） */
-  .row.pdf-mode {
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: 1fr 1fr;
-  }
-
-  .row.pdf-mode .preview-pane {
-    grid-column: 1;
-    grid-row: 1 / 3;
-    /* 1-2行目を占有 */
-  }
-
-  .row.pdf-mode .image-gallery-container {
-    grid-column: 2;
-    grid-row: 1;
-    /* 2列目、1行目 */
-  }
-
-  .row.pdf-mode .csv-gallery-container {
-    grid-column: 2;
-    grid-row: 2;
-    /* 2列目、2行目 */
-  }
-
-  /* PDFモード: 画像のみ表示（CSV非表示） */
-  .row.pdf-mode:has(.csv-gallery-container[style*="display: none"]) {
-    grid-template-rows: 1fr;
-    /* 1行に変更 */
-  }
-
-  .row.pdf-mode:has(.csv-gallery-container[style*="display: none"]) .preview-pane {
-    grid-row: 1;
-    /* 1行目のみ */
-  }
-
-  .row.pdf-mode:has(.csv-gallery-container[style*="display: none"]) .image-gallery-container {
-    grid-row: 1;
-    /* 1行目のみ */
-  }
-
-  /* PDFモード: CSVのみ表示（画像非表示） */
-  .row.pdf-mode.gallery-hidden:not(:has(.csv-gallery-container[style*="display: none"])) {
-    grid-template-rows: 1fr;
-    /* 1行に変更 */
-  }
-
-  .row.pdf-mode.gallery-hidden:not(:has(.csv-gallery-container[style*="display: none"])) .preview-pane {
-    grid-row: 1;
-    /* 1行目のみ */
-  }
-
-  .row.pdf-mode.gallery-hidden:not(:has(.csv-gallery-container[style*="display: none"])) .csv-gallery-container {
-    grid-row: 1;
-    /* 1行目のみ */
-  }
-
-  /* PDFモード: 両方非表示（PDF単体） */
-  .row.pdf-mode.gallery-hidden:has(.csv-gallery-container[style*="display: none"]) {
-    grid-template-columns: 1fr;
-    grid-template-rows: 1fr;
-  }
-
-  .row.pdf-mode.gallery-hidden:has(.csv-gallery-container[style*="display: none"]) .preview-pane {
-    grid-column: 1;
-    grid-row: 1;
-  }
-
-  .row.pdf-mode.gallery-hidden:has(.csv-gallery-container[style*="display: none"]) .image-gallery-container,
-  .row.pdf-mode.gallery-hidden:has(.csv-gallery-container[style*="display: none"]) .csv-gallery-container {
-    display: none;
+    display: flex;
+    flex-direction: column;
   }
 
   .btn {
@@ -756,9 +794,9 @@
     flex-direction: column;
     min-height: 0;
     flex: 1;
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
+    background: white;
+    border: 1px solid var(--border-subtle-color);
+    border-radius: var(--radius-lg);
     overflow: hidden;
     height: 100%;
   }
@@ -779,9 +817,9 @@
 
   .image-gallery-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(1, 1fr);
     grid-auto-rows: auto;
-    gap: 8px;
+    gap: 12px;
     padding: 12px;
     overflow-y: auto;
     flex: 1;
@@ -822,10 +860,12 @@
   .csv-gallery-container {
     display: flex;
     flex-direction: column;
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    background: var(--panel);
+    border: 1px solid var(--border-subtle-color);
+    border-radius: var(--radius-lg);
+    background: white;
     min-height: 0;
+    flex: 1;
+    overflow: hidden;
   }
 
   .csv-gallery-header {
@@ -858,15 +898,13 @@
   }
 
   .csv-gallery-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    grid-auto-rows: auto;
+    display: flex;
+    flex-direction: column;
     gap: 8px;
     padding: 12px;
     overflow-y: auto;
     flex: 1;
     min-height: 0;
-    align-content: start;
   }
 
   .csv-gallery-empty {
@@ -878,34 +916,40 @@
 
   .csv-item {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
-    justify-content: center;
-    padding: 10px;
-    border: 1px solid var(--line);
-    border-radius: 6px;
+    gap: 12px;
+    padding: 12px;
+    border: 1px solid var(--border-subtle-color);
+    border-radius: var(--radius-sm);
     cursor: pointer;
-    background: var(--backgroundcolor-unhover);
-    transition: transform 0.2s, box-shadow 0.2s, background 0.2s;
-    min-height: 80px;
+    background: white;
+    transition: all 0.2s;
   }
 
   .csv-item:hover {
-    background: var(--border-color);
-    transform: scale(1.02);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    background: rgba(227, 226, 255, 0.3);
+    border-color: var(--color-purple-200);
   }
 
   .csv-icon {
-    font-size: 32px;
-    margin-bottom: 5px;
+    font-size: 20px;
+    color: var(--color-purple-200);
+    flex-shrink: 0;
   }
 
   .csv-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--color-text-heading);
+    flex: 1;
+    min-width: 0;
+  }
+
+  .csv-rows {
     font-size: 12px;
-    text-align: center;
-    word-break: break-all;
-    color: var(--ink);
+    color: var(--color-slate-300);
+    flex-shrink: 0;
   }
 
   /* CSV Edit Modal Styles */
@@ -1182,97 +1226,142 @@
     opacity: 0.7;
   }
 
-  @media (max-width: 1100px) {
-    .layout {
-      grid-template-columns: 1fr
+  @media (max-width: 1024px) {
+    .content-area {
+      grid-template-columns: 1fr 1fr;
     }
 
-    .side {
-      display: none
+    .content-area .gallery-area {
+      display: none;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .main-container.sidebar-hidden .side {
+      display: none;
     }
 
-    .row {
+    .content-area {
       grid-template-columns: 1fr;
-      flex: 1;
-      min-height: 0;
     }
   }
 </style>
-<div class="bar">
-  <div class="logo">Karte</div>
-  <div class="pill">Editor</div>
-  <div class="hint">Ctrl/Cmd+S: 保存・再ビルド</div>
-  <button class="btn" id="sidebarToggle" title="ファイルリストを表示/非表示" style="margin-right: 8px;">📁</button>
-  <button class="btn" id="galleryToggle" title="画像ギャラリーを表示/非表示" style="margin-right: 8px;">🖼️</button>
-  <button class="btn" id="csvToggle" title="CSV管理を表示/非表示" style="margin-right: 8px;">📊</button>
-  <div class="toolbar">
-    <label class="hint" for="theme">Theme</label>
-    <select id="theme">
-      <option value="light">Light</option>
-      <option value="dark">Dark</option>
-      <option value="hc">High Contrast</option>
-    </select>
-    <label class="hint" for="hardwrap" style="display:flex;align-items:center;gap:6px">
-      <input id="hardwrap" type="checkbox" /> Hard wrap (単一改行→<br>)
-    </label>
-    <button class="btn" id="saveBtn">保存</button>
-    <button class="btn" id="newBtn">新規</button>
-    <button class="btn" id="openBtn">表示</button>
-    <button class="btn" id="exportPdfBtn">PDFエクスポート</button>
-    <button class="btn" id="customCssBtn">Custom CSS</button>
-    <span id="customCssStatus" style="margin-left:8px;font-size:12px;color:#6b7280"></span>
-    <div id="asrStatus" class="asr-status"
-      style="margin-left:8px;font-size:12px;display:flex;align-items:center;gap:4px;">
-      <span class="asr-status-indicator"></span>
-      <span class="asr-status-text">ASR: 確認中...</span>
+<div class="app-container">
+  <div class="bar">
+    <div class="bar-left">
+      <div class="logo">Karte</div>
+      <div class="pill">Editor</div>
+      <div class="hint">Ctrl/Cmd+S: 保存・再ビルド</div>
     </div>
-  </div>
-  <div class="status" id="status"></div>
-  <div id="transcriptionProgress" class="transcription-progress" style="display:none;">
-    <div class="transcription-progress-bar">
-      <div class="transcription-progress-fill"></div>
-    </div>
-    <span class="transcription-progress-text"></span>
-  </div>
-  <div id="pdfExportProgress" class="transcription-progress" style="display:none;">
-    <div class="transcription-progress-bar">
-      <div class="transcription-progress-fill"></div>
-    </div>
-    <span class="transcription-progress-text"></span>
-  </div>
-</div>
-<div class="layout">
-  <aside class="side">
-    <div class="search">
-      <input id="q" placeholder="ファイル検索 (content/)" />
-    </div>
-    <div class="tree" id="tree"></div>
-  </aside>
-  <main class="main">
-    <div class="tabs">
-      <button class="tab active" data-tab="editor">エディター</button>
-      <button class="tab" data-tab="graph">グラフ</button>
-      <button id="recordingBtn" class="recording-btn" title="録音開始/停止">
-        <span class="recording-icon">🎤</span>
-        <span class="recording-label">録音</span>
-      </button>
-      <div id="recordingIndicator" class="recording-indicator" style="display: none;">
-        <div class="mic-level-container">
-          <div class="mic-level-bar">
-            <div id="micLevelFill" class="mic-level-fill"></div>
-          </div>
-          <span class="mic-level-label">マイク</span>
+    <div class="bar-right">
+      <button class="btn" id="sidebarToggle" title="ファイルリストを表示/非表示">📁</button>
+      <button class="btn" id="galleryToggle" title="画像ギャラリーを表示/非表示">🖼️</button>
+      <button class="btn" id="csvToggle" title="CSV管理を表示/非表示">📊</button>
+      <div style="width: 1px; height: 24px; background: var(--border-subtle-color);"></div>
+      <div class="toolbar">
+        <label class="hint" for="theme">Theme</label>
+        <select id="theme">
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+          <option value="hc">High Contrast</option>
+        </select>
+        <label class="hint" for="hardwrap" style="display:flex;align-items:center;gap:6px">
+          <input id="hardwrap" type="checkbox" /> Hard wrap
+        </label>
+        <button class="btn" id="saveBtn">保存</button>
+        <button class="btn" id="newBtn">新規</button>
+        <button class="btn" id="openBtn">表示</button>
+        <button class="btn" id="exportPdfBtn">PDFエクスポート</button>
+        <button class="btn" id="customCssBtn">Custom CSS</button>
+        <span id="customCssStatus" style="margin-left:8px;font-size:12px;color:#6b7280"></span>
+        <div id="asrStatus" class="asr-status"
+          style="margin-left:8px;font-size:12px;display:flex;align-items:center;gap:4px;">
+          <span class="asr-status-indicator"></span>
+          <span class="asr-status-text">ASR: 確認中...</span>
         </div>
       </div>
+      <div class="status" id="status"></div>
     </div>
-    <div class="tab-content active" id="editor-tab">
-      <div class="row">
-        <div class="editor-pane">
-          <div class="editor-pane-body">
-            <textarea id="editor" spellcheck="false"></textarea>
+    <div id="transcriptionProgress" class="transcription-progress" style="display:none;">
+      <div class="transcription-progress-bar">
+        <div class="transcription-progress-fill"></div>
+      </div>
+      <span class="transcription-progress-text"></span>
+    </div>
+    <div id="pdfExportProgress" class="transcription-progress" style="display:none;">
+      <div class="transcription-progress-bar">
+        <div class="transcription-progress-fill"></div>
+      </div>
+      <span class="transcription-progress-text"></span>
+    </div>
+  </div>
+  <div class="main-container" id="mainContainer">
+    <aside class="side">
+      <div class="search">
+        <input id="q" placeholder="ファイル検索 (content/)" />
+      </div>
+      <div class="tree" id="tree"></div>
+    </aside>
+    <div class="content-area" id="contentArea">
+      <div class="editor-pane-wrapper">
+        <div class="tabs">
+          <button class="tab active" data-tab="editor">エディター</button>
+          <button class="tab" data-tab="graph">グラフ</button>
+          <button id="recordingBtn" class="recording-btn" title="録音開始/停止">
+            <span class="recording-icon">🎤</span>
+            <span class="recording-label">録音</span>
+          </button>
+          <div id="recordingIndicator" class="recording-indicator" style="display: none;">
+            <div class="mic-level-container">
+              <div class="mic-level-bar">
+                <div id="micLevelFill" class="mic-level-fill"></div>
+              </div>
+              <span class="mic-level-label">マイク</span>
+            </div>
           </div>
         </div>
-        <div class="preview-container preview-pane">
+        <div class="tab-content active" id="editor-tab">
+          <div class="editor-pane">
+            <div class="editor-pane-body">
+              <textarea id="editor" spellcheck="false"></textarea>
+            </div>
+            <div class="border-t border-[rgba(130,142,166,0.35)] p-3 bg-[#f9f9ff]" id="editorFooter">
+              <div class="flex items-center gap-3">
+                <button id="recordingBtnFooter" class="btn" style="font-size: 12px; padding: 6px 12px;">
+                  <span>🎤</span>
+                  <span>録音</span>
+                </button>
+                <div id="recordingIndicatorFooter" style="display: none; flex: 1; align-items: center; gap: 8px;">
+                  <div style="flex: 1; height: 4px; background: #e3e2ff; border-radius: 2px; overflow: hidden;">
+                    <div id="micLevelFillFooter"
+                      style="height: 100%; background: #c2b4ff; width: 0%; transition: width 0.1s;"></div>
+                  </div>
+                  <span style="font-size: 12px; color: #828ea6;">マイク</span>
+                </div>
+                <span class="badge"
+                  style="margin-left: auto; font-size: 12px; padding: 4px 8px; border: 1px solid var(--border-subtle-color); border-radius: 4px;">準備完了</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="tab-content" id="graph-tab">
+          <div class="graph-container"
+            style="background: white; border: 1px solid var(--border-subtle-color); border-radius: var(--radius-lg); overflow: hidden; display: flex; flex-direction: column;">
+            <div
+              style="padding: 12px 16px; border-bottom: 1px solid var(--border-subtle-color); display: flex; align-items: center; gap: 10px; flex-shrink: 0;">
+              <button id="toggleTagNodesBtn" class="btn" style="font-size: 12px; padding: 6px 12px;">タグノード表示:
+                ON</button>
+              <span style="font-size: 12px; color: var(--color-slate-300);">同じタグを持つドキュメントをタグノードで接続します</span>
+            </div>
+            <div id="graph-container" style="flex: 1; min-height: 0; overflow: hidden;"></div>
+          </div>
+        </div>
+      </div>
+      <div class="preview-pane">
+        <div class="preview-pane-header">
+          <h3>プレビュー</h3>
+        </div>
+        <div class="preview-container">
           <div id="audioPlayerContainer" class="audio-player-container" style="display: none;">
             <audio id="audioPlayer" controls preload="metadata">
               Your browser does not support the audio element.
@@ -1286,7 +1375,9 @@
             <iframe id="preview"></iframe>
           </div>
         </div>
-        <div class="image-gallery-container gallery-pane" id="imageGalleryContainer">
+      </div>
+      <div class="gallery-area" id="galleryArea">
+        <div class="image-gallery-container" id="imageGalleryContainer">
           <div class="image-gallery-header">
             <div class="image-gallery-title">画像ギャラリー</div>
             <button id="captureScreenBtn" class="btn" style="font-size: 11px; padding: 4px 8px; margin-left: auto;"
@@ -1299,7 +1390,7 @@
             画像がありません
           </div>
         </div>
-        <div class="csv-gallery-container gallery-pane" id="csvGalleryContainer">
+        <div class="csv-gallery-container" id="csvGalleryContainer">
           <div class="csv-gallery-header">
             <div class="csv-gallery-title">CSV管理</div>
           </div>
@@ -1310,15 +1401,7 @@
         </div>
       </div>
     </div>
-    <div class="tab-content" id="graph-tab">
-      <div
-        style="padding: 10px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; gap: 10px;">
-        <button id="toggleTagNodesBtn" class="btn" style="font-size: 12px;">タグノード表示: ON</button>
-        <span style="font-size: 12px; color: var(--mute);">同じタグを持つドキュメントをタグノードで接続します</span>
-      </div>
-      <div class="graph-container" id="graph-container"></div>
-    </div>
-  </main>
+  </div>
 </div>
 
 <!-- Image preview modal -->
@@ -1597,4 +1680,4 @@
   </style>
 </div>
 
-<script type="module" src="/src/main.js"></script>
+<script type="module" src="/src/main.ts"></script>

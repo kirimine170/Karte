@@ -2308,6 +2308,31 @@ func (a *App) SaveCsvFile(path string, data [][]string) error {
 	return nil
 }
 
+// SaveEventLogs saves event logs from the frontend to a JSON file
+func (a *App) SaveEventLogs(logsJson string) (bool, error) {
+	if logsJson == "" {
+		return false, fmt.Errorf("logs data is empty")
+	}
+
+	// Create .mdsys directory if it doesn't exist
+	mdsysDir := filepath.Join(a.dataDir, ".mdsys")
+	if err := os.MkdirAll(mdsysDir, 0755); err != nil {
+		return false, fmt.Errorf("failed to create .mdsys directory: %w", err)
+	}
+
+	// Generate filename with timestamp
+	timestamp := time.Now().Format("20060102_150405")
+	logFilePath := filepath.Join(mdsysDir, fmt.Sprintf("event-logs_%s.json", timestamp))
+
+	// Write logs to file
+	if err := os.WriteFile(logFilePath, []byte(logsJson), 0644); err != nil {
+		return false, fmt.Errorf("failed to write event logs file: %w", err)
+	}
+
+	a.logInfo(fmt.Sprintf("Saved event logs to: %s", logFilePath))
+	return true, nil
+}
+
 // ImportAudioBase64 saves audio content provided as base64 (used when native paths are not available).
 func (a *App) ImportAudioBase64(filename, base64Data string) (string, error) {
 	if filename == "" {
