@@ -6,6 +6,9 @@ on:
   pull_request_target:
     types: [opened]
 
+permissions:
+  issues: write
+
 jobs:
   assign-issue-author:
     if: github.event_name == 'issues'
