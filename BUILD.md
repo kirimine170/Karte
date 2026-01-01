@@ -12,6 +12,10 @@
 go build -o buildmatrix ./cmd/buildmatrix
 ```
 
+> **Windowsにおける補足**
+> 出力ファイル名をbuildmatrix.exeにしないと
+> 実行時にどのプログラムを使用して開くか聞かれ、実行ファイルのしての実行が妨げられます。
+
 ### 基本的な使用方法
 
 ```bash
