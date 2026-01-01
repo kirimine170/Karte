@@ -3,7 +3,29 @@ name: CI
 on:
   push:
     branches: [ "main", "master", "ci" ]
+    paths:
+      - '.github/workflows/**'
+      - '**/*.go'
+      - 'frontend/**'
+      - 'build/**'
+      - 'templates/**'
+      - 'themes/**'
+      - 'karte_data/**'
+      - 'wails.json'
+      - 'go.mod'
+      - 'go.sum'
   pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '**/*.go'
+      - 'frontend/**'
+      - 'build/**'
+      - 'templates/**'
+      - 'themes/**'
+      - 'karte_data/**'
+      - 'wails.json'
+      - 'go.mod'
+      - 'go.sum'
 
 jobs:
   build:
