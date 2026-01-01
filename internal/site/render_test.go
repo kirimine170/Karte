@@ -94,6 +94,71 @@ func TestRenderMarkdownMissingFile(t *testing.T) {
 	}
 }
 
+func TestRenderCSVSelectAndEmpty(t *testing.T) {
+	root := "./root"
+	csvPath := filepath.Join(root, "data", "sample.csv")
+	emptyPath := filepath.Join(root, "data", "empty.csv")
+	fsys := &mockFileSystem{files: map[string][]byte{
+		csvPath:   []byte("col1,col2,col3\na1,a2,a3\nb1,b2,b3"),
+		emptyPath: []byte(""),
+	}}
+
+	renderer := NewRenderer(fsys)
+
+	html := renderer.renderCSV(csvPath, map[string]string{"select": "col1,col3"})
+	expected := "<table><thead><tr><th>col1</th><th>col3</th></tr></thead><tbody><tr><td>a1</td><td>a3</td></tr><tr><td>b1</td><td>b3</td></tr></tbody></table>"
+	if html != expected {
+		t.Fatalf("unexpected csv render: %s", html)
+	}
+
+	emptyHTML := renderer.renderCSV(emptyPath, map[string]string{})
+	if emptyHTML != "<p>(no data)</p>" {
+		t.Fatalf("expected no data message, got %s", emptyHTML)
+	}
+}
+
+func TestRenderMarkdownWithOptionsImportErrors(t *testing.T) {
+	root := "./root"
+	mdPath := filepath.Join(root, "content", "test.md")
+	layoutPath := filepath.Join(root, "themes", "default", "layout.html")
+	fsys := &mockFileSystem{files: map[string][]byte{
+		mdPath:     []byte("@import(type=\"unknown\" path=\"data.csv\")\n@import(type=\"md\" path=\"content/missing.md\")"),
+		layoutPath: []byte("<html><head><title>{{TITLE}}</title></head><body>{{CONTENT}}</body></html>"),
+	}}
+
+	renderer := NewRenderer(fsys)
+	html, _, err := renderer.RenderMarkdownWithOptions(root, mdPath, false)
+	if err != nil {
+		t.Fatalf("render failed: %v", err)
+	}
+
+	if !bytes.Contains([]byte(html), []byte("unknown import type: unknown")) {
+		t.Fatalf("expected unknown import type message, got %s", html)
+	}
+	if !bytes.Contains([]byte(html), []byte("Error include: ")) {
+		t.Fatalf("expected include error message, got %s", html)
+	}
+}
+
+func TestParseArgs(t *testing.T) {
+	args := parseArgs(`@import(  type = "csv"   path="data.csv" select = " col1 , col2 "  )`)
+	expected := map[string]string{
+		"type":   "csv",
+		"path":   "data.csv",
+		"select": " col1 , col2 ",
+	}
+
+	if len(args) != len(expected) {
+		t.Fatalf("expected %d args, got %d", len(expected), len(args))
+	}
+
+	for k, v := range expected {
+		if args[k] != v {
+			t.Fatalf("unexpected value for %s: %s", k, args[k])
+		}
+	}
+}
+
 func TestProcessKaTeX(t *testing.T) {
 	t.Parallel()
 
