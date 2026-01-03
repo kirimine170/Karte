@@ -3,6 +3,7 @@ import { useOverlayStore, useExportStore, useASRStore, useUIStore, useDocStore, 
 import type { WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
+import { prepareMarkdownForPreview } from '../utils/preview-content';
 
 export class OverlayHost extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
@@ -410,8 +411,9 @@ export class OverlayHost extends BaseComponent {
             docStore.setMarkdownContent(content);
             docStore.clearUnsavedChanges();
 
-            const html = await this.api.PreviewMarkdown(content);
-            const finalHtml = this.buildPreviewHtml(content, html);
+            const prepared = await prepareMarkdownForPreview(content, this.api);
+            const html = await this.api.PreviewMarkdown(prepared);
+            const finalHtml = this.buildPreviewHtml(prepared, html);
             docStore.setPreviewHtml(finalHtml);
         } catch (error) {
             console.error('Failed to load file after import:', error);

@@ -13,6 +13,7 @@ import { useUIStore, useDocStore, useASRStore, useExportStore, useModalStore, us
 import type { WailsAppAPI, WailsRuntimeAPI } from './types/wails-api';
 import { eventLogger } from './utils/event-logger';
 import { applyCustomCssToHtml } from './utils/custom-css';
+import { prepareMarkdownForPreview } from './utils/preview-content';
 
 export class App {
     private api: WailsAppAPI | null = null;
@@ -155,8 +156,9 @@ export class App {
             useDocStore.getState().setPreviewHtml('');
         } else {
             useDocStore.getState().setMarkdownContent(content);
-            const html = await this.api.PreviewMarkdown(content);
-            useDocStore.getState().setPreviewHtml(this.buildPreviewHtml(content, html));
+            const prepared = await prepareMarkdownForPreview(content, this.api);
+            const html = await this.api.PreviewMarkdown(prepared);
+            useDocStore.getState().setPreviewHtml(this.buildPreviewHtml(prepared, html));
         }
         useDocStore.getState().clearUnsavedChanges();
     }
@@ -379,8 +381,9 @@ export class App {
 
         try {
             const content = await this.api.LoadFile(docStore.currentPath);
-            const html = await this.api.PreviewMarkdown(content);
-            useDocStore.getState().setPreviewHtml(this.buildPreviewHtml(content, html));
+            const prepared = await prepareMarkdownForPreview(content, this.api);
+            const html = await this.api.PreviewMarkdown(prepared);
+            useDocStore.getState().setPreviewHtml(this.buildPreviewHtml(prepared, html));
         } catch (error) {
             console.error('Failed to refresh preview:', error);
         }
