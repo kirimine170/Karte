@@ -162,8 +162,24 @@ export class Topbar extends BaseComponent {
         // 新規ボタン
         if (this.newBtn) {
             this.unsubscribe.push(
-                this.addEventListener(this.newBtn, 'click', () => {
+                this.addEventListener(this.newBtn, 'click', async () => {
                     eventLogger.log('Topbar', 'new-file-click');
+                    const docStore = useDocStore.getState();
+                    if (docStore.hasUnsavedChanges) {
+                        modalStore.showUnsavedConfirmModal(
+                            async () => {
+                                const saved = await this.handleSave();
+                                if (saved) {
+                                    modalStore.showFilenameModal();
+                                }
+                            },
+                            () => {
+                                docStore.clearUnsavedChanges();
+                                modalStore.showFilenameModal();
+                            }
+                        );
+                        return;
+                    }
                     modalStore.showFilenameModal();
                 })
             );
@@ -281,12 +297,18 @@ export class Topbar extends BaseComponent {
     }
 
 
-    private async handleSave(): Promise<void> {
+    private async handleSave(): Promise<boolean> {
         const docStore = useDocStore.getState();
         if (!docStore.currentPath) {
             eventLogger.log('Topbar', 'save-error', { error: 'no-file-selected' });
             useUIStore.getState().setStatusMessage('ファイルが選択されていません', 2000);
-            return;
+            return false;
+        }
+
+        if (docStore.currentPath.toLowerCase().endsWith('.pdf')) {
+            eventLogger.log('Topbar', 'save-error', { error: 'pdf-readonly' });
+            useUIStore.getState().setStatusMessage('PDF閲覧中は保存できません', 2000);
+            return false;
         }
 
         try {
@@ -295,10 +317,12 @@ export class Topbar extends BaseComponent {
             docStore.clearUnsavedChanges();
             eventLogger.log('Topbar', 'save-success', { path: docStore.currentPath });
             useUIStore.getState().setStatusMessage('保存しました', 2000);
+            return true;
         } catch (error) {
             console.error('Save failed:', error);
             eventLogger.log('Topbar', 'save-error', { error: String(error) });
             useUIStore.getState().setStatusMessage('保存に失敗しました', 3000);
+            return false;
         }
     }
 
@@ -368,4 +392,3 @@ export class Topbar extends BaseComponent {
         this.unsubscribe = [];
     }
 }
-

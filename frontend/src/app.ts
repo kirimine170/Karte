@@ -9,7 +9,7 @@ import { OverlayHost } from './components/overlay-host';
 import { ImageGallery } from './components/image-gallery';
 import { CsvGallery } from './components/csv-gallery';
 import { getWailsAppAPI, getWailsRuntimeAPI } from './api/wails-api';
-import { useUIStore, useDocStore, useASRStore, useExportStore } from './stores/index';
+import { useUIStore, useDocStore, useASRStore, useExportStore, useModalStore } from './stores/index';
 import type { WailsAppAPI, WailsRuntimeAPI } from './types/wails-api';
 import { eventLogger } from './utils/event-logger';
 
@@ -264,6 +264,77 @@ export class App {
             const message = (data as { message?: string })?.message || 'PDFエクスポートに失敗しました';
             useUIStore.getState().setStatusMessage(message, 4000);
         });
+
+        this.setupCloseGuard();
+    }
+
+    private setupCloseGuard(): void {
+        if (!this.runtime || !this.api) {
+            return;
+        }
+
+        this.runtime.EventsOn('check-unsaved-before-close', () => {
+            const docStore = useDocStore.getState();
+            if (!docStore.hasUnsavedChanges) {
+                this.api?.AllowClose();
+                return;
+            }
+
+            const modalStore = useModalStore.getState();
+            if (modalStore.unsavedConfirmModal.visible) {
+                return;
+            }
+
+            modalStore.showUnsavedConfirmModal(
+                async () => {
+                    const saved = await this.saveCurrentFile();
+                    if (saved) {
+                        this.api?.AllowClose();
+                    }
+                },
+                () => {
+                    docStore.clearUnsavedChanges();
+                    this.api?.AllowClose();
+                }
+            );
+        });
+
+        if (typeof window !== 'undefined' && !(window as any).go) {
+            window.addEventListener('beforeunload', (event) => {
+                if (useDocStore.getState().hasUnsavedChanges) {
+                    event.preventDefault();
+                    event.returnValue = '';
+                }
+            });
+        }
+    }
+
+    private async saveCurrentFile(): Promise<boolean> {
+        if (!this.api) {
+            return false;
+        }
+
+        const docStore = useDocStore.getState();
+        if (!docStore.currentPath) {
+            useUIStore.getState().setStatusMessage('ファイルが選択されていません', 2000);
+            return false;
+        }
+
+        if (docStore.currentPath.toLowerCase().endsWith('.pdf')) {
+            useUIStore.getState().setStatusMessage('PDF閲覧中は保存できません', 2000);
+            return false;
+        }
+
+        try {
+            await this.api.SaveFile(docStore.currentPath, docStore.markdownContent);
+            docStore.clearUnsavedChanges();
+            useUIStore.getState().setStatusMessage('保存しました', 2000);
+            return true;
+        } catch (error) {
+            console.error('Save failed:', error);
+            useUIStore.getState().setStatusMessage('保存に失敗しました', 3000);
+            return false;
+        }
     }
 
     private async updateASRStatus(): Promise<void> {
