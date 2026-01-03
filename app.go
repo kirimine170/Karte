@@ -3398,7 +3398,6 @@ func (a *App) exportPDFInternal(html string) (string, error) {
 	})
 
 	a.logInfo("ExportPDF: Calling pdfexport.ExportHTMLToPDF...")
-	//TODO FIX : THIRD ARGUMENT
 	if err := pdfexport.ExportHTMLToPDF(html, pdfPath, a.logFilePath); err != nil {
 		a.logError(fmt.Sprintf("ExportPDF failed: %v", err))
 		return "", fmt.Errorf("PDF export failed: %w", err)
