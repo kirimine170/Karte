@@ -1,5 +1,5 @@
 import { BaseComponent } from './component-base';
-import { useUIStore, useDocStore, useASRStore } from '../stores/index';
+import { useUIStore, useDocStore, useASRStore, useOverlayStore } from '../stores/index';
 import type { WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 
@@ -116,6 +116,31 @@ export class EditorLayout extends BaseComponent {
                             this.insertCsvAtCursor(path);
                         }
                     }
+                })
+            );
+        }
+
+        if (this.pdfPreview) {
+            this.unsubscribe.push(
+                this.addEventListener(this.pdfPreview, 'dragover', (e) => {
+                    e.preventDefault();
+                    useOverlayStore.getState().showDropOverlay();
+                })
+            );
+            this.unsubscribe.push(
+                this.addEventListener(this.pdfPreview, 'dragleave', () => {
+                    useOverlayStore.getState().hideDropOverlay();
+                })
+            );
+            this.unsubscribe.push(
+                this.addEventListener(this.pdfPreview, 'drop', (e) => {
+                    e.preventDefault();
+                    useOverlayStore.getState().hideDropOverlay();
+                    const files = Array.from(e.dataTransfer?.files || []);
+                    if (files.length === 0) {
+                        return;
+                    }
+                    window.dispatchEvent(new CustomEvent('karte-file-drop', { detail: { files } }));
                 })
             );
         }

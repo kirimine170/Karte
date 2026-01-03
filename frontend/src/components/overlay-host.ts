@@ -116,6 +116,18 @@ export class OverlayHost extends BaseComponent {
                 });
             })
         );
+
+        this.unsubscribe.push(
+            this.addEventListener(window, 'karte-file-drop' as keyof HTMLElementEventMap, (event) => {
+                const customEvent = event as CustomEvent<{ files?: File[] }>;
+                const files = customEvent.detail?.files;
+                if (files && files.length > 0) {
+                    this.handleFileDrop(files).catch((error) => {
+                        console.error('handleFileDrop failed:', error);
+                    });
+                }
+            })
+        );
     }
 
     private subscribeToStores(): void {
