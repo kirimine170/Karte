@@ -1,6 +1,5 @@
 import { BaseComponent } from './component-base';
 import { useUIStore, useDocStore, useASRStore } from '../stores/index';
-import { convertMarkdownToHtml } from '../logic';
 import type { WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 
@@ -12,8 +11,11 @@ export class EditorLayout extends BaseComponent {
     private editor: HTMLTextAreaElement | null = null;
     private preview: HTMLIFrameElement | null = null;
     private recordingBtn: HTMLButtonElement | null = null;
+    private recordingBtnFooter: HTMLButtonElement | null = null;
     private recordingIndicator: HTMLElement | null = null;
+    private recordingIndicatorFooter: HTMLElement | null = null;
     private micLevelFill: HTMLElement | null = null;
+    private micLevelFillFooter: HTMLElement | null = null;
     private audioPlayerContainer: HTMLElement | null = null;
     private audioPlayer: HTMLAudioElement | null = null;
     private realtimeTranscript: HTMLElement | null = null;
@@ -26,7 +28,7 @@ export class EditorLayout extends BaseComponent {
 
     init(): void {
         eventLogger.log('EditorLayout', 'init');
-        
+
         const contentArea = document.getElementById('contentArea');
         if (!contentArea) {
             console.error('EditorLayout: #contentArea element not found');
@@ -60,7 +62,6 @@ export class EditorLayout extends BaseComponent {
 
     private setupEventListeners(): void {
         const docStore = useDocStore.getState();
-        const asrStore = useASRStore.getState();
 
         // エディタの入力イベント
         if (this.editor) {
@@ -95,15 +96,17 @@ export class EditorLayout extends BaseComponent {
         }
 
         // キーボードショートカット（Ctrl/Cmd+S）
-        this.unsubscribe.push(
-            this.addEventListener(document, 'keydown', async (e) => {
-                if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-                    e.preventDefault();
-                    eventLogger.log('EditorLayout', 'keyboard-shortcut-save');
-                    await this.handleSave();
-                }
-            })
-        );
+        const keydownHandler = async (e: KeyboardEvent) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                e.preventDefault();
+                eventLogger.log('EditorLayout', 'keyboard-shortcut-save');
+                await this.handleSave();
+            }
+        };
+        document.addEventListener('keydown', keydownHandler);
+        this.unsubscribe.push(() => {
+            document.removeEventListener('keydown', keydownHandler);
+        });
     }
 
     private subscribeToStores(): void {
@@ -154,43 +157,66 @@ export class EditorLayout extends BaseComponent {
 
         // まず、galleryAreaの表示/非表示を決定
         const shouldShowGalleryArea = uiState.imageGalleryVisible || uiState.csvGalleryVisible;
-        
+
+        // 現在のgalleryAreaの表示状態を確認
+        const currentGalleryAreaVisible = galleryArea ? galleryArea.style.display !== 'none' : false;
+
         if (galleryArea) {
             if (shouldShowGalleryArea) {
                 // galleryAreaを先に表示（これがないと子要素が表示されない）
-                contentArea.classList.remove('gallery-hidden');
-                galleryArea.style.display = 'flex';
-                eventLogger.log('EditorLayout', 'gallery-area-show');
+                if (!currentGalleryAreaVisible) {
+                    contentArea.classList.remove('gallery-hidden');
+                    galleryArea.style.display = 'flex';
+                    eventLogger.log('EditorLayout', 'gallery-area-show', {
+                        imageGalleryVisible: uiState.imageGalleryVisible,
+                        csvGalleryVisible: uiState.csvGalleryVisible
+                    });
+                }
             } else {
                 // 両方非表示の場合は、galleryAreaも非表示
-                contentArea.classList.add('gallery-hidden');
-                galleryArea.style.display = 'none';
-                eventLogger.log('EditorLayout', 'gallery-area-hide');
+                if (currentGalleryAreaVisible) {
+                    contentArea.classList.add('gallery-hidden');
+                    galleryArea.style.display = 'none';
+                    eventLogger.log('EditorLayout', 'gallery-area-hide', {
+                        imageGalleryVisible: uiState.imageGalleryVisible,
+                        csvGalleryVisible: uiState.csvGalleryVisible
+                    });
+                }
             }
         }
 
         // 個別のギャラリーの表示/非表示（galleryAreaが表示されている状態で制御）
         if (imageGallery) {
+            const currentImageGalleryVisible = imageGallery.style.display !== 'none';
             if (uiState.imageGalleryVisible) {
-                contentArea.classList.remove('image-gallery-hidden');
-                imageGallery.style.display = 'flex';
-                eventLogger.log('EditorLayout', 'image-gallery-show');
+                if (!currentImageGalleryVisible) {
+                    contentArea.classList.remove('image-gallery-hidden');
+                    imageGallery.style.display = 'flex';
+                    eventLogger.log('EditorLayout', 'image-gallery-show');
+                }
             } else {
-                contentArea.classList.add('image-gallery-hidden');
-                imageGallery.style.display = 'none';
-                eventLogger.log('EditorLayout', 'image-gallery-hide');
+                if (currentImageGalleryVisible) {
+                    contentArea.classList.add('image-gallery-hidden');
+                    imageGallery.style.display = 'none';
+                    eventLogger.log('EditorLayout', 'image-gallery-hide');
+                }
             }
         }
 
         if (csvGallery) {
+            const currentCsvGalleryVisible = csvGallery.style.display !== 'none';
             if (uiState.csvGalleryVisible) {
-                contentArea.classList.remove('csv-gallery-hidden');
-                csvGallery.style.display = 'flex';
-                eventLogger.log('EditorLayout', 'csv-gallery-show');
+                if (!currentCsvGalleryVisible) {
+                    contentArea.classList.remove('csv-gallery-hidden');
+                    csvGallery.style.display = 'flex';
+                    eventLogger.log('EditorLayout', 'csv-gallery-show');
+                }
             } else {
-                contentArea.classList.add('csv-gallery-hidden');
-                csvGallery.style.display = 'none';
-                eventLogger.log('EditorLayout', 'csv-gallery-hide');
+                if (currentCsvGalleryVisible) {
+                    contentArea.classList.add('csv-gallery-hidden');
+                    csvGallery.style.display = 'none';
+                    eventLogger.log('EditorLayout', 'csv-gallery-hide');
+                }
             }
         }
 
@@ -301,6 +327,31 @@ export class EditorLayout extends BaseComponent {
         } else {
             // 録音開始
             eventLogger.log('EditorLayout', 'recording-start');
+
+            // ASRステータスを確認
+            try {
+                const asrStatus = await this.api.GetASRStatus();
+                if (!asrStatus.initialized && !asrStatus.initializing) {
+                    eventLogger.log('EditorLayout', 'recording-start-error', {
+                        error: 'ASR service not ready',
+                        status: asrStatus
+                    });
+                    useUIStore.getState().setStatusMessage(
+                        'ASRサービスが利用できません。デスクトップアプリで実行してください。',
+                        5000
+                    );
+                    return;
+                }
+            } catch (error) {
+                console.error('Failed to get ASR status:', error);
+                eventLogger.log('EditorLayout', 'recording-start-error', {
+                    error: 'Failed to get ASR status',
+                    details: String(error)
+                });
+                useUIStore.getState().setStatusMessage('ASRサービスの状態を取得できませんでした', 3000);
+                return;
+            }
+
             try {
                 await this.api.StartRecording();
                 asrStore.setIsRecording(true);
@@ -309,7 +360,15 @@ export class EditorLayout extends BaseComponent {
             } catch (error) {
                 console.error('Failed to start recording:', error);
                 eventLogger.log('EditorLayout', 'recording-start-error', { error: String(error) });
-                useUIStore.getState().setStatusMessage('録音の開始に失敗しました', 3000);
+                let errorMsg = '録音の開始に失敗しました';
+                if (error) {
+                    if (error instanceof Error) {
+                        errorMsg = error.message;
+                    } else {
+                        errorMsg = String(error);
+                    }
+                }
+                useUIStore.getState().setStatusMessage(errorMsg, 3000);
             }
         }
     }

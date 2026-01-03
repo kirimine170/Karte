@@ -1,5 +1,5 @@
 import { BaseComponent } from './component-base';
-import { useUIStore, useDocStore, useASRStore, useExportStore, useModalStore } from '../stores/index';
+import { useUIStore, useDocStore, useExportStore, useModalStore } from '../stores/index';
 import type { WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 
@@ -19,10 +19,6 @@ export class Topbar extends BaseComponent {
     private exportPdfBtn: HTMLButtonElement | null = null;
     private customCssBtn: HTMLButtonElement | null = null;
     private customCssStatus: HTMLElement | null = null;
-    private asrStatusEl: HTMLElement | null = null;
-    private asrStatusIndicator: HTMLElement | null = null;
-    private asrStatusText: HTMLElement | null = null;
-    private statusEl: HTMLElement | null = null;
 
     constructor(api: WailsAppAPI, parent?: HTMLElement) {
         super(parent);
@@ -31,7 +27,7 @@ export class Topbar extends BaseComponent {
 
     init(): void {
         eventLogger.log('Topbar', 'init');
-        
+
         const bar = document.querySelector('.bar');
         if (!bar) {
             console.error('Topbar: .bar element not found');
@@ -51,10 +47,6 @@ export class Topbar extends BaseComponent {
         this.exportPdfBtn = document.getElementById('exportPdfBtn') as HTMLButtonElement;
         this.customCssBtn = document.getElementById('customCssBtn') as HTMLButtonElement;
         this.customCssStatus = document.getElementById('customCssStatus');
-        this.asrStatusEl = document.getElementById('asrStatus');
-        this.asrStatusIndicator = this.asrStatusEl?.querySelector('.asr-status-indicator') as HTMLElement;
-        this.asrStatusText = this.asrStatusEl?.querySelector('.asr-status-text') as HTMLElement;
-        this.statusEl = document.getElementById('status');
 
         // デバッグ: ボタンの存在確認
         console.log('Topbar buttons:', {
@@ -74,7 +66,6 @@ export class Topbar extends BaseComponent {
     }
 
     private setupEventListeners(): void {
-        const uiStore = useUIStore.getState();
         const docStore = useDocStore.getState();
         const modalStore = useModalStore.getState();
 
@@ -82,8 +73,14 @@ export class Topbar extends BaseComponent {
         if (this.sidebarToggleBtn) {
             this.unsubscribe.push(
                 this.addEventListener(this.sidebarToggleBtn, 'click', () => {
-                    const newState = !uiStore.sidebarVisible;
-                    eventLogger.log('Topbar', 'sidebar-toggle', { visible: newState });
+                    const uiStore = useUIStore.getState();
+                    const currentState = uiStore.sidebarVisible;
+                    const newState = !currentState;
+                    eventLogger.log('Topbar', 'sidebar-toggle', {
+                        currentState,
+                        newState,
+                        visible: newState
+                    });
                     uiStore.setSidebarVisible(newState);
                 })
             );
@@ -95,8 +92,14 @@ export class Topbar extends BaseComponent {
         if (this.galleryToggleBtn) {
             this.unsubscribe.push(
                 this.addEventListener(this.galleryToggleBtn, 'click', () => {
-                    const newState = !uiStore.imageGalleryVisible;
-                    eventLogger.log('Topbar', 'gallery-toggle', { visible: newState });
+                    const uiStore = useUIStore.getState();
+                    const currentState = uiStore.imageGalleryVisible;
+                    const newState = !currentState;
+                    eventLogger.log('Topbar', 'gallery-toggle', {
+                        currentState,
+                        newState,
+                        visible: newState
+                    });
                     uiStore.setImageGalleryVisible(newState);
                 })
             );
@@ -108,8 +111,14 @@ export class Topbar extends BaseComponent {
         if (this.csvToggleBtn) {
             this.unsubscribe.push(
                 this.addEventListener(this.csvToggleBtn, 'click', () => {
-                    const newState = !uiStore.csvGalleryVisible;
-                    eventLogger.log('Topbar', 'csv-toggle', { visible: newState });
+                    const uiStore = useUIStore.getState();
+                    const currentState = uiStore.csvGalleryVisible;
+                    const newState = !currentState;
+                    eventLogger.log('Topbar', 'csv-toggle', {
+                        currentState,
+                        newState,
+                        visible: newState
+                    });
                     uiStore.setCsvGalleryVisible(newState);
                 })
             );
@@ -201,10 +210,7 @@ export class Topbar extends BaseComponent {
                 if (this.hardwrapCheckbox) {
                     this.hardwrapCheckbox.checked = state.hardWrap;
                 }
-                if (this.statusEl) {
-                    this.statusEl.textContent = state.statusMessage;
-                }
-                
+
                 // ボタンのアクティブ状態を更新
                 if (this.sidebarToggleBtn) {
                     if (state.sidebarVisible) {
@@ -213,7 +219,7 @@ export class Topbar extends BaseComponent {
                         this.sidebarToggleBtn.style.backgroundColor = '';
                     }
                 }
-                
+
                 if (this.galleryToggleBtn) {
                     if (state.imageGalleryVisible) {
                         this.galleryToggleBtn.style.backgroundColor = 'var(--color-lavender-100)';
@@ -221,7 +227,7 @@ export class Topbar extends BaseComponent {
                         this.galleryToggleBtn.style.backgroundColor = '';
                     }
                 }
-                
+
                 if (this.csvToggleBtn) {
                     if (state.csvGalleryVisible) {
                         this.csvToggleBtn.style.backgroundColor = 'var(--color-lavender-100)';
@@ -240,13 +246,6 @@ export class Topbar extends BaseComponent {
                 }
             })
         );
-
-        // ASR Store
-        this.unsubscribe.push(
-            useASRStore.subscribe((state) => {
-                this.updateASRStatus(state.status, state.isRecording);
-            })
-        );
     }
 
     private updateUI(): void {
@@ -262,7 +261,7 @@ export class Topbar extends BaseComponent {
         if (this.saveBtn) {
             this.toggleClass(this.saveBtn, 'unsaved', docStore.hasUnsavedChanges);
         }
-        
+
         // ボタンの初期状態を反映
         if (this.sidebarToggleBtn) {
             if (uiStore.sidebarVisible) {
@@ -281,25 +280,6 @@ export class Topbar extends BaseComponent {
         }
     }
 
-    private updateASRStatus(status: { initialized: boolean; initializing: boolean }, isRecording: boolean): void {
-        if (!this.asrStatusEl || !this.asrStatusIndicator || !this.asrStatusText) {
-            return;
-        }
-
-        let statusClass = 'disabled';
-        let statusText = 'ASR: 無効';
-
-        if (status.initializing) {
-            statusClass = 'initializing';
-            statusText = 'ASR: 初期化中...';
-        } else if (status.initialized) {
-            statusClass = 'ready';
-            statusText = isRecording ? 'ASR: 録音中' : 'ASR: 準備完了';
-        }
-
-        this.asrStatusIndicator.className = `asr-status-indicator ${statusClass}`;
-        this.asrStatusText.textContent = statusText;
-    }
 
     private async handleSave(): Promise<void> {
         const docStore = useDocStore.getState();
