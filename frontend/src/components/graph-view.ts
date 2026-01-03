@@ -1,9 +1,10 @@
 import { BaseComponent } from './component-base';
-import { useUIStore, useDocStore } from '../stores/index';
+import { useUIStore, useDocStore, useCustomCssStore } from '../stores/index';
 import GraphModule from '../graph-d3.js';
 import type { WailsAppAPI } from '../types/wails-api';
 import type { GraphData } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
+import { applyCustomCssToHtml } from '../utils/custom-css';
 
 export class GraphView extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
@@ -147,24 +148,38 @@ export class GraphView extends BaseComponent {
         try {
             const content = await this.api.LoadFile(path);
             docStore.setCurrentPath(path);
+            if (path.toLowerCase().endsWith('.pdf')) {
+                docStore.setMarkdownContent('');
+                docStore.setPreviewHtml('');
+                docStore.clearUnsavedChanges();
+                return;
+            }
+
             docStore.setMarkdownContent(content);
             docStore.clearUnsavedChanges();
 
             // プレビューを更新
             const html = await this.api.PreviewMarkdown(content);
-            docStore.setPreviewHtml(html);
+            const finalHtml = this.buildPreviewHtml(content, html);
+            docStore.setPreviewHtml(finalHtml);
 
             // iframeに反映
             const preview = document.getElementById('preview') as HTMLIFrameElement;
             if (preview && preview.contentDocument) {
                 preview.contentDocument.open();
-                preview.contentDocument.write(html);
+                preview.contentDocument.write(finalHtml);
                 preview.contentDocument.close();
             }
         } catch (error) {
             console.error('Failed to load file:', error);
             useUIStore.getState().setStatusMessage('ファイルの読み込みに失敗しました', 3000);
         }
+    }
+
+    private buildPreviewHtml(content: string, html: string): string {
+        const customCss = useCustomCssStore.getState().customCss;
+        const theme = useUIStore.getState().theme;
+        return applyCustomCssToHtml(content, html, customCss, theme);
     }
 
     async refresh(): Promise<void> {
@@ -185,4 +200,3 @@ export class GraphView extends BaseComponent {
         }
     }
 }
-

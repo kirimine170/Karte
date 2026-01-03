@@ -9,9 +9,10 @@ import { OverlayHost } from './components/overlay-host';
 import { ImageGallery } from './components/image-gallery';
 import { CsvGallery } from './components/csv-gallery';
 import { getWailsAppAPI, getWailsRuntimeAPI } from './api/wails-api';
-import { useUIStore, useDocStore, useASRStore, useExportStore, useModalStore } from './stores/index';
+import { useUIStore, useDocStore, useASRStore, useExportStore, useModalStore, useCustomCssStore } from './stores/index';
 import type { WailsAppAPI, WailsRuntimeAPI } from './types/wails-api';
 import { eventLogger } from './utils/event-logger';
+import { applyCustomCssToHtml } from './utils/custom-css';
 
 export class App {
     private api: WailsAppAPI | null = null;
@@ -112,6 +113,8 @@ export class App {
         this.components.csvGallery = new CsvGallery(this.api);
         this.components.csvGallery.init();
 
+        await this.loadCustomCss();
+
         // 初期ファイルの読み込み
         await this.loadInitialFile();
     }
@@ -153,7 +156,7 @@ export class App {
         } else {
             useDocStore.getState().setMarkdownContent(content);
             const html = await this.api.PreviewMarkdown(content);
-            useDocStore.getState().setPreviewHtml(html);
+            useDocStore.getState().setPreviewHtml(this.buildPreviewHtml(content, html));
         }
         useDocStore.getState().clearUnsavedChanges();
     }
@@ -370,14 +373,35 @@ export class App {
         if (!docStore.currentPath || !this.api) {
             return;
         }
+        if (docStore.currentPath.toLowerCase().endsWith('.pdf')) {
+            return;
+        }
 
         try {
             const content = await this.api.LoadFile(docStore.currentPath);
             const html = await this.api.PreviewMarkdown(content);
-            useDocStore.getState().setPreviewHtml(html);
+            useDocStore.getState().setPreviewHtml(this.buildPreviewHtml(content, html));
         } catch (error) {
             console.error('Failed to refresh preview:', error);
         }
+    }
+
+    private async loadCustomCss(): Promise<void> {
+        if (!this.api) {
+            return;
+        }
+        try {
+            const css = await this.api.GetCustomCSS();
+            useCustomCssStore.getState().setCustomCss(css);
+        } catch (error) {
+            console.error('Failed to load custom CSS:', error);
+        }
+    }
+
+    private buildPreviewHtml(content: string, html: string): string {
+        const customCss = useCustomCssStore.getState().customCss;
+        const theme = useUIStore.getState().theme;
+        return applyCustomCssToHtml(content, html, customCss, theme);
     }
 
     private async refreshGraph(): Promise<void> {

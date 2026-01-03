@@ -1,8 +1,9 @@
 import { BaseComponent } from './component-base';
-import { useUIStore, useDocStore } from '../stores/index';
+import { useUIStore, useDocStore, useCustomCssStore } from '../stores/index';
 import { filterFilesByQuery, buildFileDisplayLabel, type FileItem } from '../logic';
 import type { WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
+import { applyCustomCssToHtml } from '../utils/custom-css';
 
 export class Sidebar extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
@@ -159,12 +160,18 @@ export class Sidebar extends BaseComponent {
             // ファイルを読み込む
             const content = await this.api.LoadFile(path);
             docStore.setCurrentPath(path);
-            docStore.setMarkdownContent(content);
-            docStore.clearUnsavedChanges();
-            eventLogger.log('Sidebar', 'file-load-success', { path, contentLength: content.length });
+            if (path.toLowerCase().endsWith('.pdf')) {
+                docStore.setMarkdownContent('');
+                docStore.setPreviewHtml('');
+                docStore.clearUnsavedChanges();
+            } else {
+                docStore.setMarkdownContent(content);
+                docStore.clearUnsavedChanges();
+                eventLogger.log('Sidebar', 'file-load-success', { path, contentLength: content.length });
 
-            // プレビューを更新
-            await this.updatePreview(content);
+                // プレビューを更新
+                await this.updatePreview(content);
+            }
         } catch (error) {
             console.error('Failed to load file:', error);
             eventLogger.log('Sidebar', 'file-load-error', { path, error: String(error) });
@@ -175,13 +182,14 @@ export class Sidebar extends BaseComponent {
     private async updatePreview(content: string): Promise<void> {
         try {
             const html = await this.api.PreviewMarkdown(content);
-            useDocStore.getState().setPreviewHtml(html);
+            const finalHtml = this.buildPreviewHtml(content, html);
+            useDocStore.getState().setPreviewHtml(finalHtml);
 
             // iframeに反映
             const preview = document.getElementById('preview') as HTMLIFrameElement;
             if (preview && preview.contentDocument) {
                 preview.contentDocument.open();
-                preview.contentDocument.write(html);
+                preview.contentDocument.write(finalHtml);
                 preview.contentDocument.close();
             }
         } catch (error) {
@@ -189,9 +197,14 @@ export class Sidebar extends BaseComponent {
         }
     }
 
+    private buildPreviewHtml(content: string, html: string): string {
+        const customCss = useCustomCssStore.getState().customCss;
+        const theme = useUIStore.getState().theme;
+        return applyCustomCssToHtml(content, html, customCss, theme);
+    }
+
     destroy(): void {
         this.unsubscribe.forEach((unsub) => unsub());
         this.unsubscribe = [];
     }
 }
-

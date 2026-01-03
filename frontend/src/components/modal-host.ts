@@ -1,8 +1,9 @@
 import { BaseComponent } from './component-base';
-import { useModalStore, useDocStore, useUIStore } from '../stores/index';
+import { useModalStore, useDocStore, useUIStore, useCustomCssStore } from '../stores/index';
 import type { WailsAppAPI } from '../types/wails-api';
 import type { ConflictResolutionStrategy } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
+import { applyCustomCssToHtml } from '../utils/custom-css';
 
 export class ModalHost extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
@@ -445,8 +446,10 @@ export class ModalHost extends BaseComponent {
 
         try {
             await this.api.SetCustomCSS(css);
+            useCustomCssStore.getState().setCustomCss(css);
             modalStore.hideCustomCssModal();
             useUIStore.getState().setStatusMessage('カスタムCSSを保存しました', 2000);
+            await this.refreshPreviewWithCustomCss(css);
         } catch (error) {
             console.error('Failed to save custom CSS:', error);
             useUIStore.getState().setStatusMessage('カスタムCSSの保存に失敗しました', 3000);
@@ -457,10 +460,27 @@ export class ModalHost extends BaseComponent {
         try {
             await this.api.ClearCustomCSS();
             useModalStore.getState().setCustomCssModalValue('');
+            useCustomCssStore.getState().setCustomCss('');
             useUIStore.getState().setStatusMessage('カスタムCSSをクリアしました', 2000);
+            await this.refreshPreviewWithCustomCss('');
         } catch (error) {
             console.error('Failed to clear custom CSS:', error);
             useUIStore.getState().setStatusMessage('カスタムCSSのクリアに失敗しました', 3000);
+        }
+    }
+
+    private async refreshPreviewWithCustomCss(customCss: string): Promise<void> {
+        const docStore = useDocStore.getState();
+        if (!docStore.currentPath || docStore.currentPath.toLowerCase().endsWith('.pdf')) {
+            return;
+        }
+        try {
+            const html = await this.api.PreviewMarkdown(docStore.markdownContent);
+            const theme = useUIStore.getState().theme;
+            const finalHtml = applyCustomCssToHtml(docStore.markdownContent, html, customCss, theme);
+            docStore.setPreviewHtml(finalHtml);
+        } catch (error) {
+            console.error('Failed to refresh preview after custom CSS update:', error);
         }
     }
 

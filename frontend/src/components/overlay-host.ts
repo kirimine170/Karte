@@ -1,7 +1,8 @@
 import { BaseComponent } from './component-base';
-import { useOverlayStore, useExportStore, useASRStore, useUIStore, useDocStore } from '../stores/index';
+import { useOverlayStore, useExportStore, useASRStore, useUIStore, useDocStore, useCustomCssStore } from '../stores/index';
 import type { WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
+import { applyCustomCssToHtml } from '../utils/custom-css';
 
 export class OverlayHost extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
@@ -399,14 +400,28 @@ export class OverlayHost extends BaseComponent {
             const content = await this.api.LoadFile(path);
             const docStore = useDocStore.getState();
             docStore.setCurrentPath(path);
+            if (path.toLowerCase().endsWith('.pdf')) {
+                docStore.setMarkdownContent('');
+                docStore.setPreviewHtml('');
+                docStore.clearUnsavedChanges();
+                return;
+            }
+
             docStore.setMarkdownContent(content);
             docStore.clearUnsavedChanges();
 
             const html = await this.api.PreviewMarkdown(content);
-            docStore.setPreviewHtml(html);
+            const finalHtml = this.buildPreviewHtml(content, html);
+            docStore.setPreviewHtml(finalHtml);
         } catch (error) {
             console.error('Failed to load file after import:', error);
         }
+    }
+
+    private buildPreviewHtml(content: string, html: string): string {
+        const customCss = useCustomCssStore.getState().customCss;
+        const theme = useUIStore.getState().theme;
+        return applyCustomCssToHtml(content, html, customCss, theme);
     }
 
     private async refreshFileList(): Promise<void> {
