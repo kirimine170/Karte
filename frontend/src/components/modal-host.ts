@@ -131,6 +131,14 @@ export class ModalHost extends BaseComponent {
                 })
             );
         }
+        if (this.filenameInput) {
+            this.unsubscribe.push(
+                this.addEventListener(this.filenameInput, 'input', (e) => {
+                    const target = e.target as HTMLInputElement;
+                    useModalStore.getState().setFilenameModalValue(target.value);
+                })
+            );
+        }
         if (this.cancelFileBtn) {
             this.unsubscribe.push(
                 this.addEventListener(this.cancelFileBtn, 'click', () => {
@@ -146,6 +154,14 @@ export class ModalHost extends BaseComponent {
                 this.addEventListener(this.confirmRenameBtn, 'click', async () => {
                     eventLogger.log('ModalHost', 'rename-modal-confirm-click');
                     await this.handleRenameFile();
+                })
+            );
+        }
+        if (this.renameFileInput) {
+            this.unsubscribe.push(
+                this.addEventListener(this.renameFileInput, 'input', (e) => {
+                    const target = e.target as HTMLInputElement;
+                    useModalStore.getState().setRenameFileModalValue(target.value);
                 })
             );
         }
@@ -194,6 +210,14 @@ export class ModalHost extends BaseComponent {
                 this.addEventListener(this.saveCustomCssBtn, 'click', async () => {
                     eventLogger.log('ModalHost', 'custom-css-save-click');
                     await this.handleSaveCustomCSS();
+                })
+            );
+        }
+        if (this.customCssTextarea) {
+            this.unsubscribe.push(
+                this.addEventListener(this.customCssTextarea, 'input', (e) => {
+                    const target = e.target as HTMLTextAreaElement;
+                    useModalStore.getState().setCustomCssModalValue(target.value);
                 })
             );
         }
@@ -578,4 +602,3 @@ export class ModalHost extends BaseComponent {
         this.unsubscribe = [];
     }
 }
-
