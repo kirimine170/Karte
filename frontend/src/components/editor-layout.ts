@@ -31,7 +31,7 @@ export class EditorLayout extends BaseComponent {
     private pdfPageCount = 0;
     private pdfViewMode: 'single' | 'spread' | 'scroll' = 'single';
     private pdfCoverEnabled = true;
-    private pdfBinding: 'rtl' | 'ltr' = 'rtl';
+    private pdfBinding: 'rtl' | 'ltr' = 'ltr';
     private pdfPageNumber = 1;
     private pdfSpreadIndex = 0;
     private pdfRenderRequestId = 0;
@@ -185,7 +185,7 @@ export class EditorLayout extends BaseComponent {
         if (this.pdfPrevBtn) {
             this.unsubscribe.push(
                 this.addEventListener(this.pdfPrevBtn, 'click', () => {
-                    this.goToPreviousPdfPage();
+                    this.handlePdfArrow('left');
                 })
             );
         }
@@ -193,7 +193,7 @@ export class EditorLayout extends BaseComponent {
         if (this.pdfNextBtn) {
             this.unsubscribe.push(
                 this.addEventListener(this.pdfNextBtn, 'click', () => {
-                    this.goToNextPdfPage();
+                    this.handlePdfArrow('right');
                 })
             );
         }
@@ -299,6 +299,22 @@ export class EditorLayout extends BaseComponent {
                 e.preventDefault();
                 eventLogger.log('EditorLayout', 'keyboard-shortcut-save');
                 await this.handleSave();
+                return;
+            }
+            if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                const active = document.activeElement;
+                if (
+                    active instanceof HTMLInputElement ||
+                    active instanceof HTMLTextAreaElement ||
+                    (active instanceof HTMLElement && active.isContentEditable)
+                ) {
+                    return;
+                }
+                if (!this.pdfDoc || !this.pdfPane || this.pdfPane.style.display === 'none') {
+                    return;
+                }
+                e.preventDefault();
+                this.handlePdfArrow(e.key === 'ArrowLeft' ? 'left' : 'right');
             }
         };
         document.addEventListener('keydown', keydownHandler);
@@ -509,6 +525,9 @@ export class EditorLayout extends BaseComponent {
         this.pdfPageCount = this.pdfDoc.numPages;
         this.pdfPageNumber = 1;
         this.pdfSpreadIndex = 0;
+        this.pdfViewMode = this.pdfPageCount <= 1 ? 'scroll' : 'single';
+        this.syncPdfPagingFromModeChange();
+        this.updatePdfSelectLabels();
         this.updatePdfControlsState();
         this.renderPdfPages();
     }
@@ -582,23 +601,28 @@ export class EditorLayout extends BaseComponent {
         }
 
         if (coverOnly) {
-            const placement = this.pdfBinding === 'rtl' ? 'right' : 'left';
+            const placement = this.pdfBinding === 'rtl' ? 'left' : 'right';
             const containerWidth = this.pdfCanvasContainer.clientWidth;
             const containerHeight = this.pdfCanvasContainer.clientHeight;
 
             if (placement === 'right') {
                 this.pdfCanvasLeft.style.display = 'none';
                 this.pdfCanvasRight.style.display = '';
+                this.pdfCanvasRight.style.gridColumn = '2';
                 await this.renderPdfPageToCanvas(1, this.pdfCanvasRight, containerWidth / 2, containerHeight, requestId);
             } else {
                 this.pdfCanvasLeft.style.display = '';
                 this.pdfCanvasRight.style.display = 'none';
+                this.pdfCanvasLeft.style.gridColumn = '1';
                 await this.renderPdfPageToCanvas(1, this.pdfCanvasLeft, containerWidth / 2, containerHeight, requestId);
             }
 
             this.updatePdfPageInfo(`1 / ${this.pdfPageCount}`);
             return;
         }
+
+        this.pdfCanvasLeft.style.gridColumn = 'auto';
+        this.pdfCanvasRight.style.gridColumn = 'auto';
 
         const startPage = this.pdfCoverEnabled
             ? 2 + (this.pdfSpreadIndex - 1) * 2
@@ -677,6 +701,19 @@ export class EditorLayout extends BaseComponent {
         }
         context.clearRect(0, 0, canvas.width, canvas.height);
         await page.render({ canvasContext: context, viewport: scaledViewport }).promise;
+    }
+
+    private handlePdfArrow(direction: 'left' | 'right'): void {
+        if (this.pdfViewMode === 'scroll') {
+            return;
+        }
+        const shouldGoNext =
+            this.pdfViewMode === 'single' ? direction === 'right' : this.pdfBinding === 'rtl' ? direction === 'left' : direction === 'right';
+        if (shouldGoNext) {
+            this.goToNextPdfPage();
+        } else {
+            this.goToPreviousPdfPage();
+        }
     }
 
     private goToPreviousPdfPage(): void {
