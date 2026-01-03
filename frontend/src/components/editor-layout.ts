@@ -77,6 +77,44 @@ export class EditorLayout extends BaseComponent {
             );
         }
 
+        if (this.editor) {
+            this.unsubscribe.push(
+                this.addEventListener(this.editor, 'dragover', (e) => {
+                    const types = Array.from(e.dataTransfer?.types || []);
+                    if (types.includes('application/json') || types.includes('text/plain')) {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = 'copy';
+                    }
+                })
+            );
+
+            this.unsubscribe.push(
+                this.addEventListener(this.editor, 'drop', (e) => {
+                    e.preventDefault();
+                    const jsonData = e.dataTransfer?.getData('application/json');
+                    if (jsonData) {
+                        try {
+                            const payload = JSON.parse(jsonData) as { type?: string; path?: string };
+                            if (payload.type === 'csv' && payload.path) {
+                                this.insertCsvAtCursor(payload.path);
+                            }
+                        } catch (error) {
+                            console.error('Failed to parse drag data:', error);
+                        }
+                        return;
+                    }
+
+                    const path = e.dataTransfer?.getData('text/plain');
+                    if (path) {
+                        const csvItem = document.querySelector(`.csv-item[data-csv-path="${path}"]`);
+                        if (csvItem) {
+                            this.insertCsvAtCursor(path);
+                        }
+                    }
+                })
+            );
+        }
+
         // 録音ボタン（タブ内）
         if (this.recordingBtn) {
             this.unsubscribe.push(
@@ -301,6 +339,25 @@ export class EditorLayout extends BaseComponent {
         }
     }
 
+    private insertCsvAtCursor(path: string): void {
+        if (!this.editor) {
+            return;
+        }
+
+        const cursorPos = this.editor.selectionStart ?? this.editor.value.length;
+        const csvMarkdown = `@import(type="csv", path="${path}")\n`;
+        const currentValue = this.editor.value;
+        const nextValue = currentValue.slice(0, cursorPos) + csvMarkdown + currentValue.slice(cursorPos);
+        this.editor.value = nextValue;
+        const nextCursor = cursorPos + csvMarkdown.length;
+        this.editor.setSelectionRange(nextCursor, nextCursor);
+
+        const docStore = useDocStore.getState();
+        docStore.setMarkdownContent(nextValue);
+        docStore.setHasUnsavedChanges(true);
+        this.updatePreview(nextValue);
+    }
+
     private async toggleRecording(): Promise<void> {
         const asrStore = useASRStore.getState();
 
@@ -399,4 +456,3 @@ export class EditorLayout extends BaseComponent {
         this.unsubscribe = [];
     }
 }
-
