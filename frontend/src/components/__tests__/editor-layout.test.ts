@@ -47,11 +47,7 @@ describe('EditorLayout', () => {
         document.body.innerHTML = `
             <div id="contentArea">
                 <div class="editor-pane-wrapper">
-                    <div class="tabs">
-                        <button id="recordingBtn" class="recording-btn">
-                            <span class="recording-label">録音</span>
-                        </button>
-                    </div>
+                    <div class="tabs"></div>
                     <div class="tab-content active" id="editor-tab">
                         <div class="editor-pane">
                             <div class="editor-pane-body">
@@ -106,8 +102,8 @@ describe('EditorLayout', () => {
         editorLayout.init();
         clearLogs();
 
-        const recordingBtn = document.getElementById('recordingBtn') as HTMLButtonElement;
-        recordingBtn.click();
+        const recordingBtnFooter = document.getElementById('recordingBtnFooter') as HTMLButtonElement;
+        recordingBtnFooter.click();
         await new Promise(resolve => setTimeout(resolve, 100));
 
         expectLogContainsSequence([
@@ -115,4 +111,3 @@ describe('EditorLayout', () => {
         ]);
     });
 });
-

@@ -14,6 +14,9 @@ export class OverlayHost extends BaseComponent {
     private asrStatusProgress: HTMLElement | null = null;
     private asrStatusProgressFill: HTMLElement | null = null;
     private asrStatusProgressText: HTMLElement | null = null;
+    private isTranscriptionVisible = false;
+    private isPdfVisible = false;
+    private isAsrVisible = false;
 
     init(): void {
         eventLogger.log('OverlayHost', 'init');
@@ -88,6 +91,7 @@ export class OverlayHost extends BaseComponent {
                 if (this.transcriptionProgress) {
                     this.transcriptionProgress.style.display = state.transcriptionProgress.visible ? 'flex' : 'none';
                 }
+                this.isTranscriptionVisible = state.transcriptionProgress.visible;
                 if (this.transcriptionProgressFill) {
                     this.transcriptionProgressFill.style.width = `${state.transcriptionProgress.progress}%`;
                 }
@@ -99,12 +103,15 @@ export class OverlayHost extends BaseComponent {
                 if (this.pdfExportProgress) {
                     this.pdfExportProgress.style.display = state.pdfExportProgress.visible ? 'flex' : 'none';
                 }
+                this.isPdfVisible = state.pdfExportProgress.visible;
                 if (this.pdfExportProgressFill) {
                     this.pdfExportProgressFill.style.width = `${state.pdfExportProgress.progress}%`;
                 }
                 if (this.pdfExportProgressText) {
                     this.pdfExportProgressText.textContent = state.pdfExportProgress.message;
                 }
+
+                this.updateStatusBarReservation();
             })
         );
 
@@ -122,7 +129,7 @@ export class OverlayHost extends BaseComponent {
         }
 
         let statusText = 'ASR: 無効';
-        let showProgress = true;
+        let showProgress = status.initializing || isRecording;
 
         if (status.initializing) {
             statusText = 'ASR: 初期化中...';
@@ -143,6 +150,13 @@ export class OverlayHost extends BaseComponent {
         // ステータス表示の表示/非表示
         this.asrStatusProgress.style.display = showProgress ? 'flex' : 'none';
         this.asrStatusProgressText.textContent = statusText;
+        this.isAsrVisible = showProgress;
+        this.updateStatusBarReservation();
+    }
+
+    private updateStatusBarReservation(): void {
+        const shouldReserve = this.isTranscriptionVisible || this.isPdfVisible || this.isAsrVisible;
+        document.body.classList.toggle('status-bar-visible', shouldReserve);
     }
 
     destroy(): void {
@@ -150,4 +164,3 @@ export class OverlayHost extends BaseComponent {
         this.unsubscribe = [];
     }
 }
-

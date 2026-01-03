@@ -161,6 +161,9 @@
     height: 100vh;
     overflow: hidden;
     background: var(--gradient-page-bg);
+  }
+
+  body.status-bar-visible .app-container {
     padding-bottom: var(--status-bar-height);
   }
 
