@@ -1,7 +1,8 @@
 import { BaseComponent } from './component-base';
-import { useUIStore, useDocStore, useASRStore, useOverlayStore } from '../stores/index';
+import { useUIStore, useDocStore, useASRStore, useOverlayStore, useCustomCssStore } from '../stores/index';
 import type { WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
+import { applyCustomCssToHtml } from '../utils/custom-css';
 import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
 
@@ -466,8 +467,9 @@ export class EditorLayout extends BaseComponent {
         }
         try {
             const html = await this.api.PreviewMarkdown(content);
-            useDocStore.getState().setPreviewHtml(html);
-            this.updatePreviewFrame(html);
+            const finalHtml = this.buildPreviewHtml(content, html);
+            useDocStore.getState().setPreviewHtml(finalHtml);
+            this.updatePreviewFrame(finalHtml);
         } catch (error) {
             console.error('Failed to update preview:', error);
         }
@@ -481,6 +483,12 @@ export class EditorLayout extends BaseComponent {
         this.preview.contentDocument.open();
         this.preview.contentDocument.write(html);
         this.preview.contentDocument.close();
+    }
+
+    private buildPreviewHtml(content: string, html: string): string {
+        const customCss = useCustomCssStore.getState().customCss;
+        const theme = useUIStore.getState().theme;
+        return applyCustomCssToHtml(content, html, customCss, theme);
     }
 
     private async updatePdfPreview(path: string): Promise<void> {

@@ -1,5 +1,5 @@
 import { BaseComponent } from './component-base';
-import { useUIStore, useDocStore, useExportStore, useModalStore } from '../stores/index';
+import { useUIStore, useDocStore, useExportStore, useModalStore, useCustomCssStore } from '../stores/index';
 import type { WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 
@@ -262,6 +262,13 @@ export class Topbar extends BaseComponent {
                 }
             })
         );
+
+        // Custom CSS Store
+        this.unsubscribe.push(
+            useCustomCssStore.subscribe((state) => {
+                this.updateCustomCssStatus(state.customCss);
+            })
+        );
     }
 
     private updateUI(): void {
@@ -277,6 +284,7 @@ export class Topbar extends BaseComponent {
         if (this.saveBtn) {
             this.toggleClass(this.saveBtn, 'unsaved', docStore.hasUnsavedChanges);
         }
+        this.updateCustomCssStatus(useCustomCssStore.getState().customCss);
 
         // ボタンの初期状態を反映
         if (this.sidebarToggleBtn) {
@@ -294,6 +302,13 @@ export class Topbar extends BaseComponent {
                 this.csvToggleBtn.style.backgroundColor = 'var(--color-lavender-100)';
             }
         }
+    }
+
+    private updateCustomCssStatus(css: string): void {
+        if (!this.customCssStatus) {
+            return;
+        }
+        this.customCssStatus.textContent = css ? 'Custom CSS active' : '';
     }
 
 
@@ -377,6 +392,7 @@ export class Topbar extends BaseComponent {
         try {
             eventLogger.log('Topbar', 'custom-css-open');
             const css = await this.api.GetCustomCSS();
+            useCustomCssStore.getState().setCustomCss(css);
             modalStore.setCustomCssModalValue(css);
             modalStore.showCustomCssModal();
             eventLogger.log('Topbar', 'custom-css-opened');
