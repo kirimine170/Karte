@@ -1,9 +1,11 @@
 import { BaseComponent } from './component-base';
-import { useOverlayStore, useExportStore, useASRStore } from '../stores/index';
+import { useOverlayStore, useExportStore, useASRStore, useUIStore, useDocStore } from '../stores/index';
+import type { WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 
 export class OverlayHost extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
+    private api: WailsAppAPI;
     private dropOverlay: HTMLElement | null = null;
     private transcriptionProgress: HTMLElement | null = null;
     private transcriptionProgressFill: HTMLElement | null = null;
@@ -17,6 +19,12 @@ export class OverlayHost extends BaseComponent {
     private isTranscriptionVisible = false;
     private isPdfVisible = false;
     private isAsrVisible = false;
+    private dragDepth = 0;
+
+    constructor(api: WailsAppAPI, parent?: HTMLElement) {
+        super(parent);
+        this.api = api;
+    }
 
     init(): void {
         eventLogger.log('OverlayHost', 'init');
@@ -47,29 +55,65 @@ export class OverlayHost extends BaseComponent {
     }
 
     private setupEventListeners(): void {
-        // ドラッグ&ドロップイベント
+        const isFileDrag = (event: DragEvent): boolean => {
+            if (!event.dataTransfer) {
+                return false;
+            }
+            const types = Array.from(event.dataTransfer.types || []);
+            return types.includes('Files');
+        };
+
         this.unsubscribe.push(
-            this.addEventListener(document, 'dragover', (e) => {
-                e.preventDefault();
-                eventLogger.log('OverlayHost', 'drag-over');
+            this.addEventListener(window, 'dragenter', (event) => {
+                if (!isFileDrag(event)) {
+                    return;
+                }
+                event.preventDefault();
+                this.dragDepth += 1;
+                eventLogger.log('OverlayHost', 'drag-enter');
                 useOverlayStore.getState().showDropOverlay();
             })
         );
 
         this.unsubscribe.push(
-            this.addEventListener(document, 'dragleave', (e) => {
-                e.preventDefault();
-                eventLogger.log('OverlayHost', 'drag-leave');
-                useOverlayStore.getState().hideDropOverlay();
+            this.addEventListener(window, 'dragover', (event) => {
+                if (!isFileDrag(event)) {
+                    return;
+                }
+                event.preventDefault();
+                eventLogger.log('OverlayHost', 'drag-over');
             })
         );
 
         this.unsubscribe.push(
-            this.addEventListener(document, 'drop', (e) => {
-                e.preventDefault();
+            this.addEventListener(window, 'dragleave', (event) => {
+                if (!isFileDrag(event)) {
+                    return;
+                }
+                this.dragDepth = Math.max(0, this.dragDepth - 1);
+                if (this.dragDepth === 0) {
+                    eventLogger.log('OverlayHost', 'drag-leave');
+                    useOverlayStore.getState().hideDropOverlay();
+                }
+            })
+        );
+
+        this.unsubscribe.push(
+            this.addEventListener(window, 'drop', (event) => {
+                if (!isFileDrag(event)) {
+                    return;
+                }
+                event.preventDefault();
+                this.dragDepth = 0;
                 eventLogger.log('OverlayHost', 'drop');
                 useOverlayStore.getState().hideDropOverlay();
-                // ファイルドロップ処理は別のコンポーネントで実装
+                const files = Array.from(event.dataTransfer?.files || []);
+                if (files.length === 0) {
+                    return;
+                }
+                this.handleFileDrop(files).catch((error) => {
+                    console.error('handleFileDrop failed:', error);
+                });
             })
         );
     }
@@ -157,6 +201,235 @@ export class OverlayHost extends BaseComponent {
     private updateStatusBarReservation(): void {
         const shouldReserve = this.isTranscriptionVisible || this.isPdfVisible || this.isAsrVisible;
         document.body.classList.toggle('status-bar-visible', shouldReserve);
+    }
+
+    private async handleFileDrop(files: File[]): Promise<void> {
+        const hasAudio = files.some((file) => this.isSupportedAudioFile(file.name));
+        const hasImage = files.some((file) => this.isSupportedImageFile(file.name));
+        const hasPdf = files.some((file) => this.isSupportedPdfFile(file.name));
+        const hasCsv = files.some((file) => this.isSupportedCsvFile(file.name));
+
+        const tasks: Promise<void>[] = [];
+        if (hasAudio) {
+            tasks.push(this.handleAudioDrop(files));
+        }
+        if (hasImage) {
+            tasks.push(this.handleImageDrop(files));
+        }
+        if (hasPdf) {
+            tasks.push(this.handlePdfDrop(files));
+        }
+        if (hasCsv) {
+            tasks.push(this.handleCsvDrop(files));
+        }
+
+        if (tasks.length === 0) {
+            useUIStore.getState().setStatusMessage('対応していないファイル形式です', 3000);
+            return;
+        }
+
+        await Promise.all(tasks);
+    }
+
+    private isSupportedAudioFile(name = ''): boolean {
+        const lower = name.toLowerCase();
+        return ['.wav', '.mp3', '.m4a'].some((ext) => lower.endsWith(ext));
+    }
+
+    private isSupportedImageFile(name = ''): boolean {
+        const lower = name.toLowerCase();
+        return ['.jpg', '.jpeg', '.png', '.gif', '.webp'].some((ext) => lower.endsWith(ext));
+    }
+
+    private isSupportedPdfFile(name = ''): boolean {
+        return name.toLowerCase().endsWith('.pdf');
+    }
+
+    private isSupportedCsvFile(name = ''): boolean {
+        return name.toLowerCase().endsWith('.csv');
+    }
+
+    private getFilePath(file: File): string | null {
+        const fileWithPath = file as File & { path?: string };
+        return fileWithPath.path || null;
+    }
+
+    private async handleAudioDrop(files: File[]): Promise<void> {
+        const audioFiles = files.filter((file) => this.isSupportedAudioFile(file.name));
+        if (audioFiles.length === 0) {
+            useUIStore.getState().setStatusMessage('対応していない音声形式です (wav/mp3/m4a)', 3000);
+            return;
+        }
+
+        for (const file of audioFiles) {
+            try {
+                useUIStore.getState().setStatusMessage(`音声を取り込み中: ${file.name}`);
+                const path = this.getFilePath(file);
+                if (path) {
+                    await this.api.ImportAudioFile(path);
+                } else {
+                    const base64 = await this.readFileAsBase64(file);
+                    if (base64) {
+                        await this.api.ImportAudioBase64(file.name || `audio-${Date.now()}.wav`, base64);
+                    } else {
+                        useUIStore.getState().setStatusMessage('音声データにアクセスできませんでした', 4000);
+                    }
+                }
+            } catch (error) {
+                console.error('ImportAudioFile failed', error);
+                useUIStore.getState().setStatusMessage(`音声取り込みに失敗: ${this.formatError(error)}`, 4000);
+            }
+        }
+
+        await this.refreshFileList();
+        useUIStore.getState().setStatusMessage('音声ファイルを保存しました。文字起こしを開始します…', 3500);
+    }
+
+    private async handleImageDrop(files: File[]): Promise<void> {
+        const imageFiles = files.filter((file) => this.isSupportedImageFile(file.name));
+        if (imageFiles.length === 0) {
+            useUIStore.getState().setStatusMessage('対応していない画像形式です (jpg/png/gif/webp)', 3000);
+            return;
+        }
+
+        for (const file of imageFiles) {
+            try {
+                useUIStore.getState().setStatusMessage(`画像を取り込み中: ${file.name}`);
+                const path = this.getFilePath(file);
+                if (path) {
+                    await this.api.ImportImageFile(path);
+                } else {
+                    const base64 = await this.readFileAsBase64(file);
+                    if (base64) {
+                        await this.api.ImportImageBase64(file.name || `image-${Date.now()}.png`, base64);
+                    } else {
+                        useUIStore.getState().setStatusMessage('画像データにアクセスできませんでした', 4000);
+                    }
+                }
+            } catch (error) {
+                console.error('ImportImageFile failed', error);
+                useUIStore.getState().setStatusMessage(`画像取り込みに失敗: ${this.formatError(error)}`, 4000);
+            }
+        }
+
+        useUIStore.getState().setStatusMessage('画像ファイルを保存しました。', 3000);
+    }
+
+    private async handleCsvDrop(files: File[]): Promise<void> {
+        const csvFiles = files.filter((file) => this.isSupportedCsvFile(file.name));
+        if (csvFiles.length === 0) {
+            useUIStore.getState().setStatusMessage('対応していないファイル形式です (csv)', 3000);
+            return;
+        }
+
+        for (const file of csvFiles) {
+            try {
+                useUIStore.getState().setStatusMessage(`CSVを取り込み中: ${file.name}`);
+                const path = this.getFilePath(file);
+                if (path) {
+                    await this.api.ImportCsvFile(path);
+                } else {
+                    const base64 = await this.readFileAsBase64(file);
+                    if (base64) {
+                        await this.api.ImportCsvBase64(file.name || `data-${Date.now()}.csv`, base64);
+                    } else {
+                        useUIStore.getState().setStatusMessage('CSVデータにアクセスできませんでした', 4000);
+                    }
+                }
+            } catch (error) {
+                console.error('ImportCsvFile failed', error);
+                useUIStore.getState().setStatusMessage(`CSV取り込みに失敗: ${this.formatError(error)}`, 4000);
+            }
+        }
+
+        await this.refreshFileList();
+        useUIStore.getState().setStatusMessage('CSVファイルを保存しました。', 3000);
+    }
+
+    private async handlePdfDrop(files: File[]): Promise<void> {
+        const pdfFiles = files.filter((file) => this.isSupportedPdfFile(file.name));
+        if (pdfFiles.length === 0) {
+            useUIStore.getState().setStatusMessage('対応していないファイル形式です (pdf)', 3000);
+            return;
+        }
+
+        for (const file of pdfFiles) {
+            try {
+                useUIStore.getState().setStatusMessage(`PDFを取り込み中: ${file.name}`);
+                const path = this.getFilePath(file);
+                if (path) {
+                    const pdfPath = await this.api.ImportPdfFile(path);
+                    await this.loadFile(pdfPath);
+                } else {
+                    const base64 = await this.readFileAsBase64(file);
+                    if (base64) {
+                        const pdfPath = await this.api.ImportPdfBase64(file.name || `document-${Date.now()}.pdf`, base64);
+                        await this.loadFile(pdfPath);
+                    } else {
+                        useUIStore.getState().setStatusMessage('PDFデータにアクセスできませんでした', 4000);
+                    }
+                }
+            } catch (error) {
+                console.error('ImportPdfFile failed', error);
+                useUIStore.getState().setStatusMessage(`PDF取り込みに失敗: ${this.formatError(error)}`, 4000);
+            }
+        }
+
+        await this.refreshFileList();
+        useUIStore.getState().setStatusMessage('PDFファイルを保存しました。', 3000);
+    }
+
+    private async loadFile(path: string): Promise<void> {
+        if (!path) {
+            return;
+        }
+        try {
+            const content = await this.api.LoadFile(path);
+            const docStore = useDocStore.getState();
+            docStore.setCurrentPath(path);
+            docStore.setMarkdownContent(content);
+            docStore.clearUnsavedChanges();
+
+            const html = await this.api.PreviewMarkdown(content);
+            docStore.setPreviewHtml(html);
+        } catch (error) {
+            console.error('Failed to load file after import:', error);
+        }
+    }
+
+    private async refreshFileList(): Promise<void> {
+        try {
+            const files = await this.api.GetFileList();
+            useDocStore.getState().setFiles(files);
+        } catch (error) {
+            console.error('Failed to refresh file list:', error);
+        }
+    }
+
+    private async readFileAsBase64(file: File): Promise<string | null> {
+        if (!file.arrayBuffer) {
+            return null;
+        }
+        const buffer = await file.arrayBuffer();
+        return this.arrayBufferToBase64(buffer);
+    }
+
+    private arrayBufferToBase64(buffer: ArrayBuffer): string {
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        const chunkSize = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+            const chunk = bytes.subarray(i, i + chunkSize);
+            binary += String.fromCharCode.apply(null, chunk as unknown as number[]);
+        }
+        return btoa(binary);
+    }
+
+    private formatError(error: unknown): string {
+        if (error instanceof Error) {
+            return error.message;
+        }
+        return String(error);
     }
 
     destroy(): void {

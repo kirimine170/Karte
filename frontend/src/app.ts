@@ -8,7 +8,7 @@ import { ModalHost } from './components/modal-host';
 import { OverlayHost } from './components/overlay-host';
 import { ImageGallery } from './components/image-gallery';
 import { getWailsAppAPI, getWailsRuntimeAPI } from './api/wails-api';
-import { useUIStore, useDocStore, useASRStore } from './stores/index';
+import { useUIStore, useDocStore, useASRStore, useExportStore } from './stores/index';
 import type { WailsAppAPI, WailsRuntimeAPI } from './types/wails-api';
 import { eventLogger } from './utils/event-logger';
 
@@ -100,7 +100,7 @@ export class App {
         this.components.modalHost = new ModalHost(this.api);
         this.components.modalHost.init();
 
-        this.components.overlayHost = new OverlayHost();
+        this.components.overlayHost = new OverlayHost(this.api);
         this.components.overlayHost.init();
 
         this.components.imageGallery = new ImageGallery(this.api);
@@ -120,19 +120,32 @@ export class App {
             useDocStore.getState().setFiles(files);
 
             if (files.length > 0) {
-                const firstFile = files[0];
-                const content = await this.api.LoadFile(firstFile.path);
-                useDocStore.getState().setCurrentPath(firstFile.path);
-                useDocStore.getState().setMarkdownContent(content);
-                useDocStore.getState().clearUnsavedChanges();
-
-                // プレビューを更新
-                const html = await this.api.PreviewMarkdown(content);
-                useDocStore.getState().setPreviewHtml(html);
+                await this.loadFileByPath(files[0].path);
             }
         } catch (error) {
             console.error('Failed to load initial file:', error);
         }
+    }
+
+    private async refreshFileList(): Promise<void> {
+        if (!this.api) {
+            return;
+        }
+        const files = await this.api.GetFileList();
+        useDocStore.getState().setFiles(files);
+    }
+
+    private async loadFileByPath(path: string): Promise<void> {
+        if (!this.api) {
+            return;
+        }
+        const content = await this.api.LoadFile(path);
+        useDocStore.getState().setCurrentPath(path);
+        useDocStore.getState().setMarkdownContent(content);
+        useDocStore.getState().clearUnsavedChanges();
+
+        const html = await this.api.PreviewMarkdown(content);
+        useDocStore.getState().setPreviewHtml(html);
     }
 
     private setupWailsEvents(): void {
@@ -168,19 +181,45 @@ export class App {
         // オーディオインポートイベント
         this.runtime.EventsOn('audio-imported', (data: unknown) => {
             console.log('Audio imported:', data);
-            // TODO: オーディオプレーヤーを更新
+            const label = (data as { original_name?: string; path?: string })?.original_name
+                || (data as { original_name?: string; path?: string })?.path
+                || 'audio';
+            useUIStore.getState().setStatusMessage(`音声ファイルを保存しました: ${label}`, 3000);
         });
 
         // オーディオトランスクリプションイベント
         this.runtime.EventsOn('audio-transcribed', (data: unknown) => {
             console.log('Audio transcribed:', data);
-            // TODO: トランスクリプトをエディタに追加
+            const payload = data as { error?: string; transcriptPath?: string };
+            if (payload?.error) {
+                useExportStore.getState().setTranscriptionProgress(false);
+                useUIStore.getState().setStatusMessage(`文字起こしに失敗: ${payload.error}`, 5000);
+                return;
+            }
+            useExportStore.getState().setTranscriptionProgress(false);
+            useUIStore.getState().setStatusMessage('文字起こしが完了しました', 3000);
+            if (payload?.transcriptPath) {
+                this.refreshFileList().catch((error) => {
+                    console.error('Failed to refresh file list after transcription:', error);
+                });
+                this.loadFileByPath(payload.transcriptPath).catch((error) => {
+                    console.error('Failed to load transcript:', error);
+                });
+                useUIStore.getState().setActiveTab('editor');
+            } else {
+                this.refreshFileList().catch((error) => {
+                    console.error('Failed to refresh file list after transcription:', error);
+                });
+            }
         });
 
         // オーディオトランスクリプション進捗イベント
         this.runtime.EventsOn('audio-transcribe-progress', (data: unknown) => {
             console.log('Audio transcribe progress:', data);
-            // TODO: 進捗バーを更新
+            const payload = data as { progress?: number; message?: string };
+            const progress = typeof payload?.progress === 'number' ? payload.progress : 0;
+            const message = payload?.message || '文字起こし中...';
+            useExportStore.getState().setTranscriptionProgress(true, progress, message);
         });
 
         // 画像インポートイベント
@@ -200,13 +239,16 @@ export class App {
         // PDFエクスポート完了イベント
         this.runtime.EventsOn('pdf-export-completed', (data: unknown) => {
             console.log('PDF export completed:', data);
-            // TODO: 完了メッセージを表示
+            useExportStore.getState().setPdfExportProgress(false);
+            useUIStore.getState().setStatusMessage('PDFエクスポートが完了しました', 3000);
         });
 
         // PDFエクスポートエラーイベント
         this.runtime.EventsOn('pdf-export-error', (data: unknown) => {
             console.log('PDF export error:', data);
-            // TODO: エラーメッセージを表示
+            useExportStore.getState().setPdfExportProgress(false);
+            const message = (data as { message?: string })?.message || 'PDFエクスポートに失敗しました';
+            useUIStore.getState().setStatusMessage(message, 4000);
         });
     }
 
@@ -274,4 +316,3 @@ export class App {
         });
     }
 }
-
