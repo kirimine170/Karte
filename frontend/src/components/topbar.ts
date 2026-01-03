@@ -15,7 +15,6 @@ export class Topbar extends BaseComponent {
     private hardwrapCheckbox: HTMLInputElement | null = null;
     private saveBtn: HTMLButtonElement | null = null;
     private newBtn: HTMLButtonElement | null = null;
-    private openBtn: HTMLButtonElement | null = null;
     private exportPdfBtn: HTMLButtonElement | null = null;
     private customCssBtn: HTMLButtonElement | null = null;
     private customCssStatus: HTMLElement | null = null;
@@ -43,7 +42,6 @@ export class Topbar extends BaseComponent {
         this.hardwrapCheckbox = document.getElementById('hardwrap') as HTMLInputElement;
         this.saveBtn = document.getElementById('saveBtn') as HTMLButtonElement;
         this.newBtn = document.getElementById('newBtn') as HTMLButtonElement;
-        this.openBtn = document.getElementById('openBtn') as HTMLButtonElement;
         this.exportPdfBtn = document.getElementById('exportPdfBtn') as HTMLButtonElement;
         this.customCssBtn = document.getElementById('customCssBtn') as HTMLButtonElement;
         this.customCssStatus = document.getElementById('customCssStatus');
@@ -181,16 +179,6 @@ export class Topbar extends BaseComponent {
                         return;
                     }
                     modalStore.showFilenameModal();
-                })
-            );
-        }
-
-        // 表示ボタン
-        if (this.openBtn) {
-            this.unsubscribe.push(
-                this.addEventListener(this.openBtn, 'click', async () => {
-                    eventLogger.log('Topbar', 'open-preview-click');
-                    await this.handleOpenPreview();
                 })
             );
         }
@@ -338,27 +326,6 @@ export class Topbar extends BaseComponent {
             eventLogger.log('Topbar', 'save-error', { error: String(error) });
             useUIStore.getState().setStatusMessage('保存に失敗しました', 3000);
             return false;
-        }
-    }
-
-    private async handleOpenPreview(): Promise<void> {
-        const docStore = useDocStore.getState();
-        if (!docStore.previewHtml) {
-            eventLogger.log('Topbar', 'open-preview-error', { error: 'no-preview-html' });
-            return;
-        }
-
-        try {
-            eventLogger.log('Topbar', 'open-preview-start');
-            const url = await this.api.ExportPreviewHTML(docStore.previewHtml);
-            eventLogger.log('Topbar', 'open-preview-success', { url });
-            // BrowserOpenURLはruntimeから取得する必要がある
-            // ここでは仮実装
-            window.open(url, '_blank');
-        } catch (error) {
-            console.error('Open preview failed:', error);
-            eventLogger.log('Topbar', 'open-preview-error', { error: String(error) });
-            useUIStore.getState().setStatusMessage('プレビューを開けませんでした', 3000);
         }
     }
 
