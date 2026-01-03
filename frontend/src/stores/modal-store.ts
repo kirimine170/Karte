@@ -82,7 +82,9 @@ export const useModalStore = create<ModalStore>((set) => ({
     hideUnsavedConfirmModal: () => set({
         unsavedConfirmModal: { visible: false, onSave: () => {}, onDiscard: () => {} },
     }),
-    showCustomCssModal: () => set({ customCssModal: { visible: true, value: '' } }),
+    showCustomCssModal: () => set((state) => ({
+        customCssModal: { visible: true, value: state.customCssModal.value },
+    })),
     hideCustomCssModal: () => set({ customCssModal: { visible: false, value: '' } }),
     setCustomCssModalValue: (value) => set((state) => ({
         customCssModal: { ...state.customCssModal, value },
@@ -112,4 +114,3 @@ export const useModalStore = create<ModalStore>((set) => ({
         imagePreviewModal: { ...state.imagePreviewModal, metadata },
     })),
 }));
-
