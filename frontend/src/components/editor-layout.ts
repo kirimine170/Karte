@@ -20,6 +20,9 @@ export class EditorLayout extends BaseComponent {
     private audioPlayer: HTMLAudioElement | null = null;
     private realtimeTranscript: HTMLElement | null = null;
     private realtimeTranscriptContent: HTMLElement | null = null;
+    private pdfPane: HTMLElement | null = null;
+    private pdfPreview: HTMLIFrameElement | null = null;
+    private lastPath = '';
 
     constructor(api: WailsAppAPI, parent?: HTMLElement) {
         super(parent);
@@ -49,6 +52,8 @@ export class EditorLayout extends BaseComponent {
         this.audioPlayer = document.getElementById('audioPlayer') as HTMLAudioElement;
         this.realtimeTranscript = document.getElementById('realtimeTranscript');
         this.realtimeTranscriptContent = document.getElementById('realtimeTranscriptContent');
+        this.pdfPane = document.getElementById('pdfPane');
+        this.pdfPreview = document.getElementById('pdfPreview') as HTMLIFrameElement;
 
         // イベントリスナーの設定
         this.setupEventListeners();
@@ -158,10 +163,18 @@ export class EditorLayout extends BaseComponent {
         // Doc Store - マークダウンコンテンツ
         this.unsubscribe.push(
             useDocStore.subscribe((state) => {
+                if (state.currentPath !== this.lastPath) {
+                    this.lastPath = state.currentPath;
+                    const isPdf = state.currentPath.toLowerCase().endsWith('.pdf');
+                    this.setPdfMode(isPdf);
+                    if (isPdf) {
+                        this.updatePdfPreview(state.currentPath);
+                    }
+                }
                 if (this.editor && this.editor.value !== state.markdownContent) {
                     this.editor.value = state.markdownContent;
                 }
-                if (state.previewHtml) {
+                if (state.previewHtml && !state.currentPath.toLowerCase().endsWith('.pdf')) {
                     this.updatePreviewFrame(state.previewHtml);
                 }
             })
@@ -179,6 +192,12 @@ export class EditorLayout extends BaseComponent {
         const uiStore = useUIStore.getState();
         const docStore = useDocStore.getState();
 
+        this.lastPath = docStore.currentPath;
+        const isPdf = docStore.currentPath.toLowerCase().endsWith('.pdf');
+        this.setPdfMode(isPdf);
+        if (isPdf && docStore.currentPath) {
+            this.updatePdfPreview(docStore.currentPath);
+        }
         this.updateLayout(uiStore);
         if (this.editor) {
             this.editor.value = docStore.markdownContent;
@@ -266,6 +285,9 @@ export class EditorLayout extends BaseComponent {
     }
 
     private async updatePreview(content: string): Promise<void> {
+        if (useDocStore.getState().currentPath.toLowerCase().endsWith('.pdf')) {
+            return;
+        }
         try {
             const html = await this.api.PreviewMarkdown(content);
             useDocStore.getState().setPreviewHtml(html);
@@ -283,6 +305,57 @@ export class EditorLayout extends BaseComponent {
         this.preview.contentDocument.open();
         this.preview.contentDocument.write(html);
         this.preview.contentDocument.close();
+    }
+
+    private async updatePdfPreview(path: string): Promise<void> {
+        if (!this.pdfPreview) {
+            return;
+        }
+        try {
+            const pdfUrl = await this.api.GetPdfFileURL(path);
+            const pdfHtml = this.buildPdfHtml(pdfUrl);
+            this.pdfPreview.srcdoc = pdfHtml;
+        } catch (error) {
+            console.error('Failed to load PDF:', error);
+            this.pdfPreview.srcdoc = `<html><body><p>PDFの読み込みに失敗しました: ${String(error)}</p></body></html>`;
+        }
+    }
+
+    private buildPdfHtml(pdfUrl: string): string {
+        return `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>PDF Viewer</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            background: #525252;
+        }
+        embed {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+    </style>
+</head>
+<body>
+    <embed src="${pdfUrl}" type="application/pdf" />
+</body>
+</html>`;
+    }
+
+    private setPdfMode(isPdf: boolean): void {
+        if (!this.element) {
+            return;
+        }
+        this.element.classList.toggle('pdf-mode', isPdf);
+        if (this.pdfPane) {
+            this.pdfPane.style.display = isPdf ? 'flex' : 'none';
+        }
     }
 
     private updateRecordingUI(isRecording: boolean, micLevel: number, transcript: { partial: string; final: string[] }): void {
