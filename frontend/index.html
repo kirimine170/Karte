@@ -99,10 +99,40 @@
         </div>
         <div class="pdf-pane" id="pdfPane" style="display: none;">
           <div class="pdf-pane-header">
-            <h3>PDF</h3>
+            <div class="pdf-header-left">
+              <h3>PDF</h3>
+              <span class="pdf-page-info" id="pdfPageInfo">-</span>
+            </div>
+            <div class="pdf-header-controls">
+              <button class="btn pdf-nav-btn" id="pdfPrevBtn" title="前のページ">←</button>
+              <button class="btn pdf-nav-btn" id="pdfNextBtn" title="次のページ">→</button>
+              <div class="pdf-select" id="pdfViewModeSelect">
+                <button class="pdf-select-trigger" id="pdfViewModeBtn" type="button" title="表示モード">単ページ</button>
+                <div class="pdf-select-menu" id="pdfViewModeMenu">
+                  <button type="button" data-value="single">単ページ</button>
+                  <button type="button" data-value="spread">見開き</button>
+                  <button type="button" data-value="scroll">スクロール</button>
+                </div>
+              </div>
+              <label class="pdf-toggle" for="pdfCoverToggle">
+                <input id="pdfCoverToggle" type="checkbox" checked /> 表紙
+              </label>
+              <div class="pdf-select" id="pdfBindingSelect">
+                <button class="pdf-select-trigger" id="pdfBindingBtn" type="button" title="綴じ方向">右開き</button>
+                <div class="pdf-select-menu" id="pdfBindingMenu">
+                  <button type="button" data-value="rtl">右開き</button>
+                  <button type="button" data-value="ltr">左開き</button>
+                </div>
+              </div>
+            </div>
           </div>
           <div class="pdf-pane-body">
-            <iframe id="pdfPreview"></iframe>
+            <div class="pdf-canvas-container" id="pdfCanvasContainer">
+              <canvas id="pdfCanvasLeft"></canvas>
+              <canvas id="pdfCanvasRight"></canvas>
+              <div class="pdf-scroll-container" id="pdfScrollContainer"></div>
+              <div class="pdf-empty" id="pdfEmpty">PDFを読み込み中...</div>
+            </div>
           </div>
         </div>
         <div class="gallery-area" id="galleryArea">

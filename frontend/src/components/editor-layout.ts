@@ -2,6 +2,10 @@ import { BaseComponent } from './component-base';
 import { useUIStore, useDocStore, useASRStore, useOverlayStore } from '../stores/index';
 import type { WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
+import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
+
+GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 export class EditorLayout extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
@@ -21,8 +25,29 @@ export class EditorLayout extends BaseComponent {
     private realtimeTranscript: HTMLElement | null = null;
     private realtimeTranscriptContent: HTMLElement | null = null;
     private pdfPane: HTMLElement | null = null;
-    private pdfPreview: HTMLIFrameElement | null = null;
     private lastPath = '';
+    private pdfDoc: PDFDocumentProxy | null = null;
+    private pdfSourceUrl = '';
+    private pdfPageCount = 0;
+    private pdfViewMode: 'single' | 'spread' | 'scroll' = 'single';
+    private pdfCoverEnabled = true;
+    private pdfBinding: 'rtl' | 'ltr' = 'rtl';
+    private pdfPageNumber = 1;
+    private pdfSpreadIndex = 0;
+    private pdfRenderRequestId = 0;
+    private pdfCanvasContainer: HTMLElement | null = null;
+    private pdfCanvasLeft: HTMLCanvasElement | null = null;
+    private pdfCanvasRight: HTMLCanvasElement | null = null;
+    private pdfScrollContainer: HTMLElement | null = null;
+    private pdfEmpty: HTMLElement | null = null;
+    private pdfPageInfo: HTMLElement | null = null;
+    private pdfPrevBtn: HTMLButtonElement | null = null;
+    private pdfNextBtn: HTMLButtonElement | null = null;
+    private pdfViewModeBtn: HTMLButtonElement | null = null;
+    private pdfViewModeMenu: HTMLElement | null = null;
+    private pdfCoverToggle: HTMLInputElement | null = null;
+    private pdfBindingBtn: HTMLButtonElement | null = null;
+    private pdfBindingMenu: HTMLElement | null = null;
 
     constructor(api: WailsAppAPI, parent?: HTMLElement) {
         super(parent);
@@ -53,7 +78,19 @@ export class EditorLayout extends BaseComponent {
         this.realtimeTranscript = document.getElementById('realtimeTranscript');
         this.realtimeTranscriptContent = document.getElementById('realtimeTranscriptContent');
         this.pdfPane = document.getElementById('pdfPane');
-        this.pdfPreview = document.getElementById('pdfPreview') as HTMLIFrameElement;
+        this.pdfCanvasContainer = document.getElementById('pdfCanvasContainer');
+        this.pdfCanvasLeft = document.getElementById('pdfCanvasLeft') as HTMLCanvasElement;
+        this.pdfCanvasRight = document.getElementById('pdfCanvasRight') as HTMLCanvasElement;
+        this.pdfScrollContainer = document.getElementById('pdfScrollContainer');
+        this.pdfEmpty = document.getElementById('pdfEmpty');
+        this.pdfPageInfo = document.getElementById('pdfPageInfo');
+        this.pdfPrevBtn = document.getElementById('pdfPrevBtn') as HTMLButtonElement;
+        this.pdfNextBtn = document.getElementById('pdfNextBtn') as HTMLButtonElement;
+        this.pdfViewModeBtn = document.getElementById('pdfViewModeBtn') as HTMLButtonElement;
+        this.pdfViewModeMenu = document.getElementById('pdfViewModeMenu');
+        this.pdfCoverToggle = document.getElementById('pdfCoverToggle') as HTMLInputElement;
+        this.pdfBindingBtn = document.getElementById('pdfBindingBtn') as HTMLButtonElement;
+        this.pdfBindingMenu = document.getElementById('pdfBindingMenu');
 
         // イベントリスナーの設定
         this.setupEventListeners();
@@ -120,20 +157,20 @@ export class EditorLayout extends BaseComponent {
             );
         }
 
-        if (this.pdfPreview) {
+        if (this.pdfCanvasContainer) {
             this.unsubscribe.push(
-                this.addEventListener(this.pdfPreview, 'dragover', (e) => {
+                this.addEventListener(this.pdfCanvasContainer, 'dragover', (e) => {
                     e.preventDefault();
                     useOverlayStore.getState().showDropOverlay();
                 })
             );
             this.unsubscribe.push(
-                this.addEventListener(this.pdfPreview, 'dragleave', () => {
+                this.addEventListener(this.pdfCanvasContainer, 'dragleave', () => {
                     useOverlayStore.getState().hideDropOverlay();
                 })
             );
             this.unsubscribe.push(
-                this.addEventListener(this.pdfPreview, 'drop', (e) => {
+                this.addEventListener(this.pdfCanvasContainer, 'drop', (e) => {
                     e.preventDefault();
                     useOverlayStore.getState().hideDropOverlay();
                     const files = Array.from(e.dataTransfer?.files || []);
@@ -144,6 +181,99 @@ export class EditorLayout extends BaseComponent {
                 })
             );
         }
+
+        if (this.pdfPrevBtn) {
+            this.unsubscribe.push(
+                this.addEventListener(this.pdfPrevBtn, 'click', () => {
+                    this.goToPreviousPdfPage();
+                })
+            );
+        }
+
+        if (this.pdfNextBtn) {
+            this.unsubscribe.push(
+                this.addEventListener(this.pdfNextBtn, 'click', () => {
+                    this.goToNextPdfPage();
+                })
+            );
+        }
+
+        if (this.pdfViewModeBtn && this.pdfViewModeMenu) {
+            this.unsubscribe.push(
+                this.addEventListener(this.pdfViewModeBtn, 'click', (e) => {
+                    e.stopPropagation();
+                    this.togglePdfSelect(this.pdfViewModeBtn);
+                })
+            );
+
+            this.unsubscribe.push(
+                this.addEventListener(this.pdfViewModeMenu, 'click', (e) => {
+                    const target = e.target as HTMLElement;
+                    if (target instanceof HTMLButtonElement) {
+                        const value = target.dataset.value;
+                        if (value === 'spread') {
+                            this.pdfViewMode = 'spread';
+                        } else if (value === 'scroll') {
+                            this.pdfViewMode = 'scroll';
+                        } else {
+                            this.pdfViewMode = 'single';
+                        }
+                        this.syncPdfPagingFromModeChange();
+                        this.renderPdfPages();
+                        this.updatePdfControlsState();
+                        this.updatePdfSelectLabels();
+                        this.closePdfSelects();
+                    }
+                })
+            );
+        }
+
+        if (this.pdfCoverToggle) {
+            this.unsubscribe.push(
+                this.addEventListener(this.pdfCoverToggle, 'change', (e) => {
+                    const target = e.target as HTMLInputElement;
+                    this.pdfCoverEnabled = target.checked;
+                    this.syncPdfPagingFromModeChange();
+                    this.renderPdfPages();
+                    this.updatePdfControlsState();
+                })
+            );
+        }
+
+        if (this.pdfBindingBtn && this.pdfBindingMenu) {
+            this.unsubscribe.push(
+                this.addEventListener(this.pdfBindingBtn, 'click', (e) => {
+                    e.stopPropagation();
+                    this.togglePdfSelect(this.pdfBindingBtn);
+                })
+            );
+            this.unsubscribe.push(
+                this.addEventListener(this.pdfBindingMenu, 'click', (e) => {
+                    const target = e.target as HTMLElement;
+                    if (target instanceof HTMLButtonElement) {
+                        const value = target.dataset.value;
+                        this.pdfBinding = value === 'ltr' ? 'ltr' : 'rtl';
+                        this.renderPdfPages();
+                        this.updatePdfSelectLabels();
+                        this.closePdfSelects();
+                    }
+                })
+            );
+        }
+
+        this.unsubscribe.push(
+            this.addEventListener(window, 'resize', () => {
+                if (this.pdfPane && this.pdfPane.style.display !== 'none') {
+                    this.renderPdfPages();
+                }
+            })
+        );
+
+        this.unsubscribe.push(
+            this.addEventListener(document, 'click', () => {
+                this.closePdfSelects();
+            })
+        );
 
         // 録音ボタン（タブ内）
         if (this.recordingBtn) {
@@ -223,6 +353,11 @@ export class EditorLayout extends BaseComponent {
         if (isPdf && docStore.currentPath) {
             this.updatePdfPreview(docStore.currentPath);
         }
+        if (this.pdfCoverToggle) {
+            this.pdfCoverToggle.checked = this.pdfCoverEnabled;
+        }
+        this.updatePdfSelectLabels();
+        this.updatePdfControlsState();
         this.updateLayout(uiStore);
         if (this.editor) {
             this.editor.value = docStore.markdownContent;
@@ -333,44 +468,375 @@ export class EditorLayout extends BaseComponent {
     }
 
     private async updatePdfPreview(path: string): Promise<void> {
-        if (!this.pdfPreview) {
+        if (!this.pdfCanvasContainer) {
             return;
         }
         try {
             const pdfUrl = await this.api.GetPdfFileURL(path);
-            const pdfHtml = this.buildPdfHtml(pdfUrl);
-            this.pdfPreview.srcdoc = pdfHtml;
+            const resolvedUrl = this.resolvePdfUrl(pdfUrl);
+            if (resolvedUrl !== this.pdfSourceUrl) {
+                await this.loadPdfDocument(resolvedUrl);
+            } else {
+                this.renderPdfPages();
+            }
         } catch (error) {
             console.error('Failed to load PDF:', error);
-            this.pdfPreview.srcdoc = `<html><body><p>PDFの読み込みに失敗しました: ${String(error)}</p></body></html>`;
+            this.showPdfEmpty('PDFの読み込みに失敗しました');
         }
     }
 
-    private buildPdfHtml(pdfUrl: string): string {
-        return `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>PDF Viewer</title>
-    <style>
-        html, body {
-            margin: 0;
-            padding: 0;
-            height: 100%;
-            overflow: hidden;
-            background: #525252;
+    private resolvePdfUrl(pdfUrl: string): string {
+        try {
+            return new URL(pdfUrl, window.location.href).toString();
+        } catch {
+            return pdfUrl;
         }
-        embed {
-            width: 100%;
-            height: 100%;
-            border: none;
+    }
+
+    private async loadPdfDocument(url: string): Promise<void> {
+        if (!this.pdfCanvasContainer) {
+            return;
         }
-    </style>
-</head>
-<body>
-    <embed src="${pdfUrl}" type="application/pdf" />
-</body>
-</html>`;
+        this.showPdfEmpty('PDFを読み込み中...');
+        const loadingTask = getDocument({
+            url,
+            cMapUrl: '/pdfjs/cmaps/',
+            cMapPacked: true,
+            standardFontDataUrl: '/pdfjs/standard_fonts/',
+        });
+        this.pdfDoc = await loadingTask.promise;
+        this.pdfSourceUrl = url;
+        this.pdfPageCount = this.pdfDoc.numPages;
+        this.pdfPageNumber = 1;
+        this.pdfSpreadIndex = 0;
+        this.updatePdfControlsState();
+        this.renderPdfPages();
+    }
+
+    private renderPdfPages(): void {
+        if (!this.pdfDoc || !this.pdfCanvasContainer || !this.pdfCanvasLeft || !this.pdfCanvasRight) {
+            return;
+        }
+
+        const requestId = ++this.pdfRenderRequestId;
+        const isSingle = this.pdfViewMode === 'single';
+        const isScroll = this.pdfViewMode === 'scroll';
+        const isCoverOnly = this.pdfViewMode === 'spread' && this.pdfCoverEnabled && this.pdfSpreadIndex === 0;
+
+        this.pdfCanvasContainer.classList.toggle('single', isSingle);
+        this.pdfCanvasContainer.classList.toggle('scroll', isScroll);
+        this.pdfCanvasContainer.classList.toggle('cover-only', isCoverOnly);
+        this.hidePdfEmpty();
+
+        if (isScroll) {
+            this.renderScrollPages(requestId);
+            return;
+        }
+
+        if (isSingle) {
+            this.renderSinglePage(requestId);
+        } else {
+            this.renderSpreadPages(requestId, isCoverOnly);
+        }
+    }
+
+    private async renderSinglePage(requestId: number): Promise<void> {
+        if (!this.pdfDoc || !this.pdfCanvasContainer || !this.pdfCanvasLeft || !this.pdfCanvasRight) {
+            return;
+        }
+
+        const pageNumber = Math.min(Math.max(1, this.pdfPageNumber), this.pdfPageCount);
+        this.pdfPageNumber = pageNumber;
+        this.updatePdfPageInfo(`${pageNumber} / ${this.pdfPageCount}`);
+
+        this.pdfCanvasRight.style.display = 'none';
+        const containerWidth = this.pdfCanvasContainer.clientWidth;
+        const containerHeight = this.pdfCanvasContainer.clientHeight;
+        await this.renderPdfPageToCanvas(pageNumber, this.pdfCanvasLeft, containerWidth, containerHeight, requestId);
+    }
+
+    private async renderScrollPages(requestId: number): Promise<void> {
+        if (!this.pdfDoc || !this.pdfCanvasContainer || !this.pdfScrollContainer) {
+            return;
+        }
+
+        this.pdfScrollContainer.innerHTML = '';
+        const containerWidth = this.pdfCanvasContainer.clientWidth;
+
+        for (let pageNumber = 1; pageNumber <= this.pdfPageCount; pageNumber += 1) {
+            if (requestId !== this.pdfRenderRequestId) {
+                return;
+            }
+            const canvas = document.createElement('canvas');
+            canvas.className = 'pdf-scroll-canvas';
+            this.pdfScrollContainer.appendChild(canvas);
+            await this.renderPdfPageToCanvas(pageNumber, canvas, containerWidth, Number.MAX_SAFE_INTEGER, requestId);
+        }
+
+        this.updatePdfPageInfo(`全${this.pdfPageCount}ページ`);
+    }
+
+    private async renderSpreadPages(requestId: number, coverOnly: boolean): Promise<void> {
+        if (!this.pdfDoc || !this.pdfCanvasContainer || !this.pdfCanvasLeft || !this.pdfCanvasRight) {
+            return;
+        }
+
+        if (coverOnly) {
+            const placement = this.pdfBinding === 'rtl' ? 'right' : 'left';
+            const containerWidth = this.pdfCanvasContainer.clientWidth;
+            const containerHeight = this.pdfCanvasContainer.clientHeight;
+
+            if (placement === 'right') {
+                this.pdfCanvasLeft.style.display = 'none';
+                this.pdfCanvasRight.style.display = '';
+                await this.renderPdfPageToCanvas(1, this.pdfCanvasRight, containerWidth / 2, containerHeight, requestId);
+            } else {
+                this.pdfCanvasLeft.style.display = '';
+                this.pdfCanvasRight.style.display = 'none';
+                await this.renderPdfPageToCanvas(1, this.pdfCanvasLeft, containerWidth / 2, containerHeight, requestId);
+            }
+
+            this.updatePdfPageInfo(`1 / ${this.pdfPageCount}`);
+            return;
+        }
+
+        const startPage = this.pdfCoverEnabled
+            ? 2 + (this.pdfSpreadIndex - 1) * 2
+            : 1 + this.pdfSpreadIndex * 2;
+
+        const { leftPage, rightPage } = this.getSpreadPages(startPage);
+        const containerWidth = this.pdfCanvasContainer.clientWidth;
+        const containerHeight = this.pdfCanvasContainer.clientHeight;
+        const pageWidth = containerWidth / 2;
+
+        if (leftPage) {
+            this.pdfCanvasLeft.style.display = '';
+            await this.renderPdfPageToCanvas(leftPage, this.pdfCanvasLeft, pageWidth, containerHeight, requestId);
+        } else {
+            this.pdfCanvasLeft.style.display = 'none';
+        }
+
+        if (rightPage) {
+            this.pdfCanvasRight.style.display = '';
+            await this.renderPdfPageToCanvas(rightPage, this.pdfCanvasRight, pageWidth, containerHeight, requestId);
+        } else {
+            this.pdfCanvasRight.style.display = 'none';
+        }
+
+        if (leftPage && rightPage) {
+            this.updatePdfPageInfo(`${leftPage}-${rightPage} / ${this.pdfPageCount}`);
+        } else if (leftPage) {
+            this.updatePdfPageInfo(`${leftPage} / ${this.pdfPageCount}`);
+        } else if (rightPage) {
+            this.updatePdfPageInfo(`${rightPage} / ${this.pdfPageCount}`);
+        }
+    }
+
+    private getSpreadPages(startPage: number): { leftPage: number | null; rightPage: number | null } {
+        const pageA = startPage;
+        const pageB = startPage + 1 <= this.pdfPageCount ? startPage + 1 : null;
+
+        if (!pageB) {
+            if (this.pdfBinding === 'rtl') {
+                return { leftPage: null, rightPage: pageA };
+            }
+            return { leftPage: pageA, rightPage: null };
+        }
+
+        const oddPage = pageA % 2 === 1 ? pageA : pageB;
+        const evenPage = pageA % 2 === 0 ? pageA : pageB;
+
+        if (this.pdfBinding === 'rtl') {
+            return { leftPage: evenPage, rightPage: oddPage };
+        }
+        return { leftPage: oddPage, rightPage: evenPage };
+    }
+
+    private async renderPdfPageToCanvas(
+        pageNumber: number,
+        canvas: HTMLCanvasElement,
+        maxWidth: number,
+        maxHeight: number,
+        requestId: number
+    ): Promise<void> {
+        if (!this.pdfDoc) {
+            return;
+        }
+        const page = await this.pdfDoc.getPage(pageNumber);
+        if (requestId !== this.pdfRenderRequestId) {
+            return;
+        }
+        const viewport = page.getViewport({ scale: 1 });
+        const scale = Math.min(maxWidth / viewport.width, maxHeight / viewport.height);
+        const scaledViewport = page.getViewport({ scale: Math.max(scale, 0.1) });
+        canvas.width = Math.floor(scaledViewport.width);
+        canvas.height = Math.floor(scaledViewport.height);
+        const context = canvas.getContext('2d');
+        if (!context) {
+            return;
+        }
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvasContext: context, viewport: scaledViewport }).promise;
+    }
+
+    private goToPreviousPdfPage(): void {
+        if (!this.pdfDoc) {
+            return;
+        }
+        if (this.pdfViewMode === 'scroll') {
+            return;
+        }
+        if (this.pdfViewMode === 'single') {
+            this.pdfPageNumber = Math.max(1, this.pdfPageNumber - 1);
+        } else {
+            if (this.pdfCoverEnabled && this.pdfSpreadIndex === 0) {
+                return;
+            }
+            this.pdfSpreadIndex = Math.max(0, this.pdfSpreadIndex - 1);
+        }
+        this.renderPdfPages();
+    }
+
+    private goToNextPdfPage(): void {
+        if (!this.pdfDoc) {
+            return;
+        }
+        if (this.pdfViewMode === 'scroll') {
+            return;
+        }
+        if (this.pdfViewMode === 'single') {
+            this.pdfPageNumber = Math.min(this.pdfPageCount, this.pdfPageNumber + 1);
+        } else {
+            const maxIndex = this.getMaxSpreadIndex();
+            if (this.pdfSpreadIndex < maxIndex) {
+                this.pdfSpreadIndex += 1;
+            }
+        }
+        this.renderPdfPages();
+    }
+
+    private getMaxSpreadIndex(): number {
+        if (!this.pdfDoc) {
+            return 0;
+        }
+        if (this.pdfCoverEnabled) {
+            const remaining = Math.max(0, this.pdfPageCount - 1);
+            return Math.ceil(remaining / 2);
+        }
+        return Math.max(0, Math.ceil(this.pdfPageCount / 2) - 1);
+    }
+
+    private syncPdfPagingFromModeChange(): void {
+        if (this.pdfViewMode === 'scroll') {
+            return;
+        }
+        if (this.pdfViewMode === 'single') {
+            const current = this.getCurrentSpreadPrimaryPage();
+            this.pdfPageNumber = current || 1;
+            return;
+        }
+
+        if (this.pdfCoverEnabled && this.pdfPageNumber === 1) {
+            this.pdfSpreadIndex = 0;
+            return;
+        }
+
+        const startPage = Math.max(this.pdfCoverEnabled ? 2 : 1, this.pdfPageNumber);
+        this.pdfSpreadIndex = this.pdfCoverEnabled
+            ? Math.floor((startPage - 2) / 2) + 1
+            : Math.floor((startPage - 1) / 2);
+
+        const maxIndex = this.getMaxSpreadIndex();
+        if (this.pdfSpreadIndex > maxIndex) {
+            this.pdfSpreadIndex = maxIndex;
+        }
+    }
+
+    private getCurrentSpreadPrimaryPage(): number | null {
+        if (this.pdfViewMode === 'single') {
+            return this.pdfPageNumber;
+        }
+        if (this.pdfCoverEnabled && this.pdfSpreadIndex === 0) {
+            return 1;
+        }
+        const startPage = this.pdfCoverEnabled
+            ? 2 + (this.pdfSpreadIndex - 1) * 2
+            : 1 + this.pdfSpreadIndex * 2;
+        return Math.min(startPage, this.pdfPageCount);
+    }
+
+    private togglePdfSelect(trigger: HTMLButtonElement): void {
+        const wrapper = trigger.closest('.pdf-select');
+        if (!wrapper) {
+            return;
+        }
+        const isOpen = wrapper.classList.contains('open');
+        this.closePdfSelects();
+        if (!isOpen) {
+            wrapper.classList.add('open');
+        }
+    }
+
+    private closePdfSelects(): void {
+        document.querySelectorAll('.pdf-select.open').forEach((element) => {
+            element.classList.remove('open');
+        });
+    }
+
+    private updatePdfSelectLabels(): void {
+        if (this.pdfViewModeBtn) {
+            const label =
+                this.pdfViewMode === 'spread'
+                    ? '見開き'
+                    : this.pdfViewMode === 'scroll'
+                      ? 'スクロール'
+                      : '単ページ';
+            this.pdfViewModeBtn.textContent = label;
+        }
+        if (this.pdfBindingBtn) {
+            this.pdfBindingBtn.textContent = this.pdfBinding === 'ltr' ? '左開き' : '右開き';
+        }
+    }
+
+    private updatePdfPageInfo(label: string): void {
+        if (this.pdfPageInfo) {
+            this.pdfPageInfo.textContent = label;
+        }
+    }
+
+    private updatePdfControlsState(): void {
+        const hasPdf = !!this.pdfDoc;
+        const isScroll = this.pdfViewMode === 'scroll';
+        const isSpread = this.pdfViewMode === 'spread';
+
+        if (this.pdfPrevBtn) {
+            this.pdfPrevBtn.disabled = !hasPdf || isScroll || this.pdfPageCount <= 1;
+        }
+        if (this.pdfNextBtn) {
+            this.pdfNextBtn.disabled = !hasPdf || isScroll || this.pdfPageCount <= 1;
+        }
+        if (this.pdfCoverToggle) {
+            this.pdfCoverToggle.disabled = !hasPdf || !isSpread;
+        }
+        if (this.pdfViewModeBtn) {
+            this.pdfViewModeBtn.disabled = !hasPdf;
+        }
+        if (this.pdfBindingBtn) {
+            this.pdfBindingBtn.disabled = !hasPdf || !isSpread;
+        }
+    }
+
+    private showPdfEmpty(message: string): void {
+        if (this.pdfEmpty) {
+            this.pdfEmpty.textContent = message;
+            this.pdfEmpty.style.display = 'block';
+        }
+    }
+
+    private hidePdfEmpty(): void {
+        if (this.pdfEmpty) {
+            this.pdfEmpty.style.display = 'none';
+        }
     }
 
     private setPdfMode(isPdf: boolean): void {
