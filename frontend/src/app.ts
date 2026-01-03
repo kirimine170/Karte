@@ -7,6 +7,7 @@ import { GraphView } from './components/graph-view';
 import { ModalHost } from './components/modal-host';
 import { OverlayHost } from './components/overlay-host';
 import { ImageGallery } from './components/image-gallery';
+import { CsvGallery } from './components/csv-gallery';
 import { getWailsAppAPI, getWailsRuntimeAPI } from './api/wails-api';
 import { useUIStore, useDocStore, useASRStore, useExportStore } from './stores/index';
 import type { WailsAppAPI, WailsRuntimeAPI } from './types/wails-api';
@@ -24,6 +25,7 @@ export class App {
         modalHost: ModalHost | null;
         overlayHost: OverlayHost | null;
         imageGallery: ImageGallery | null;
+        csvGallery: CsvGallery | null;
     } = {
             topbar: null,
             sidebar: null,
@@ -33,6 +35,7 @@ export class App {
             modalHost: null,
             overlayHost: null,
             imageGallery: null,
+            csvGallery: null,
         };
 
     async init(): Promise<void> {
@@ -105,6 +108,9 @@ export class App {
 
         this.components.imageGallery = new ImageGallery(this.api);
         this.components.imageGallery.init();
+
+        this.components.csvGallery = new CsvGallery(this.api);
+        this.components.csvGallery.init();
 
         // 初期ファイルの読み込み
         await this.loadInitialFile();
@@ -227,6 +233,14 @@ export class App {
             console.log('Image imported:', data);
             if (this.components.imageGallery) {
                 this.components.imageGallery.refresh();
+            }
+        });
+
+        // CSVインポートイベント
+        this.runtime.EventsOn('csv-imported', (data: unknown) => {
+            console.log('CSV imported:', data);
+            if (this.components.csvGallery) {
+                this.components.csvGallery.refresh();
             }
         });
 
