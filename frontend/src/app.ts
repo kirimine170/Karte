@@ -6,6 +6,7 @@ import { EditorLayout } from './components/editor-layout';
 import { GraphView } from './components/graph-view';
 import { ModalHost } from './components/modal-host';
 import { OverlayHost } from './components/overlay-host';
+import { ImageGallery } from './components/image-gallery';
 import { getWailsAppAPI, getWailsRuntimeAPI } from './api/wails-api';
 import { useUIStore, useDocStore, useASRStore } from './stores/index';
 import type { WailsAppAPI, WailsRuntimeAPI } from './types/wails-api';
@@ -22,15 +23,17 @@ export class App {
         graphView: GraphView | null;
         modalHost: ModalHost | null;
         overlayHost: OverlayHost | null;
+        imageGallery: ImageGallery | null;
     } = {
-        topbar: null,
-        sidebar: null,
-        mainTabs: null,
-        editorLayout: null,
-        graphView: null,
-        modalHost: null,
-        overlayHost: null,
-    };
+            topbar: null,
+            sidebar: null,
+            mainTabs: null,
+            editorLayout: null,
+            graphView: null,
+            modalHost: null,
+            overlayHost: null,
+            imageGallery: null,
+        };
 
     async init(): Promise<void> {
         console.log('Initializing Karte application...');
@@ -99,6 +102,9 @@ export class App {
 
         this.components.overlayHost = new OverlayHost();
         this.components.overlayHost.init();
+
+        this.components.imageGallery = new ImageGallery(this.api);
+        this.components.imageGallery.init();
 
         // 初期ファイルの読み込み
         await this.loadInitialFile();
@@ -180,7 +186,9 @@ export class App {
         // 画像インポートイベント
         this.runtime.EventsOn('image-imported', (data: unknown) => {
             console.log('Image imported:', data);
-            // TODO: 画像ギャラリーを更新
+            if (this.components.imageGallery) {
+                this.components.imageGallery.refresh();
+            }
         });
 
         // PDFエクスポート進捗イベント
@@ -254,7 +262,7 @@ export class App {
                 console.error('Failed to save logs on destroy:', err);
             });
         }
-        
+
         // 自動保存を停止
         eventLogger.stopAutoSave();
 

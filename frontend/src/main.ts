@@ -1,4 +1,5 @@
 // エントリーポイント
+import './ui.css';
 import { App } from './app';
 
 // アプリケーションの初期化
@@ -11,4 +12,3 @@ app.init().catch((error) => {
 window.addEventListener('beforeunload', () => {
     app.destroy();
 });
-
