@@ -3,6 +3,8 @@ import { useUIStore, useDocStore, useASRStore, useOverlayStore, useCustomCssStor
 import type { WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
+import { prepareMarkdownForPreview } from '../utils/preview-content';
+import { writePreviewFrame } from '../utils/preview-frame';
 import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
 
@@ -466,8 +468,9 @@ export class EditorLayout extends BaseComponent {
             return;
         }
         try {
-            const html = await this.api.PreviewMarkdown(content);
-            const finalHtml = this.buildPreviewHtml(content, html);
+            const prepared = await prepareMarkdownForPreview(content, this.api);
+            const html = await this.api.PreviewMarkdown(prepared);
+            const finalHtml = this.buildPreviewHtml(prepared, html);
             useDocStore.getState().setPreviewHtml(finalHtml);
             this.updatePreviewFrame(finalHtml);
         } catch (error) {
@@ -476,13 +479,10 @@ export class EditorLayout extends BaseComponent {
     }
 
     private updatePreviewFrame(html: string): void {
-        if (!this.preview || !this.preview.contentDocument) {
+        if (!this.preview) {
             return;
         }
-
-        this.preview.contentDocument.open();
-        this.preview.contentDocument.write(html);
-        this.preview.contentDocument.close();
+        writePreviewFrame(this.preview, html);
     }
 
     private buildPreviewHtml(content: string, html: string): string {

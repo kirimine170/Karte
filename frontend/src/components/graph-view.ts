@@ -5,6 +5,8 @@ import type { WailsAppAPI } from '../types/wails-api';
 import type { GraphData } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
+import { prepareMarkdownForPreview } from '../utils/preview-content';
+import { writePreviewFrame } from '../utils/preview-frame';
 
 export class GraphView extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
@@ -159,16 +161,15 @@ export class GraphView extends BaseComponent {
             docStore.clearUnsavedChanges();
 
             // プレビューを更新
-            const html = await this.api.PreviewMarkdown(content);
-            const finalHtml = this.buildPreviewHtml(content, html);
+            const prepared = await prepareMarkdownForPreview(content, this.api);
+            const html = await this.api.PreviewMarkdown(prepared);
+            const finalHtml = this.buildPreviewHtml(prepared, html);
             docStore.setPreviewHtml(finalHtml);
 
             // iframeに反映
             const preview = document.getElementById('preview') as HTMLIFrameElement;
-            if (preview && preview.contentDocument) {
-                preview.contentDocument.open();
-                preview.contentDocument.write(finalHtml);
-                preview.contentDocument.close();
+            if (preview) {
+                writePreviewFrame(preview, finalHtml);
             }
         } catch (error) {
             console.error('Failed to load file:', error);

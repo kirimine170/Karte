@@ -77,6 +77,24 @@ export function buildCsvMarkdownTable(csvText: string): string {
     return [headerRow, separatorRow, bodyRows].filter(Boolean).join('\n');
 }
 
+export function buildCsvMarkdownTableFromData(data: string[][]): string {
+    if (!Array.isArray(data) || data.length === 0) {
+        return '';
+    }
+    const [headerRow, ...rows] = data;
+    const headers = (headerRow || []).map((cell) => (cell ?? '').toString().trim());
+    const columnHeaders = headers.length > 0
+        ? headers
+        : (rows[0] || []).map((_, index) => `Column ${index + 1}`);
+    const bodyRows = rows.map((row) => {
+        const cells = columnHeaders.map((_, index) => (row?.[index] ?? '').toString().trim());
+        return `| ${cells.join(' | ')} |`;
+    }).join('\n');
+    const headerLine = `| ${columnHeaders.join(' | ')} |`;
+    const separatorLine = `| ${columnHeaders.map(() => '---').join(' | ')} |`;
+    return [headerLine, separatorLine, bodyRows].filter(Boolean).join('\n');
+}
+
 export type CsvLoader = (csvPath: string) => string | null | undefined;
 
 export function applyCsvImports(markdown: string, csvLoader?: CsvLoader): string {
@@ -145,4 +163,3 @@ export function buildFileDisplayLabel(file: FileItem): string {
     const relativePath = file.path.replace(/^content\//, '');
     return `${title}  —  ${relativePath}`;
 }
-

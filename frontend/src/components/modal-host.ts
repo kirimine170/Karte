@@ -4,6 +4,7 @@ import type { WailsAppAPI } from '../types/wails-api';
 import type { ConflictResolutionStrategy } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
+import { prepareMarkdownForPreview } from '../utils/preview-content';
 
 export class ModalHost extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
@@ -475,9 +476,10 @@ export class ModalHost extends BaseComponent {
             return;
         }
         try {
-            const html = await this.api.PreviewMarkdown(docStore.markdownContent);
+            const prepared = await prepareMarkdownForPreview(docStore.markdownContent, this.api);
+            const html = await this.api.PreviewMarkdown(prepared);
             const theme = useUIStore.getState().theme;
-            const finalHtml = applyCustomCssToHtml(docStore.markdownContent, html, customCss, theme);
+            const finalHtml = applyCustomCssToHtml(prepared, html, customCss, theme);
             docStore.setPreviewHtml(finalHtml);
         } catch (error) {
             console.error('Failed to refresh preview after custom CSS update:', error);
