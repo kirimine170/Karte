@@ -147,11 +147,15 @@ export class App {
         }
         const content = await this.api.LoadFile(path);
         useDocStore.getState().setCurrentPath(path);
-        useDocStore.getState().setMarkdownContent(content);
+        if (path.toLowerCase().endsWith('.pdf')) {
+            useDocStore.getState().setMarkdownContent('');
+            useDocStore.getState().setPreviewHtml('');
+        } else {
+            useDocStore.getState().setMarkdownContent(content);
+            const html = await this.api.PreviewMarkdown(content);
+            useDocStore.getState().setPreviewHtml(html);
+        }
         useDocStore.getState().clearUnsavedChanges();
-
-        const html = await this.api.PreviewMarkdown(content);
-        useDocStore.getState().setPreviewHtml(html);
     }
 
     private setupWailsEvents(): void {
