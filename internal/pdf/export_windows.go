@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	_ "embed"
 )
@@ -19,26 +20,41 @@ var font []byte
 
 // ExportHTMLToPDF generates a PDF at outPath using gofpdf with UTF-8 font embedding.
 // プレビューHTMLをそのままのレイアウトで出力することはできませんが、内容はテキストとして安全に出力します。
-func ExportHTMLToPDF(htmlStr string, outPath string) error {
+func ExportHTMLToPDF(htmlStr string, outPath string, logPath string) error {
+	//TODO 第三引数としてlogPath: stringを受け取り、すべてのログはそこに向かって吐き出す
+
 	if strings.TrimSpace(htmlStr) == "" {
+		if log_err := logPDFExport(logPath, "empty html"); log_err != nil {
+			return fmt.Errorf("empty html\n%v", log_err)
+		}
 		return fmt.Errorf("empty html")
 	}
+
 	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+		if log_err := logPDFExport(logPath, fmt.Sprintf("failed to create ouput dir: %v", err)); log_err != nil {
+			return fmt.Errorf("failed to create output dir: %v\n%v", err, log_err)
+		}
 		return fmt.Errorf("failed to create output dir: %v", err)
 	}
 
 	tmpDir, err := os.MkdirTemp("", "karte-pdf-tmp")
 	if err != nil {
-		panic("PANIC! - Coudln't make tmp directory")
+		if log_err := logPDFExport(logPath, "PANIC! - Couldn't make tmp directory"); log_err != nil {
+			panic(fmt.Sprintf("%v\nPANIC! - Couldn't make tmp directory", log_err))
+		}
+		panic("PANIC! - Couldn't make tmp directory")
 	}
 	defer os.RemoveAll(tmpDir)
 
 	tmpHTML := filepath.Join(tmpDir, "input.html")
 	if err := os.WriteFile(tmpHTML, []byte(htmlStr), 0o644); err != nil {
+		if log_err := logPDFExport(logPath, "PANIC! - Failed to write tmp html"); log_err != nil {
+			panic(fmt.Sprintf("%v\nPANIC! - Failed to write tmp html", log_err))
+		}
 		panic("PANIC! - Failed to write tmp html")
 	}
 
-	wkhtmlPath := "C:\\Program Files\\wkhtmltopdf\\bin\\wkhtmltopdf.exe"
+	wkhtmlPath := "C:\\Program Files\\wkhtmltopdf\\bin\\wkhtmltopdf.exe" //HACK 仮実装
 
 	args := []string{
 		"--encoding", "utf-8",
@@ -59,16 +75,44 @@ func ExportHTMLToPDF(htmlStr string, outPath string) error {
 		// 典型的な失敗要因:
 		// - wkhtmltopdf.exe がインストールされていない / PATH にない
 		// - HTML が巨大すぎる / 一部 CSS が原因でクラッシュ など
+		if log_err := logPDFExport(logPath, fmt.Sprintf("wkhtmltopdf failed: %v, output: %s", err, string(out))); log_err != nil {
+			return fmt.Errorf("wkhtmltopdf failed: %v, output: %s\n%v", err, string(out), log_err)
+		}
 		return fmt.Errorf("wkhtmltopdf failed: %v, output: %s", err, string(out))
 	}
 
 	// --- 7. PDF ファイルの存在チェック（念のため） -------------------------
 	if st, err := os.Stat(outPath); err != nil {
+		if log_err := logPDFExport(logPath, fmt.Sprintf("pdf not created: %v", err)); log_err != nil {
+			return fmt.Errorf("pdf not created: %v\n%v", err, log_err)
+		}
 		return fmt.Errorf("pdf not created: %v", err)
 	} else if st.Size() == 0 {
+		if log_err := logPDFExport(logPath, fmt.Sprintf("pdf created but empty: %s", outPath)); log_err != nil {
+			return fmt.Errorf("pdf created but empty: %s\n%v", outPath, log_err)
+		}
 		return fmt.Errorf("pdf created but empty: %s", outPath)
 	}
 
+	return nil
+}
+
+func logPDFExport(logPath string, msg string) error {
+	file, f_err := os.OpenFile(logPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if f_err != nil {
+		fmt.Println("File", logPath, "couldn't open,")
+		return fmt.Errorf("File couldn't open")
+	}
+	defer file.Close() // 関数のreturnまで遅延し実行
+
+	now := time.Now()
+	timestamp := now.Format("2006-01-02T15:04:05-0700")
+
+	_, err := fmt.Fprintf(file, "%s [DEBUG] %s", timestamp, msg) // TODO
+	if err != nil {
+		fmt.Println("Couldn't write log to file")
+		return fmt.Errorf("Couldn't write log to file")
+	}
 	return nil
 }
 

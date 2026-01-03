@@ -37,7 +37,6 @@ import (
 	"karte/internal/webpchunk"
 	"karte/internal/webputil"
 
-	"github.com/chai2010/webp"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -3761,14 +3760,25 @@ func (a *App) convertImageURLsToDataURIs(html string, totalImages int) (string, 
 
 		// Decode image
 		if ext == ".webp" {
-			// WebP画像の検証と変換
-			img, err = webp.Decode(bytes.NewReader(imgData))
+			// //TODO webp.Decode()でエラーが発生する。この部分はなくても(無いほうが)動くっぽい
+			// // WebP画像の検証と変換
+			// img, err = webp.Decode(bytes.NewReader(imgData))
+			// if err != nil {
+			// 	a.logError(fmt.Sprintf("Failed to decode WebP image for PDF export: %s, error: %v", absPath, err))
+			// 	return match // Return original if WebP cannot be decoded
+			// }
+			// originalBounds := img.Bounds()
+			// a.logInfo(fmt.Sprintf("PDF export: WebP image size: %s (width: %d, height: %d, file size: %d bytes)", absPath, originalBounds.Dx(), originalBounds.Dy(), originalSize))
+			a.logInfo("###SKIP webp.Decode()###")
+			// imageとして生データのDecodeは可能だった。やはりwebpファイルのデータに不備がある?
+			// else{}のコードをそのまま移植。普通にこれで動く
+			img, _, err = image.Decode(bytes.NewReader(imgData))
 			if err != nil {
-				a.logError(fmt.Sprintf("Failed to decode WebP image for PDF export: %s, error: %v", absPath, err))
-				return match // Return original if WebP cannot be decoded
+				a.logError(fmt.Sprintf("Failed to decode image for PDF export: %s, error: %v", absPath, err))
+				return match // Return original if image cannot be decoded
 			}
 			originalBounds := img.Bounds()
-			a.logInfo(fmt.Sprintf("PDF export: WebP image size: %s (width: %d, height: %d, file size: %d bytes)", absPath, originalBounds.Dx(), originalBounds.Dy(), originalSize))
+			a.logInfo(fmt.Sprintf("PDF export: Image size: %s (width: %d, height: %d, file size: %d bytes)", absPath, originalBounds.Dx(), originalBounds.Dy(), originalSize))
 		} else if ext == ".svg" {
 			// SVGはリサイズできないので、そのまま使用
 			base64Data := base64.StdEncoding.EncodeToString(imgData)
