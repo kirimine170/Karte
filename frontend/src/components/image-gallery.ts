@@ -15,6 +15,7 @@ export class ImageGallery extends BaseComponent {
     private imageLoadQueue: Array<() => Promise<void>> = [];
     private activeImageLoads = 0;
     private maxImageLoads = 6;
+    private renderChunkSize = 36;
 
     constructor(api: WailsAppAPI) {
         super();
@@ -165,12 +166,35 @@ export class ImageGallery extends BaseComponent {
             }
         );
 
-        // 画像を遅延読み込みで表示
-        for (const image of images) {
-            const thumbnail = this.createImageThumbnail(image);
-            this.imageGalleryGrid.appendChild(thumbnail);
-            this.imageObserver.observe(thumbnail);
+        this.renderImageThumbnails(images, requestId);
+    }
+
+    private renderImageThumbnails(images: ImageInfo[], requestId: number): void {
+        if (!this.imageGalleryGrid || !this.imageObserver) {
+            return;
         }
+        const total = images.length;
+        let index = 0;
+
+        const renderChunk = () => {
+            if (requestId !== this.imageGalleryRequestId) {
+                return;
+            }
+            const fragment = document.createDocumentFragment();
+            const end = Math.min(index + this.renderChunkSize, total);
+            for (; index < end; index += 1) {
+                const image = images[index];
+                const thumbnail = this.createImageThumbnail(image);
+                fragment.appendChild(thumbnail);
+                this.imageObserver.observe(thumbnail);
+            }
+            this.imageGalleryGrid.appendChild(fragment);
+            if (index < total) {
+                requestAnimationFrame(renderChunk);
+            }
+        };
+
+        requestAnimationFrame(renderChunk);
     }
 
     private enqueueImageLoad(target: HTMLImageElement, requestId: number): void {
