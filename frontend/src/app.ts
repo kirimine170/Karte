@@ -267,11 +267,19 @@ export class App {
             useUIStore.getState().setStatusMessage('PDFエクスポートが完了しました', 3000);
         });
 
+        // PDF表示エラーイベント
+        this.runtime.EventsOn('pdf-open-error', (data: unknown) => {
+            console.log('PDF open error:', data);
+            const message = (data as { error?: string })?.error || 'PDFの表示に失敗しました';
+            useUIStore.getState().setStatusMessage(message, 4000);
+        });
+
         // PDFエクスポートエラーイベント
         this.runtime.EventsOn('pdf-export-error', (data: unknown) => {
             console.log('PDF export error:', data);
             useExportStore.getState().setPdfExportProgress(false);
-            const message = (data as { message?: string })?.message || 'PDFエクスポートに失敗しました';
+            const payload = data as { message?: string; error?: string };
+            const message = payload?.message || payload?.error || 'PDFエクスポートに失敗しました';
             useUIStore.getState().setStatusMessage(message, 4000);
         });
 

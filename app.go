@@ -16,8 +16,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	goruntime "runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -3515,50 +3517,113 @@ func (a *App) ExportPreviewHTML(html string) (string, error) {
 }
 
 // ExportPDF renders given HTML as PDF to karte_data/export and returns the path
-func (a *App) ExportPDF(html string) error {
+func (a *App) ExportPDF(html string) (pdfURL string, err error) {
 	if html == "" {
-		return fmt.Errorf("empty html")
+		return "", fmt.Errorf("empty html")
 	}
 
-	// 非同期で実行
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				a.logError(fmt.Sprintf("ExportPDF panic recovered: %v", r))
-				runtime.EventsEmit(a.ctx, "pdf-export-error", map[string]interface{}{
-					"error": fmt.Sprintf("PDF export panic: %v", r),
-				})
-			}
-		}()
-
-		pdfPath, err := a.exportPDFInternal(html)
-		if err != nil {
-			a.logError(fmt.Sprintf("ExportPDF failed: %v", err))
+	defer func() {
+		if r := recover(); r != nil {
+			panicMsg := fmt.Sprintf("PDF export panic: %v", r)
+			a.logError(fmt.Sprintf("ExportPDF panic recovered: %v", r))
 			runtime.EventsEmit(a.ctx, "pdf-export-error", map[string]interface{}{
-				"error": err.Error(),
+				"error": panicMsg,
 			})
-			return
+			err = fmt.Errorf(panicMsg)
 		}
-
-		// ファイル情報を取得
-		info, err := os.Stat(pdfPath)
-		if err != nil {
-			a.logError(fmt.Sprintf("ExportPDF: Failed to stat PDF file: %v", err))
-			runtime.EventsEmit(a.ctx, "pdf-export-error", map[string]interface{}{
-				"error": fmt.Sprintf("Failed to stat PDF file: %v", err),
-			})
-			return
-		}
-
-		a.logInfo(fmt.Sprintf("PDF exported: %s (size: %d bytes)", pdfPath, info.Size()))
-		url := strings.ReplaceAll(pdfPath, "\\", "/")
-		runtime.EventsEmit(a.ctx, "pdf-export-completed", map[string]interface{}{
-			"pdfPath": url,
-			"size":    info.Size(),
-		})
 	}()
 
+	pdfPath, err := a.exportPDFInternal(html)
+	if err != nil {
+		a.logError(fmt.Sprintf("ExportPDF failed: %v", err))
+		runtime.EventsEmit(a.ctx, "pdf-export-error", map[string]interface{}{
+			"error": err.Error(),
+		})
+		return "", err
+	}
+
+	info, err := os.Stat(pdfPath)
+	if err != nil {
+		a.logError(fmt.Sprintf("ExportPDF: Failed to stat PDF file: %v", err))
+		runtime.EventsEmit(a.ctx, "pdf-export-error", map[string]interface{}{
+			"error": fmt.Sprintf("Failed to stat PDF file: %v", err),
+		})
+		return "", err
+	}
+
+	a.logInfo(fmt.Sprintf("PDF exported: %s (size: %d bytes)", pdfPath, info.Size()))
+	url := strings.ReplaceAll(pdfPath, "\\", "/")
+	runtime.EventsEmit(a.ctx, "pdf-export-completed", map[string]interface{}{
+		"pdfPath": url,
+		"size":    info.Size(),
+	})
+
+	if err := a.openPDFInViewer(pdfPath); err != nil {
+		a.logError(fmt.Sprintf("PDF open failed: %v", err))
+		runtime.EventsEmit(a.ctx, "pdf-open-error", map[string]interface{}{
+			"error": err.Error(),
+		})
+	}
+
+	return url, nil
+}
+
+func (a *App) openPDFInViewer(pdfPath string) error {
+	if pdfPath == "" {
+		return fmt.Errorf("empty pdf path")
+	}
+	if goruntime.GOOS != "darwin" {
+		return nil
+	}
+	info, err := os.Stat(pdfPath)
+	if err != nil {
+		return fmt.Errorf("stat pdf: %w", err)
+	}
+	pathToOpen := pdfPath
+	if info.IsDir() {
+		latest, err := findLatestPDFInDir(pdfPath)
+		if err != nil {
+			return err
+		}
+		pathToOpen = latest
+	}
+	if strings.ToLower(filepath.Ext(pathToOpen)) != ".pdf" {
+		return fmt.Errorf("not a pdf file: %s", pathToOpen)
+	}
+	cmd := exec.Command("open", pathToOpen)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("open pdf: %w", err)
+	}
 	return nil
+}
+
+func findLatestPDFInDir(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", fmt.Errorf("read dir: %w", err)
+	}
+	var latestPath string
+	var latestTime time.Time
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if strings.ToLower(filepath.Ext(entry.Name())) != ".pdf" {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return "", fmt.Errorf("stat pdf entry: %w", err)
+		}
+		if latestPath == "" || info.ModTime().After(latestTime) {
+			latestPath = filepath.Join(dir, entry.Name())
+			latestTime = info.ModTime()
+		}
+	}
+	if latestPath == "" {
+		return "", fmt.Errorf("no pdf files in dir: %s", dir)
+	}
+	return latestPath, nil
 }
 
 // exportPDFInternal performs the actual PDF export work
