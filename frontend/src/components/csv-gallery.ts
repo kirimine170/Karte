@@ -42,6 +42,7 @@ export class CsvGallery extends BaseComponent {
         } catch (error) {
             console.error('Failed to load CSV gallery:', error);
             eventLogger.log('CsvGallery', 'load-gallery-error', { error: String(error) });
+            this.renderCsvGallery([]);
         }
     }
 
@@ -63,12 +64,14 @@ export class CsvGallery extends BaseComponent {
         );
         this.csvGalleryGrid.appendChild(createItem);
 
-        this.csvGalleryEmpty.style.display = 'none';
-        this.csvGalleryGrid.style.display = 'grid';
-
         if (!csvs || csvs.length === 0) {
+            this.csvGalleryEmpty.style.display = 'block';
+            this.csvGalleryGrid.style.display = 'grid';
             return;
         }
+
+        this.csvGalleryEmpty.style.display = 'none';
+        this.csvGalleryGrid.style.display = 'grid';
 
         csvs.forEach((csv) => {
             const item = this.createElement('div', 'csv-item');
