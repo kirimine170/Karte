@@ -2632,7 +2632,7 @@ func (a *App) appendTranscriptPartial(contentRel, partialText string) {
 
 	if headerIndex == -1 {
 		// If "## Transcript" not found, create it with partial text
-		contentStr += "\n\n" + transcriptHeader + "\n\n" + partialMarkerStart + partialText + partialMarkerEnd + "\n"
+		contentStr = strings.TrimRight(contentStr, "\n") + "\n\n" + transcriptHeader + "\n\n" + partialMarkerStart + partialText + partialMarkerEnd + "\n"
 	} else {
 		// Find existing partial marker
 		afterHeader := contentStr[headerIndex+len(transcriptHeader):]
@@ -2655,10 +2655,10 @@ func (a *App) appendTranscriptPartial(contentRel, partialText string) {
 			sectionContent := strings.TrimRight(afterHeader[:sectionEnd], "\n")
 			newSectionContent := sectionContent
 			if sectionContent != "" {
-				newSectionContent += "\n\n"
+				newSectionContent += "\n"
 			}
 			newSectionContent += partialMarkerStart + partialText + partialMarkerEnd + "\n"
-			contentStr = contentStr[:headerIndex+len(transcriptHeader)] + "\n" + newSectionContent + afterHeader[sectionEnd:]
+			contentStr = contentStr[:headerIndex+len(transcriptHeader)] + "\n" + newSectionContent + strings.TrimLeft(afterHeader[sectionEnd:], "\n")
 		}
 	}
 
@@ -2693,6 +2693,7 @@ func (a *App) appendTranscriptLine(contentRel, line string) {
 	contentStr := string(content)
 	partialMarkerStart := "<!-- ASR_PARTIAL -->"
 	partialMarkerEnd := "<!-- /ASR_PARTIAL -->"
+	lineWithBreak := strings.TrimRight(line, " ") + "  "
 
 	// Find the "## Transcript" section
 	transcriptHeader := "## Transcript"
@@ -2700,7 +2701,7 @@ func (a *App) appendTranscriptLine(contentRel, line string) {
 
 	if headerIndex == -1 {
 		// If "## Transcript" not found, append at the end
-		contentStr += "\n\n" + transcriptHeader + "\n\n" + line + "\n\n"
+		contentStr = strings.TrimRight(contentStr, "\n") + "\n\n" + transcriptHeader + "\n\n" + lineWithBreak + "\n"
 	} else {
 		// Check if there's a partial text marker to replace
 		afterHeader := contentStr[headerIndex+len(transcriptHeader):]
@@ -2711,11 +2712,11 @@ func (a *App) appendTranscriptLine(contentRel, line string) {
 			// Replace partial marker with final text
 			beforePartial := contentStr[:headerIndex+len(transcriptHeader)+partialStartIndex]
 			afterPartial := contentStr[headerIndex+len(transcriptHeader)+partialEndIndex+len(partialMarkerEnd):]
-			contentStr = beforePartial + line + "\n" + afterPartial
+			contentStr = strings.TrimRight(beforePartial, "\n") + "\n" + lineWithBreak + "\n" + strings.TrimLeft(afterPartial, "\n")
 		} else {
 			// Always append at the end of the file to maintain chronological order
 			// This ensures new transcript segments are added in the correct time order
-			contentStr += "\n\n" + line + "\n\n"
+			contentStr = strings.TrimRight(contentStr, "\n") + "\n" + lineWithBreak + "\n"
 		}
 	}
 
