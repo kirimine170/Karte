@@ -42,6 +42,8 @@ export class ModalHost extends BaseComponent {
     private csvDeleteColBtn: HTMLButtonElement | null = null;
     private csvSaveBtn: HTMLButtonElement | null = null;
     private csvCancelBtn: HTMLButtonElement | null = null;
+    private csvSelectedRow: number | null = null;
+    private csvSelectedCol: number | null = null;
 
     private conflictModal: HTMLElement | null = null;
     private conflictFilePath: HTMLElement | null = null;
@@ -249,11 +251,79 @@ export class ModalHost extends BaseComponent {
                 })
             );
         }
+        if (this.csvAddRowBtn) {
+            this.unsubscribe.push(
+                this.addEventListener(this.csvAddRowBtn, 'click', () => {
+                    eventLogger.log('ModalHost', 'csv-edit-add-row');
+                    this.handleCsvAddRow();
+                })
+            );
+        }
+        if (this.csvAddColBtn) {
+            this.unsubscribe.push(
+                this.addEventListener(this.csvAddColBtn, 'click', () => {
+                    eventLogger.log('ModalHost', 'csv-edit-add-col');
+                    this.handleCsvAddCol();
+                })
+            );
+        }
+        if (this.csvDeleteRowBtn) {
+            this.unsubscribe.push(
+                this.addEventListener(this.csvDeleteRowBtn, 'click', () => {
+                    eventLogger.log('ModalHost', 'csv-edit-delete-row');
+                    this.handleCsvDeleteRow();
+                })
+            );
+        }
+        if (this.csvDeleteColBtn) {
+            this.unsubscribe.push(
+                this.addEventListener(this.csvDeleteColBtn, 'click', () => {
+                    eventLogger.log('ModalHost', 'csv-edit-delete-col');
+                    this.handleCsvDeleteCol();
+                })
+            );
+        }
         if (this.csvCancelBtn) {
             this.unsubscribe.push(
                 this.addEventListener(this.csvCancelBtn, 'click', () => {
                     eventLogger.log('ModalHost', 'csv-edit-cancel-click');
                     useModalStore.getState().hideCsvEditModal();
+                })
+            );
+        }
+
+        if (this.csvEditTableHead) {
+            this.unsubscribe.push(
+                this.addEventListener(this.csvEditTableHead, 'click', (e) => {
+                    const target = e.target as HTMLElement;
+                    if (!(target instanceof HTMLTableCellElement)) {
+                        return;
+                    }
+                    const col = target.dataset.col;
+                    if (col === undefined) {
+                        return;
+                    }
+                    this.csvSelectedCol = Number(col);
+                    this.csvSelectedRow = null;
+                    this.applyCsvSelection();
+                })
+            );
+        }
+        if (this.csvEditTableBody) {
+            this.unsubscribe.push(
+                this.addEventListener(this.csvEditTableBody, 'click', (e) => {
+                    const target = e.target as HTMLElement;
+                    if (!(target instanceof HTMLTableCellElement)) {
+                        return;
+                    }
+                    const row = target.dataset.row;
+                    const col = target.dataset.col;
+                    if (row === undefined || col === undefined) {
+                        return;
+                    }
+                    this.csvSelectedRow = Number(row);
+                    this.csvSelectedCol = Number(col);
+                    this.applyCsvSelection();
                 })
             );
         }
@@ -336,6 +406,8 @@ export class ModalHost extends BaseComponent {
                 if (this.csvEditModal) {
                     this.csvEditModal.style.display = state.csvEditModal.visible ? 'flex' : 'none';
                     if (state.csvEditModal.visible) {
+                        this.csvSelectedRow = null;
+                        this.csvSelectedCol = null;
                         this.renderCsvEditTable(state.csvEditModal.data);
                         if (this.csvEditFileName) {
                             this.csvEditFileName.textContent = state.csvEditModal.filePath;
@@ -500,10 +572,11 @@ export class ModalHost extends BaseComponent {
 
         // ヘッダー行
         const headerRow = document.createElement('tr');
-        data[0].forEach((cell) => {
+        data[0].forEach((cell, colIndex) => {
             const th = document.createElement('th');
             th.contentEditable = 'true';
             th.textContent = cell;
+            th.dataset.col = String(colIndex);
             headerRow.appendChild(th);
         });
         this.csvEditTableHead.appendChild(headerRow);
@@ -511,14 +584,139 @@ export class ModalHost extends BaseComponent {
         // データ行
         for (let i = 1; i < data.length; i++) {
             const row = document.createElement('tr');
-            data[i].forEach((cell) => {
+            data[i].forEach((cell, colIndex) => {
                 const td = document.createElement('td');
                 td.contentEditable = 'true';
                 td.textContent = cell;
+                td.dataset.row = String(i - 1);
+                td.dataset.col = String(colIndex);
                 row.appendChild(td);
             });
             this.csvEditTableBody.appendChild(row);
         }
+
+        this.applyCsvSelection();
+    }
+
+    private collectCsvTableData(): string[][] {
+        const data: string[][] = [];
+        if (!this.csvEditTableHead || !this.csvEditTableBody) {
+            return data;
+        }
+        const headerRow = this.csvEditTableHead.querySelector('tr');
+        if (headerRow) {
+            const headerCells = Array.from(headerRow.querySelectorAll('th'));
+            data.push(headerCells.map((th) => th.textContent || ''));
+        }
+
+        const rows = this.csvEditTableBody.querySelectorAll('tr');
+        rows.forEach((row) => {
+            const cells = Array.from(row.querySelectorAll('td'));
+            data.push(cells.map((td) => td.textContent || ''));
+        });
+        return data;
+    }
+
+    private applyCsvSelection(): void {
+        if (!this.csvEditTableHead || !this.csvEditTableBody) {
+            return;
+        }
+        this.csvEditTableHead.querySelectorAll('th').forEach((cell) => {
+            cell.classList.remove('selected');
+        });
+        this.csvEditTableBody.querySelectorAll('td').forEach((cell) => {
+            cell.classList.remove('selected');
+        });
+
+        if (this.csvSelectedCol !== null) {
+            this.csvEditTableHead.querySelectorAll(`th[data-col="${this.csvSelectedCol}"]`).forEach((cell) => {
+                cell.classList.add('selected');
+            });
+            this.csvEditTableBody.querySelectorAll(`td[data-col="${this.csvSelectedCol}"]`).forEach((cell) => {
+                cell.classList.add('selected');
+            });
+        }
+
+        if (this.csvSelectedRow !== null) {
+            this.csvEditTableBody.querySelectorAll(`td[data-row="${this.csvSelectedRow}"]`).forEach((cell) => {
+                cell.classList.add('selected');
+            });
+        }
+    }
+
+    private handleCsvAddRow(): void {
+        const data = this.collectCsvTableData();
+        const columnCount = Math.max(data[0]?.length ?? 0, 1);
+        const newRow = Array.from({ length: columnCount }, () => '');
+
+        if (data.length === 0) {
+            data.push(Array.from({ length: columnCount }, (_, idx) => `列${idx + 1}`));
+        }
+        const insertIndex = this.csvSelectedRow !== null ? this.csvSelectedRow + 2 : data.length;
+        data.splice(insertIndex, 0, newRow);
+
+        this.csvSelectedRow = this.csvSelectedRow !== null ? this.csvSelectedRow + 1 : data.length - 2;
+        useModalStore.getState().setCsvEditModalData(data);
+    }
+
+    private handleCsvAddCol(): void {
+        const data = this.collectCsvTableData();
+        if (data.length === 0) {
+            data.push(['列1']);
+        }
+        const colCount = data[0]?.length ?? 0;
+        const insertIndex = this.csvSelectedCol !== null ? this.csvSelectedCol + 1 : colCount;
+
+        data.forEach((row, rowIndex) => {
+            if (rowIndex === 0) {
+                row.splice(insertIndex, 0, `列${insertIndex + 1}`);
+            } else {
+                row.splice(insertIndex, 0, '');
+            }
+        });
+
+        this.csvSelectedCol = insertIndex;
+        useModalStore.getState().setCsvEditModalData(data);
+    }
+
+    private handleCsvDeleteRow(): void {
+        const data = this.collectCsvTableData();
+        const bodyLength = Math.max(data.length - 1, 0);
+        if (this.csvSelectedRow === null || bodyLength === 0) {
+            useUIStore.getState().setStatusMessage('削除する行を選択してください', 2000);
+            return;
+        }
+        const removeIndex = this.csvSelectedRow + 1;
+        if (removeIndex >= data.length) {
+            return;
+        }
+        data.splice(removeIndex, 1);
+        this.csvSelectedRow = null;
+        useModalStore.getState().setCsvEditModalData(data);
+    }
+
+    private handleCsvDeleteCol(): void {
+        const data = this.collectCsvTableData();
+        const colCount = data[0]?.length ?? 0;
+        if (this.csvSelectedCol === null || colCount === 0) {
+            useUIStore.getState().setStatusMessage('削除する列を選択してください', 2000);
+            return;
+        }
+        if (colCount <= 1) {
+            data[0] = ['列1'];
+            for (let i = 1; i < data.length; i += 1) {
+                data[i] = [''];
+            }
+            this.csvSelectedCol = 0;
+            useModalStore.getState().setCsvEditModalData(data);
+            return;
+        }
+
+        data.forEach((row) => {
+            row.splice(this.csvSelectedCol ?? 0, 1);
+        });
+        this.csvSelectedCol = null;
+        useModalStore.getState().setCsvEditModalData(data);
     }
 
     private async handleSaveCsv(): Promise<void> {
