@@ -1359,6 +1359,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
+    overflow: hidden;
     z-index: 1001;
   }
 
@@ -1387,7 +1388,7 @@
 
   .image-preview-img {
     max-width: 100%;
-    max-height: 80vh;
+    max-height: 55vh;
     object-fit: contain;
     border-radius: 8px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
@@ -1431,6 +1432,7 @@
   .image-metadata-textarea {
     width: 100%;
     min-height: 150px;
+    max-height: 22vh;
     resize: vertical;
     font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
     font-size: 13px;

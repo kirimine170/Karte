@@ -54,6 +54,7 @@ export class ModalHost extends BaseComponent {
     private cancelConflictBtn: HTMLButtonElement | null = null;
 
     private imagePreviewModal: HTMLElement | null = null;
+    private imagePreviewOverlay: HTMLElement | null = null;
     private imagePreviewImg: HTMLImageElement | null = null;
     private imagePreviewName: HTMLElement | null = null;
     private imagePreviewPath: HTMLElement | null = null;
@@ -111,6 +112,7 @@ export class ModalHost extends BaseComponent {
         this.cancelConflictBtn = document.getElementById('cancelConflictBtn') as HTMLButtonElement;
 
         this.imagePreviewModal = document.getElementById('imagePreviewModal');
+        this.imagePreviewOverlay = this.imagePreviewModal?.querySelector('.image-preview-overlay') as HTMLElement | null;
         this.imagePreviewImg = document.getElementById('imagePreviewImg') as HTMLImageElement;
         this.imagePreviewName = document.getElementById('imagePreviewName');
         this.imagePreviewPath = document.getElementById('imagePreviewPath');
@@ -349,6 +351,13 @@ export class ModalHost extends BaseComponent {
         if (this.imagePreviewClose) {
             this.unsubscribe.push(
                 this.addEventListener(this.imagePreviewClose, 'click', () => {
+                    useModalStore.getState().hideImagePreviewModal();
+                })
+            );
+        }
+        if (this.imagePreviewOverlay) {
+            this.unsubscribe.push(
+                this.addEventListener(this.imagePreviewOverlay, 'click', () => {
                     useModalStore.getState().hideImagePreviewModal();
                 })
             );
