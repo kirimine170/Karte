@@ -11,6 +11,10 @@ export class ImageGallery extends BaseComponent {
     private imageGalleryGrid: HTMLElement | null = null;
     private imageGalleryEmpty: HTMLElement | null = null;
     private imageGalleryRequestId = 0;
+    private imageObserver: IntersectionObserver | null = null;
+    private imageLoadQueue: Array<() => Promise<void>> = [];
+    private activeImageLoads = 0;
+    private maxImageLoads = 6;
 
     constructor(api: WailsAppAPI) {
         super();
@@ -127,28 +131,93 @@ export class ImageGallery extends BaseComponent {
         if (!images || images.length === 0) {
             this.imageGalleryEmpty.style.display = 'block';
             this.imageGalleryGrid.style.display = 'none';
+            if (this.imageObserver) {
+                this.imageObserver.disconnect();
+                this.imageObserver = null;
+            }
             return;
         }
 
         this.imageGalleryEmpty.style.display = 'none';
         this.imageGalleryGrid.style.display = 'grid';
 
-        // 画像を順次読み込んで表示
-        for (const image of images) {
-            try {
-                const imageURL = await this.api.GetImageFileURL(image.path);
-                const thumbnail = this.createImageThumbnail(image, imageURL);
-                this.imageGalleryGrid.appendChild(thumbnail);
-            } catch (error) {
-                console.error('Failed to load image thumbnail:', image.path, error);
+        const requestId = this.imageGalleryRequestId;
+        this.imageLoadQueue = [];
+        this.activeImageLoads = 0;
+        if (this.imageObserver) {
+            this.imageObserver.disconnect();
+        }
+        this.imageObserver = new IntersectionObserver(
+            (entries) => {
+                for (const entry of entries) {
+                    if (!entry.isIntersecting) {
+                        continue;
+                    }
+                    const target = entry.target as HTMLImageElement;
+                    this.imageObserver?.unobserve(target);
+                    this.enqueueImageLoad(target, requestId);
+                }
+            },
+            {
+                root: this.imageGalleryGrid,
+                rootMargin: '200px 0px',
+                threshold: 0.01,
             }
+        );
+
+        // 画像を遅延読み込みで表示
+        for (const image of images) {
+            const thumbnail = this.createImageThumbnail(image);
+            this.imageGalleryGrid.appendChild(thumbnail);
+            this.imageObserver.observe(thumbnail);
         }
     }
 
-    private createImageThumbnail(image: ImageInfo, imageURL: string): HTMLElement {
+    private enqueueImageLoad(target: HTMLImageElement, requestId: number): void {
+        const path = target.getAttribute('data-image-path');
+        if (!path || target.dataset.loaded === 'true') {
+            return;
+        }
+        target.dataset.loaded = 'pending';
+        this.imageLoadQueue.push(async () => {
+            if (requestId !== this.imageGalleryRequestId) {
+                return;
+            }
+            try {
+                const imageURL = await this.api.GetImageFileURL(path);
+                if (requestId !== this.imageGalleryRequestId) {
+                    return;
+                }
+                target.src = imageURL;
+                target.dataset.loaded = 'true';
+            } catch (error) {
+                target.dataset.loaded = 'false';
+                console.error('Failed to load image thumbnail:', path, error);
+            }
+        });
+        this.processImageQueue();
+    }
+
+    private processImageQueue(): void {
+        while (this.activeImageLoads < this.maxImageLoads && this.imageLoadQueue.length > 0) {
+            const task = this.imageLoadQueue.shift();
+            if (!task) {
+                return;
+            }
+            this.activeImageLoads += 1;
+            void task().finally(() => {
+                this.activeImageLoads -= 1;
+                this.processImageQueue();
+            });
+        }
+    }
+
+    private createImageThumbnail(image: ImageInfo): HTMLImageElement {
         const thumbnail = document.createElement('img');
         thumbnail.className = 'image-thumbnail';
-        thumbnail.src = imageURL;
+        thumbnail.loading = 'lazy';
+        thumbnail.decoding = 'async';
+        thumbnail.dataset.loaded = 'false';
         thumbnail.alt = image.name;
         thumbnail.title = image.name;
 
@@ -159,7 +228,7 @@ export class ImageGallery extends BaseComponent {
         // クリックでプレビュー表示
         this.unsubscribe.push(
             this.addEventListener(thumbnail, 'click', async () => {
-                await this.showImagePreview(image.path, image.name, imageURL);
+                await this.showImagePreview(image.path, image.name);
             })
         );
 
@@ -241,4 +310,3 @@ export class ImageGallery extends BaseComponent {
         this.unsubscribe = [];
     }
 }
-
