@@ -4,6 +4,7 @@ import type { WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
 import { prepareMarkdownForPreview } from '../utils/preview-content';
+import { convertTimestampsToLinks } from '../utils/preview-audio';
 
 export class OverlayHost extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
@@ -423,7 +424,8 @@ export class OverlayHost extends BaseComponent {
     private buildPreviewHtml(content: string, html: string): string {
         const customCss = useCustomCssStore.getState().customCss;
         const theme = useUIStore.getState().theme;
-        return applyCustomCssToHtml(content, html, customCss, theme);
+        const withCss = applyCustomCssToHtml(content, html, customCss, theme);
+        return convertTimestampsToLinks(withCss);
     }
 
     private async refreshFileList(): Promise<void> {

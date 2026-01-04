@@ -1,3 +1,5 @@
+import { setupTimestampLinkHandlers } from './preview-audio';
+
 type PreviewWindow = Window & {
     mermaid?: {
         initialize: (config: Record<string, unknown>) => void;
@@ -29,6 +31,9 @@ export function writePreviewFrame(iframe: HTMLIFrameElement, html: string): void
         win.__karteKaTeXReady = false;
     }
     schedulePreviewEnhancers(iframe);
+    iframe.addEventListener('load', () => {
+        setupTimestampLinkHandlers(iframe);
+    }, { once: true });
 }
 
 function schedulePreviewEnhancers(iframe: HTMLIFrameElement): void {

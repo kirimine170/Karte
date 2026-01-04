@@ -5,6 +5,7 @@ import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
 import { prepareMarkdownForPreview } from '../utils/preview-content';
 import { writePreviewFrame } from '../utils/preview-frame';
+import { convertTimestampsToLinks, updateAudioPlayerFromContent } from '../utils/preview-audio';
 import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
 
@@ -278,6 +279,22 @@ export class EditorLayout extends BaseComponent {
             })
         );
 
+        this.unsubscribe.push(
+            this.addEventListener(window, 'karte-timestamp-click', (event) => {
+                const detail = (event as CustomEvent<{ timestamp: number }>).detail;
+                const timestamp = detail?.timestamp;
+                if (!this.audioPlayer || typeof timestamp !== 'number' || Number.isNaN(timestamp)) {
+                    return;
+                }
+                this.audioPlayer.currentTime = timestamp;
+                if (this.audioPlayer.paused) {
+                    this.audioPlayer.play().catch((error) => {
+                        console.error('Failed to play audio:', error);
+                    });
+                }
+            })
+        );
+
         // 録音ボタン（タブ内）
         if (this.recordingBtn) {
             this.unsubscribe.push(
@@ -350,6 +367,7 @@ export class EditorLayout extends BaseComponent {
                 }
                 if (state.previewHtml && !state.currentPath.toLowerCase().endsWith('.pdf')) {
                     this.updatePreviewFrame(state.previewHtml);
+                    this.updateAudioPlayer(state.markdownContent);
                 }
             })
         );
@@ -473,6 +491,7 @@ export class EditorLayout extends BaseComponent {
             const finalHtml = this.buildPreviewHtml(prepared, html);
             useDocStore.getState().setPreviewHtml(finalHtml);
             this.updatePreviewFrame(finalHtml);
+            this.updateAudioPlayer(content);
         } catch (error) {
             console.error('Failed to update preview:', error);
         }
@@ -488,7 +507,14 @@ export class EditorLayout extends BaseComponent {
     private buildPreviewHtml(content: string, html: string): string {
         const customCss = useCustomCssStore.getState().customCss;
         const theme = useUIStore.getState().theme;
-        return applyCustomCssToHtml(content, html, customCss, theme);
+        const withCss = applyCustomCssToHtml(content, html, customCss, theme);
+        return convertTimestampsToLinks(withCss);
+    }
+
+    private updateAudioPlayer(content: string): void {
+        updateAudioPlayerFromContent(this.api, content, this.audioPlayerContainer, this.audioPlayer).catch((error) => {
+            console.error('Failed to update audio player:', error);
+        });
     }
 
     private async updatePdfPreview(path: string): Promise<void> {

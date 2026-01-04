@@ -7,6 +7,7 @@ import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
 import { prepareMarkdownForPreview } from '../utils/preview-content';
 import { writePreviewFrame } from '../utils/preview-frame';
+import { convertTimestampsToLinks } from '../utils/preview-audio';
 
 export class GraphView extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
@@ -180,7 +181,8 @@ export class GraphView extends BaseComponent {
     private buildPreviewHtml(content: string, html: string): string {
         const customCss = useCustomCssStore.getState().customCss;
         const theme = useUIStore.getState().theme;
-        return applyCustomCssToHtml(content, html, customCss, theme);
+        const withCss = applyCustomCssToHtml(content, html, customCss, theme);
+        return convertTimestampsToLinks(withCss);
     }
 
     async refresh(): Promise<void> {
