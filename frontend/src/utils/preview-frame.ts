@@ -59,6 +59,8 @@ function ensureMermaidKaTeXStyles(doc: Document): void {
         align-items: center;
         justify-content: center;
         line-height: 1.1;
+        width: 100%;
+        height: 100%;
       }
       .mermaid .katex {
         display: inline-flex;
@@ -178,6 +180,9 @@ function renderMermaid(doc: Document, win: PreviewWindow): void {
     Promise.resolve(win.mermaid.run({ nodes })).finally(() => {
         // KaTeX might appear inside Mermaid HTML labels.
         renderKaTeX(doc, win);
+        requestAnimationFrame(() => {
+            resizeMermaidLabels(doc);
+        });
     });
 }
 
@@ -192,5 +197,28 @@ function convertMermaidCodeBlocks(doc: Document): void {
         container.className = 'mermaid';
         container.textContent = code.textContent || '';
         pre.replaceWith(container);
+    });
+}
+
+function resizeMermaidLabels(doc: Document): void {
+    const foreignObjects = doc.querySelectorAll('svg foreignObject');
+    foreignObjects.forEach((fo) => {
+        const label = fo.querySelector('.label, .nodeLabel, .labelText') as HTMLElement | null;
+        if (!label) {
+            return;
+        }
+        // Measure after KaTeX has rendered.
+        const contentWidth = Math.ceil(label.scrollWidth);
+        const contentHeight = Math.ceil(label.scrollHeight);
+        if (!contentWidth || !contentHeight) {
+            return;
+        }
+
+        const currentWidth = parseFloat(fo.getAttribute('width') || '0');
+        const currentHeight = parseFloat(fo.getAttribute('height') || '0');
+        const nextWidth = Math.max(currentWidth, contentWidth + 4);
+        const nextHeight = Math.max(currentHeight, contentHeight + 2);
+        fo.setAttribute('width', `${nextWidth}`);
+        fo.setAttribute('height', `${nextHeight}`);
     });
 }
