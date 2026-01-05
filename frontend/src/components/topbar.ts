@@ -134,6 +134,14 @@ export class Topbar extends BaseComponent {
                     uiStore.setTheme(theme);
                 })
             );
+            this.unsubscribe.push(
+                this.addEventListener(this.themeSelect, 'input', (e) => {
+                    const target = e.target as HTMLSelectElement;
+                    const theme = target.value as 'light' | 'dark' | 'hc';
+                    eventLogger.log('Topbar', 'theme-change', { theme });
+                    uiStore.setTheme(theme);
+                })
+            );
         }
 
         // ハードラップ
