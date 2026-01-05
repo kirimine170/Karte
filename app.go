@@ -3569,27 +3569,28 @@ func (a *App) ExportPDF(html string) (pdfURL string, err error) {
 }
 
 func (a *App) openPDFInViewer(pdfPath string) error {
+	pdfPath = strings.TrimSpace(pdfPath)
 	if pdfPath == "" {
 		return fmt.Errorf("empty pdf path")
 	}
 	if goruntime.GOOS != "darwin" {
 		return nil
 	}
-	info, err := os.Stat(pdfPath)
+	pathToOpen, err := filepath.Abs(filepath.Clean(pdfPath))
+	if err != nil {
+		return fmt.Errorf("abs pdf: %w", err)
+	}
+	info, err := os.Stat(pathToOpen)
 	if err != nil {
 		return fmt.Errorf("stat pdf: %w", err)
 	}
-	pathToOpen := pdfPath
 	if info.IsDir() {
-		latest, err := findLatestPDFInDir(pdfPath)
-		if err != nil {
-			return err
-		}
-		pathToOpen = latest
+		return fmt.Errorf("pdf path is directory: %s", pathToOpen)
 	}
 	if strings.ToLower(filepath.Ext(pathToOpen)) != ".pdf" {
 		return fmt.Errorf("not a pdf file: %s", pathToOpen)
 	}
+	a.logInfo(fmt.Sprintf("Opening PDF with default app: %s", pathToOpen))
 	cmd := exec.Command("open", pathToOpen)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("open pdf: %w", err)
@@ -3597,37 +3598,9 @@ func (a *App) openPDFInViewer(pdfPath string) error {
 	return nil
 }
 
-func findLatestPDFInDir(dir string) (string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return "", fmt.Errorf("read dir: %w", err)
-	}
-	var latestPath string
-	var latestTime time.Time
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if strings.ToLower(filepath.Ext(entry.Name())) != ".pdf" {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return "", fmt.Errorf("stat pdf entry: %w", err)
-		}
-		if latestPath == "" || info.ModTime().After(latestTime) {
-			latestPath = filepath.Join(dir, entry.Name())
-			latestTime = info.ModTime()
-		}
-	}
-	if latestPath == "" {
-		return "", fmt.Errorf("no pdf files in dir: %s", dir)
-	}
-	return latestPath, nil
-}
-
 // exportPDFInternal performs the actual PDF export work
 func (a *App) exportPDFInternal(html string) (string, error) {
+	html = a.injectPDFRenderHelpers(html)
 	// Convert image URLs to data URIs for PDF export
 	// WKWebView cannot access HTTP URLs, so we need to embed images as data URIs
 	// Track temporary files for cleanup
@@ -3762,6 +3735,134 @@ func (a *App) exportPDFInternal(html string) (string, error) {
 	}
 
 	return pdfPath, nil
+}
+
+func (a *App) injectPDFRenderHelpers(html string) string {
+	html = a.ensurePDFRenderAssets(html)
+	if strings.Contains(html, "karte-pdf-enhancers") {
+		return html
+	}
+	script := `<script id="karte-pdf-enhancers">
+(function() {
+  function decodeHtmlEntities(text) {
+    var textarea = document.createElement('textarea');
+    textarea.innerHTML = text;
+    return textarea.value;
+  }
+  function renderKaTeX() {
+    if (typeof katex === 'undefined') return;
+    document.querySelectorAll('.katex-inline').forEach(function(el) {
+      if (el.querySelector('.katex')) return;
+      var raw = el.innerHTML.trim();
+      if (!raw) return;
+      var math = decodeHtmlEntities(raw);
+      try { katex.render(math, el, { throwOnError: false, displayMode: false }); } catch (e) {}
+    });
+    document.querySelectorAll('.katex-block').forEach(function(el) {
+      if (el.querySelector('.katex')) return;
+      var raw = el.innerHTML.trim();
+      if (!raw) return;
+      var math = decodeHtmlEntities(raw);
+      try { katex.render(math, el, { throwOnError: false, displayMode: true }); } catch (e) {}
+    });
+  }
+  function convertMermaidCodeBlocks() {
+    var codeBlocks = document.querySelectorAll('pre > code.language-mermaid, pre > code.lang-mermaid');
+    codeBlocks.forEach(function(code) {
+      var pre = code.parentElement;
+      if (!pre) return;
+      var container = document.createElement('div');
+      container.className = 'mermaid';
+      container.textContent = code.textContent || '';
+      pre.replaceWith(container);
+    });
+  }
+  function renderMermaid() {
+    if (typeof mermaid === 'undefined') return;
+    convertMermaidCodeBlocks();
+    var nodes = document.querySelectorAll('.mermaid:not([data-processed])');
+    if (nodes.length === 0) return;
+    try {
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'loose',
+        htmlLabels: true,
+        flowchart: { htmlLabels: true },
+        sequence: { htmlLabels: true }
+      });
+    } catch (e) {}
+    try { mermaid.run({ nodes: nodes }); } catch (e) {}
+  }
+  function runAll() {
+    renderKaTeX();
+    renderMermaid();
+  }
+  function schedule() {
+    var attempts = 0;
+    var timer = setInterval(function() {
+      attempts++;
+      runAll();
+      if (attempts > 200) {
+        clearInterval(timer);
+      }
+      if (typeof katex !== 'undefined' && typeof mermaid !== 'undefined') {
+        clearInterval(timer);
+      }
+    }, 50);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', schedule);
+  } else {
+    schedule();
+  }
+})();
+</script>`
+	if strings.Contains(html, "</body>") {
+		return strings.Replace(html, "</body>", script+"</body>", 1)
+	}
+	if strings.Contains(html, "</html>") {
+		return strings.Replace(html, "</html>", script+"</html>", 1)
+	}
+	return html + script
+}
+
+func (a *App) ensurePDFRenderAssets(html string) string {
+	const (
+		mermaidCDN = "https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"
+		katexCSS   = "https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.css"
+		katexJS    = "https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.js"
+	)
+
+	var inserts []string
+	if !strings.Contains(html, mermaidCDN) {
+		inserts = append(inserts, `<script src="`+mermaidCDN+`"></script>`)
+	}
+	if !strings.Contains(html, katexCSS) {
+		inserts = append(inserts, `<link rel="stylesheet" href="`+katexCSS+`">`)
+	}
+	if !strings.Contains(html, katexJS) {
+		inserts = append(inserts, `<script src="`+katexJS+`"></script>`)
+	}
+	if len(inserts) == 0 {
+		return html
+	}
+
+	injection := strings.Join(inserts, "\n")
+	if strings.Contains(html, "</head>") {
+		return strings.Replace(html, "</head>", injection+"\n</head>", 1)
+	}
+	if strings.Contains(html, "<head>") {
+		return strings.Replace(html, "<head>", "<head>\n"+injection+"\n", 1)
+	}
+	if strings.Contains(strings.ToLower(html), "<html") {
+		re := regexp.MustCompile(`(?i)<html([^>]*)>`)
+		return re.ReplaceAllString(html, `<html$1><head>`+injection+`</head>`)
+	}
+	if strings.Contains(strings.ToLower(html), "<!doctype html>") {
+		re := regexp.MustCompile(`(?i)<!doctype html>`)
+		return re.ReplaceAllString(html, "<!doctype html>\n<head>\n"+injection+"\n</head>")
+	}
+	return injection + "\n" + html
 }
 
 // convertImageURLsToDataURIs converts image URLs in HTML to data URIs
