@@ -547,6 +547,28 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                             var imgTagCount = (htmlContent.match(/<img/gi) || []).length; \
                             var dataImageCount = (htmlContent.match(/data:image/gi) || []).length; \
                             var bodyHTML = document.body ? document.body.innerHTML.substring(0, Math.min(1000, document.body.innerHTML.length)) : 'no body'; \
+                            var katexNodes = document.querySelectorAll('.katex-inline, .katex-block'); \
+                            var katexPending = 0; \
+                            for (var k = 0; k < katexNodes.length; k++) { \
+                                var el = katexNodes[k]; \
+                                if (!el.querySelector('.katex')) { \
+                                    katexPending++; \
+                                } \
+                            } \
+                            if (katexNodes.length > 0 && typeof window.katex === 'undefined') { \
+                                katexPending = katexNodes.length; \
+                            } \
+                            var mermaidNodes = document.querySelectorAll('.mermaid'); \
+                            var mermaidPending = 0; \
+                            for (var m = 0; m < mermaidNodes.length; m++) { \
+                                var node = mermaidNodes[m]; \
+                                if (!node.getAttribute('data-processed')) { \
+                                    mermaidPending++; \
+                                } \
+                            } \
+                            if (mermaidNodes.length > 0 && typeof window.mermaid === 'undefined') { \
+                                mermaidPending = mermaidNodes.length; \
+                            } \
                             return { \
                                 readyState: document.readyState, \
                                 imagesLoaded: allLoaded, \
@@ -558,7 +580,11 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                                 imgTagCount: imgTagCount, \
                                 dataImageCount: dataImageCount, \
                                 bodyHTML: bodyHTML, \
-                                imageDetails: imageDetails \
+                                imageDetails: imageDetails, \
+                                katexPending: katexPending, \
+                                katexTotal: katexNodes.length, \
+                                mermaidPending: mermaidPending, \
+                                mermaidTotal: mermaidNodes.length \
                             }; \
                         })()";
 
@@ -606,6 +632,10 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                             NSNumber* imageCount = @0;
                             NSNumber* loadedImageCount = @0;
                             NSNumber* hasDataImageInHTML = @NO;
+                            NSNumber* katexPending = @0;
+                            NSNumber* katexTotal = @0;
+                            NSNumber* mermaidPending = @0;
+                            NSNumber* mermaidTotal = @0;
 
                             if (value && [value isKindOfClass:[NSDictionary class]]) {
                                 NSDictionary* result = (NSDictionary*)value;
@@ -614,6 +644,10 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                                 imageCount = result[@"imageCount"] ?: @0;
                                 loadedImageCount = result[@"loadedImageCount"] ?: @0;
                                 hasDataImageInHTML = result[@"hasDataImageInHTML"] ?: @NO;
+                                katexPending = result[@"katexPending"] ?: @0;
+                                katexTotal = result[@"katexTotal"] ?: @0;
+                                mermaidPending = result[@"mermaidPending"] ?: @0;
+                                mermaidTotal = result[@"mermaidTotal"] ?: @0;
 
                                 // デバッグ情報を取得
                                 NSNumber* htmlLength = result[@"htmlLength"] ?: @0;
@@ -623,8 +657,8 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                                 NSString* bodyHTML = result[@"bodyHTML"] ?: @"";
                                 NSArray* imageDetails = result[@"imageDetails"] ?: @[];
 
-                                logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] DEBUG: htmlLength=%d, imgTagCount=%d, dataImageCount=%d, imageCount=%d",
-                                    [htmlLength intValue], [imgTagCount intValue], [dataImageCount intValue], [imageCount intValue]] UTF8String]);
+                                logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] DEBUG: htmlLength=%d, imgTagCount=%d, dataImageCount=%d, imageCount=%d, katexPending=%d, mermaidPending=%d",
+                                    [htmlLength intValue], [imgTagCount intValue], [dataImageCount intValue], [imageCount intValue], [katexPending intValue], [mermaidPending intValue]] UTF8String]);
                                 logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] DEBUG: htmlPreview (first 2000 chars):\n%@", htmlPreview] UTF8String]);
                                 logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] DEBUG: bodyHTML (first 1000 chars):\n%@", bodyHTML] UTF8String]);
 
@@ -655,6 +689,15 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                                 } else {
                                     // 画像が存在する場合は、readyState=completeかつ全画像読み込み完了が必要
                                     ready = [readyState isEqualToString:@"complete"] && [imagesLoaded boolValue];
+                                }
+
+                                if (ready && [katexTotal intValue] > 0 && [katexPending intValue] > 0) {
+                                    ready = NO;
+                                    logPDFExport(logPath, "[PDF Export] KaTeX rendering still pending, waiting...");
+                                }
+                                if (ready && [mermaidTotal intValue] > 0 && [mermaidPending intValue] > 0) {
+                                    ready = NO;
+                                    logPDFExport(logPath, "[PDF Export] Mermaid rendering still pending, waiting...");
                                 }
 
                                 logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] readyState=%@, imagesLoaded=%@, imageCount=%@, loadedImageCount=%@, hasDataImageInHTML=%@, ready=%d",

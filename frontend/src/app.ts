@@ -11,6 +11,7 @@ import { CsvGallery } from './components/csv-gallery';
 import { getWailsAppAPI, getWailsRuntimeAPI } from './api/wails-api';
 import { useUIStore, useDocStore, useASRStore, useExportStore, useModalStore, useCustomCssStore } from './stores/index';
 import type { WailsAppAPI, WailsRuntimeAPI } from './types/wails-api';
+import type { Theme } from './types/ui-state';
 import { eventLogger } from './utils/event-logger';
 import { applyCustomCssToHtml } from './utils/custom-css';
 import { prepareMarkdownForPreview } from './utils/preview-content';
@@ -68,6 +69,7 @@ export class App {
 
             // コンポーネントの初期化
             await this.initComponents();
+            this.setupThemeSelector();
 
             // Wailsイベントの設定
             this.setupWailsEvents();
@@ -119,6 +121,25 @@ export class App {
 
         // 初期ファイルの読み込み
         await this.loadInitialFile();
+    }
+
+    private setupThemeSelector(): void {
+        const select = document.getElementById('theme') as HTMLSelectElement | null;
+        if (!select) {
+            return;
+        }
+        const applyTheme = () => {
+            const theme = select.value as Theme;
+            useUIStore.getState().setTheme(theme);
+        };
+        select.value = useUIStore.getState().theme;
+        select.addEventListener('change', applyTheme);
+        select.addEventListener('input', applyTheme);
+        useUIStore.subscribe((state) => {
+            if (select.value !== state.theme) {
+                select.value = state.theme;
+            }
+        });
     }
 
     private async loadInitialFile(): Promise<void> {
@@ -267,11 +288,19 @@ export class App {
             useUIStore.getState().setStatusMessage('PDFエクスポートが完了しました', 3000);
         });
 
+        // PDF表示エラーイベント
+        this.runtime.EventsOn('pdf-open-error', (data: unknown) => {
+            console.log('PDF open error:', data);
+            const message = (data as { error?: string })?.error || 'PDFの表示に失敗しました';
+            useUIStore.getState().setStatusMessage(message, 4000);
+        });
+
         // PDFエクスポートエラーイベント
         this.runtime.EventsOn('pdf-export-error', (data: unknown) => {
             console.log('PDF export error:', data);
             useExportStore.getState().setPdfExportProgress(false);
-            const message = (data as { message?: string })?.message || 'PDFエクスポートに失敗しました';
+            const payload = data as { message?: string; error?: string };
+            const message = payload?.message || payload?.error || 'PDFエクスポートに失敗しました';
             useUIStore.getState().setStatusMessage(message, 4000);
         });
 

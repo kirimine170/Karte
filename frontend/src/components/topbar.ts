@@ -134,6 +134,14 @@ export class Topbar extends BaseComponent {
                     uiStore.setTheme(theme);
                 })
             );
+            this.unsubscribe.push(
+                this.addEventListener(this.themeSelect, 'input', (e) => {
+                    const target = e.target as HTMLSelectElement;
+                    const theme = target.value as 'light' | 'dark' | 'hc';
+                    eventLogger.log('Topbar', 'theme-change', { theme });
+                    uiStore.setTheme(theme);
+                })
+            );
         }
 
         // ハードラップ
@@ -333,7 +341,10 @@ export class Topbar extends BaseComponent {
         const docStore = useDocStore.getState();
         const exportStore = useExportStore.getState();
 
-        if (!docStore.previewHtml) {
+        const renderedHtml = this.getRenderedPreviewHtml();
+        const exportHtml = renderedHtml || docStore.previewHtml;
+
+        if (!exportHtml) {
             eventLogger.log('Topbar', 'export-pdf-error', { error: 'no-content' });
             useUIStore.getState().setStatusMessage('エクスポートするコンテンツがありません', 2000);
             return;
@@ -342,7 +353,7 @@ export class Topbar extends BaseComponent {
         try {
             eventLogger.log('Topbar', 'export-pdf-start');
             exportStore.setPdfExportProgress(true, 0, 'PDFを生成中...');
-            const path = await this.api.ExportPDF(docStore.previewHtml);
+            const path = await this.api.ExportPDF(exportHtml);
             exportStore.setPdfExportProgress(false);
             eventLogger.log('Topbar', 'export-pdf-success', { path });
             useUIStore.getState().setStatusMessage(`PDFをエクスポートしました: ${path}`, 3000);
@@ -352,6 +363,23 @@ export class Topbar extends BaseComponent {
             exportStore.setPdfExportProgress(false);
             useUIStore.getState().setStatusMessage('PDFエクスポートに失敗しました', 3000);
         }
+    }
+
+    private getRenderedPreviewHtml(): string | null {
+        const iframe = document.getElementById('preview') as HTMLIFrameElement | null;
+        const doc = iframe?.contentDocument;
+        const root = doc?.documentElement;
+        if (!root) {
+            return null;
+        }
+        const html = root.outerHTML || '';
+        if (!html.trim()) {
+            return null;
+        }
+        if (html.toLowerCase().startsWith('<!doctype html')) {
+            return html;
+        }
+        return `<!doctype html>\n${html}`;
     }
 
     private async handleCustomCSS(): Promise<void> {
