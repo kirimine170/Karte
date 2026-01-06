@@ -1,12 +1,14 @@
 import { getByRole, getByText, within } from '@testing-library/dom';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
     applyCsvImports,
     buildCsvMarkdownTable,
+    buildCsvMarkdownTableFromData,
     buildFileDisplayLabel,
     convertMarkdownToHtml,
     filterFilesByQuery,
-    parseCsvContent
+    parseCsvContent,
+    parseCsvLine
 } from '../logic';
 
 describe('Markdown conversion', () => {
@@ -36,22 +38,50 @@ describe('Markdown conversion', () => {
     });
 });
 
-describe('CSV import helpers', () => {
-    it('parses CSV with quoted values and builds markdown table', () => {
+describe('CSV parsing helpers', () => {
+    it('parses a CSV line with quoted commas and escaped quotes', () => {
+        const parsed = parseCsvLine('"a","b, c","he said ""hi"""');
+        expect(parsed).toEqual(['a', 'b, c', 'he said "hi"']);
+    });
+
+    it('parses CSV content with headers and rows', () => {
         const csv = 'name,notes\n"Smith, Jr.","Loves commas"\nCarol,"Multi word"';
         const parsed = parseCsvContent(csv);
         expect(parsed.headers).toEqual(['name', 'notes']);
         expect(parsed.rows[0]).toEqual(['Smith, Jr.', 'Loves commas']);
+    });
 
+    it('returns empty data when given non-string input', () => {
+        const parsed = parseCsvContent(42 as unknown as string);
+        expect(parsed).toEqual({ headers: [], rows: [] });
+    });
+});
+
+describe('CSV import helpers', () => {
+    it('builds markdown table from CSV text', () => {
+        const csv = 'name,notes\n"Smith, Jr.","Loves commas"';
         const tableMarkdown = buildCsvMarkdownTable(csv);
         expect(tableMarkdown).toContain('| name | notes |');
         expect(tableMarkdown).toContain('Smith, Jr.');
     });
 
-    it('ignores missing loader while applying CSV imports', () => {
+    it('builds markdown table from data arrays', () => {
+        const data = [
+            [],
+            ['Alice', '10'],
+            ['Bob', '8']
+        ];
+        const tableMarkdown = buildCsvMarkdownTableFromData(data);
+        expect(tableMarkdown).toContain('| Column 1 | Column 2 |');
+        expect(tableMarkdown).toContain('| Alice | 10 |');
+    });
+
+    it('keeps CSV import tags when loader returns empty', () => {
         const markdown = 'No replacement\n@import data/sample.csv';
-        const withImports = applyCsvImports(markdown);
+        const csvLoader = vi.fn().mockReturnValue('');
+        const withImports = applyCsvImports(markdown, csvLoader);
         expect(withImports).toBe(markdown);
+        expect(csvLoader).toHaveBeenCalledWith('data/sample.csv');
     });
 });
 
@@ -70,8 +100,13 @@ describe('File list helpers', () => {
         expect(filteredByPath.map((f) => f.path)).toEqual(['content/tasks/todo.md']);
     });
 
+    it('returns empty list when files are missing', () => {
+        expect(filterFilesByQuery(null as unknown as typeof files, 'alpha')).toEqual([]);
+    });
+
     it('builds display label with fallback title', () => {
         expect(buildFileDisplayLabel(files[0])).toBe('Alpha  —  notes/alpha.md');
         expect(buildFileDisplayLabel(files[2])).toBe('Untitled  —  tasks/todo.md');
+        expect(buildFileDisplayLabel(null as unknown as (typeof files)[number])).toBe('');
     });
 });
