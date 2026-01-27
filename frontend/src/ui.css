@@ -838,6 +838,22 @@
     background: var(--panel);
   }
 
+  .preview-drop-target {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    border: 2px dashed var(--color-drop-overlay-border);
+    background: color-mix(in srgb, var(--color-drop-overlay-bg) 60%, transparent);
+    transition: opacity 0.15s ease;
+    z-index: 2;
+  }
+
+  .preview-pane-body.preview-drop-active .preview-drop-target {
+    pointer-events: auto;
+    opacity: 1;
+  }
+
   .preview-container {
     display: flex;
     flex-direction: column;
@@ -1117,6 +1133,7 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    position: relative;
   }
 
   .editor-footer {
