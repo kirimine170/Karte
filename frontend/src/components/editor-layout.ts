@@ -1050,6 +1050,26 @@ export class EditorLayout extends BaseComponent {
         this.updatePreview(nextValue);
     }
 
+    private insertCsvAfterElement(path: string, element: Element): void {
+        if (!this.editor) {
+            return;
+        }
+        const markdownContent = this.editor.value;
+        const position = this.findMarkdownPositionFromElement(element, markdownContent);
+        const csvMarkdown = `\n\n@import(type="csv", path="${path}")\n`;
+        const insertAt = position === -1 ? markdownContent.length : position;
+        const nextValue = markdownContent.slice(0, insertAt) + csvMarkdown + markdownContent.slice(insertAt);
+        this.editor.value = nextValue;
+        const nextCursor = insertAt + csvMarkdown.length;
+        this.editor.setSelectionRange(nextCursor, nextCursor);
+        this.editor.focus();
+
+        const docStore = useDocStore.getState();
+        docStore.setMarkdownContent(nextValue);
+        docStore.setHasUnsavedChanges(true);
+        this.updatePreview(nextValue);
+    }
+
     private insertImageAtCursor(path: string, name: string): void {
         if (!this.editor) {
             return;
@@ -1203,10 +1223,6 @@ export class EditorLayout extends BaseComponent {
         }
 
         try {
-            if (dragItem.type === 'csv') {
-                this.insertCsvAtCursor(dragItem.path);
-                return;
-            }
             let element: Element | null = null;
             if (source === 'iframe-doc') {
                 element = iframeDoc.elementFromPoint(event.clientX, event.clientY);
@@ -1214,6 +1230,16 @@ export class EditorLayout extends BaseComponent {
                 const rect = this.preview.getBoundingClientRect();
                 element = iframeDoc.elementFromPoint(event.clientX - rect.left, event.clientY - rect.top);
             }
+
+            if (dragItem.type === 'csv') {
+                if (element) {
+                    this.insertCsvAfterElement(dragItem.path, element);
+                } else {
+                    this.insertCsvAtCursor(dragItem.path);
+                }
+                return;
+            }
+
             if (element) {
                 await this.insertImageAfterElement(dragItem.path, dragItem.name, element);
             } else {
