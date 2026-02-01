@@ -18,6 +18,11 @@ export class EditorLayout extends BaseComponent {
     // DOM要素
     private editor: HTMLTextAreaElement | null = null;
     private preview: HTMLIFrameElement | null = null;
+    private previewBody: HTMLElement | null = null;
+    private previewDropTarget: HTMLElement | null = null;
+    private previewDropHandlersBound = false;
+    private previewDragDepth = 0;
+    private lastPreviewDropTs = 0;
     private recordingBtn: HTMLButtonElement | null = null;
     private recordingBtnFooter: HTMLButtonElement | null = null;
     private recordingIndicator: HTMLElement | null = null;
@@ -71,6 +76,8 @@ export class EditorLayout extends BaseComponent {
         // DOM要素の取得
         this.editor = document.getElementById('editor') as HTMLTextAreaElement;
         this.preview = document.getElementById('preview') as HTMLIFrameElement;
+        this.previewBody = document.querySelector('.preview-pane-body') as HTMLElement;
+        this.previewDropTarget = document.getElementById('previewDropTarget');
         this.recordingBtn = document.querySelector('.tabs #recordingBtn') as HTMLButtonElement;
         this.recordingBtnFooter = document.getElementById('recordingBtnFooter') as HTMLButtonElement;
         this.recordingIndicator = document.getElementById('recordingIndicator');
@@ -98,6 +105,7 @@ export class EditorLayout extends BaseComponent {
 
         // イベントリスナーの設定
         this.setupEventListeners();
+        this.setupPreviewDropHandlers();
 
         // 状態の購読
         this.subscribeToStores();
@@ -140,9 +148,14 @@ export class EditorLayout extends BaseComponent {
                     const jsonData = e.dataTransfer?.getData('application/json');
                     if (jsonData) {
                         try {
-                            const payload = JSON.parse(jsonData) as { type?: string; path?: string };
+                            const payload = JSON.parse(jsonData) as { type?: string; path?: string; name?: string };
                             if (payload.type === 'csv' && payload.path) {
                                 this.insertCsvAtCursor(payload.path);
+                                return;
+                            }
+                            if (payload.path) {
+                                const name = payload.name || this.getNameFromPath(payload.path);
+                                this.insertImageAtCursor(payload.path, name);
                             }
                         } catch (error) {
                             console.error('Failed to parse drag data:', error);
@@ -155,6 +168,12 @@ export class EditorLayout extends BaseComponent {
                         const csvItem = document.querySelector(`.csv-item[data-csv-path="${path}"]`);
                         if (csvItem) {
                             this.insertCsvAtCursor(path);
+                            return;
+                        }
+                        const imageItem = document.querySelector(`.image-thumbnail[data-image-path="${path}"]`);
+                        if (imageItem) {
+                            const name = imageItem.getAttribute('data-image-name') || this.getNameFromPath(path);
+                            this.insertImageAtCursor(path, name);
                         }
                     }
                 })
@@ -502,6 +521,44 @@ export class EditorLayout extends BaseComponent {
             return;
         }
         writePreviewFrame(this.preview, html);
+        this.setupPreviewDropHandlers();
+    }
+
+    private setupPreviewDropHandlers(): void {
+        if (!this.preview) {
+            return;
+        }
+
+        if (!this.previewDropHandlersBound) {
+            this.previewDropHandlersBound = true;
+            this.preview.addEventListener('load', () => this.setupPreviewDropHandlersInternal());
+            this.preview.addEventListener('dragover', (e) => this.handlePreviewDragOver(e));
+            this.preview.addEventListener('drop', (e) => this.handlePreviewDrop(e, 'iframe-element'));
+            if (this.previewBody) {
+                this.previewBody.addEventListener('dragover', (e) => this.handlePreviewDragOver(e));
+                this.previewBody.addEventListener('drop', (e) => this.handlePreviewDrop(e, 'iframe-element'));
+            }
+            this.bindPreviewDragState();
+        }
+
+        if (this.preview.contentDocument || this.preview.contentWindow?.document) {
+            this.setupPreviewDropHandlersInternal();
+        }
+    }
+
+    private setupPreviewDropHandlersInternal(): void {
+        const iframeDoc = this.preview?.contentDocument || this.preview?.contentWindow?.document;
+        if (!iframeDoc) {
+            return;
+        }
+        const flaggedDoc = iframeDoc as Document & { __kartePreviewDropSetup?: boolean };
+        if (flaggedDoc.__kartePreviewDropSetup) {
+            return;
+        }
+        flaggedDoc.__kartePreviewDropSetup = true;
+
+        iframeDoc.addEventListener('dragover', (e) => this.handlePreviewDragOver(e));
+        iframeDoc.addEventListener('drop', (e) => this.handlePreviewDrop(e, 'iframe-doc'));
     }
 
     private buildPreviewHtml(content: string, html: string): string {
@@ -991,6 +1048,337 @@ export class EditorLayout extends BaseComponent {
         docStore.setMarkdownContent(nextValue);
         docStore.setHasUnsavedChanges(true);
         this.updatePreview(nextValue);
+    }
+
+    private insertCsvAfterElement(path: string, element: Element): void {
+        if (!this.editor) {
+            return;
+        }
+        const markdownContent = this.editor.value;
+        const position = this.findMarkdownPositionFromElement(element, markdownContent);
+        const csvMarkdown = `\n\n@import(type="csv", path="${path}")\n`;
+        const insertAt = position === -1 ? markdownContent.length : position;
+        const nextValue = markdownContent.slice(0, insertAt) + csvMarkdown + markdownContent.slice(insertAt);
+        this.editor.value = nextValue;
+        const nextCursor = insertAt + csvMarkdown.length;
+        this.editor.setSelectionRange(nextCursor, nextCursor);
+        this.editor.focus();
+
+        const docStore = useDocStore.getState();
+        docStore.setMarkdownContent(nextValue);
+        docStore.setHasUnsavedChanges(true);
+        this.updatePreview(nextValue);
+    }
+
+    private insertImageAtCursor(path: string, name: string): void {
+        if (!this.editor) {
+            return;
+        }
+        const cursorPos = this.editor.selectionStart ?? this.editor.value.length;
+        const nameWithoutExt = name.replace(/\.[^/.]+$/, '');
+        const imageMarkdown = `![${nameWithoutExt}](${path} "${name}")`;
+        const currentValue = this.editor.value;
+        const nextValue = currentValue.slice(0, cursorPos) + imageMarkdown + currentValue.slice(cursorPos);
+        this.editor.value = nextValue;
+        const nextCursor = cursorPos + imageMarkdown.length;
+        this.editor.setSelectionRange(nextCursor, nextCursor);
+
+        const docStore = useDocStore.getState();
+        docStore.setMarkdownContent(nextValue);
+        docStore.setHasUnsavedChanges(true);
+        this.updatePreview(nextValue);
+    }
+
+    private async insertImageAfterElement(path: string, name: string, element: Element): Promise<void> {
+        if (!this.editor) {
+            return;
+        }
+        const markdownContent = this.editor.value;
+        const position = this.findMarkdownPositionFromElement(element, markdownContent);
+        const nameWithoutExt = name.replace(/\.[^/.]+$/, '');
+        const imageMarkdown = `\n\n![${nameWithoutExt}](${path} "${name}")\n`;
+        const insertAt = position === -1 ? markdownContent.length : position;
+        const nextValue = markdownContent.slice(0, insertAt) + imageMarkdown + markdownContent.slice(insertAt);
+        this.editor.value = nextValue;
+
+        const nextCursor = insertAt + imageMarkdown.length;
+        this.editor.setSelectionRange(nextCursor, nextCursor);
+        this.editor.focus();
+
+        const docStore = useDocStore.getState();
+        docStore.setMarkdownContent(nextValue);
+        docStore.setHasUnsavedChanges(true);
+        this.updatePreview(nextValue);
+    }
+
+    private findMarkdownPositionFromElement(element: Element, markdownContent: string): number {
+        if (!element || !markdownContent) {
+            return -1;
+        }
+
+        let currentElement: Element | null = element;
+        let attempts = 0;
+        const maxAttempts = 10;
+
+        while (currentElement && attempts < maxAttempts) {
+            if (currentElement.tagName && /^H[1-6]$/.test(currentElement.tagName)) {
+                const level = parseInt(currentElement.tagName.charAt(1), 10);
+                const headingText = currentElement.textContent?.trim();
+                if (headingText) {
+                    const escapedText = headingText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const headingPattern = new RegExp(`^#{${level}}\\s+${escapedText}`, 'm');
+                    const match = markdownContent.match(headingPattern);
+                    if (match) {
+                        const headingEnd = markdownContent.indexOf('\n', match.index + match[0].length);
+                        return headingEnd !== -1 ? headingEnd : markdownContent.length;
+                    }
+                }
+            }
+
+            if (currentElement.tagName === 'P' || currentElement.tagName === 'DIV') {
+                const elementText = currentElement.textContent?.trim();
+                if (elementText) {
+                    const searchText = elementText.substring(0, Math.min(100, elementText.length));
+                    const escapedSearch = searchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const regex = new RegExp(escapedSearch.replace(/\s+/g, '\\s+'), 'm');
+                    const match = markdownContent.match(regex);
+                    if (match) {
+                        const lineEnd = markdownContent.indexOf('\n', match.index);
+                        return lineEnd !== -1 ? lineEnd : markdownContent.length;
+                    }
+                }
+            }
+
+            if (currentElement.tagName === 'LI') {
+                const itemText = currentElement.textContent?.trim();
+                if (itemText) {
+                    const escapedText = itemText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const listPattern = new RegExp(`^[\\s\\-*+\\d\\.]+\\s+${escapedText.substring(0, 50)}`, 'm');
+                    const match = markdownContent.match(listPattern);
+                    if (match) {
+                        const lineEnd = markdownContent.indexOf('\n', match.index);
+                        return lineEnd !== -1 ? lineEnd : markdownContent.length;
+                    }
+                }
+            }
+
+            currentElement = currentElement.parentElement;
+            attempts += 1;
+        }
+
+        return markdownContent.length;
+    }
+
+    private getNameFromPath(path: string): string {
+        const name = path.split('/').pop();
+        return name || 'image';
+    }
+
+    private handlePreviewDragOver(event: DragEvent): void {
+        const types = Array.from(event.dataTransfer?.types || []);
+        if (types.includes('Files') || types.includes('application/json') || types.includes('text/plain')) {
+            event.preventDefault();
+            if (event.dataTransfer) {
+                event.dataTransfer.dropEffect = 'copy';
+            }
+        }
+    }
+
+    private async handlePreviewDrop(
+        event: DragEvent,
+        source: 'iframe-doc' | 'iframe-element'
+    ): Promise<void> {
+        const now = Date.now();
+        if (now - this.lastPreviewDropTs < 150) {
+            return;
+        }
+        this.lastPreviewDropTs = now;
+        event.preventDefault();
+        event.stopPropagation();
+
+        const files = Array.from(event.dataTransfer?.files || []);
+        if (files.length > 0) {
+            window.dispatchEvent(new CustomEvent('karte-file-drop', { detail: { files } }));
+            return;
+        }
+
+        const dragItem =
+            this.getDragItemFromDataTransfer(event.dataTransfer) ??
+            this.getDragItemFromGlobals() ??
+            this.getDragItemFromDom();
+        if (!dragItem) {
+            console.error('Failed to get item data from drag');
+            return;
+        }
+        this.clearGlobalDragData();
+
+        const iframeDoc = this.preview?.contentDocument || this.preview?.contentWindow?.document;
+        if (!iframeDoc || !this.preview) {
+            if (dragItem.type === 'csv') {
+                this.insertCsvAtCursor(dragItem.path);
+            } else {
+                this.insertImageAtCursor(dragItem.path, dragItem.name);
+            }
+            return;
+        }
+
+        try {
+            let element: Element | null = null;
+            if (source === 'iframe-doc') {
+                element = iframeDoc.elementFromPoint(event.clientX, event.clientY);
+            } else {
+                const rect = this.preview.getBoundingClientRect();
+                element = iframeDoc.elementFromPoint(event.clientX - rect.left, event.clientY - rect.top);
+            }
+
+            if (dragItem.type === 'csv') {
+                if (element) {
+                    this.insertCsvAfterElement(dragItem.path, element);
+                } else {
+                    this.insertCsvAtCursor(dragItem.path);
+                }
+                return;
+            }
+
+            if (element) {
+                await this.insertImageAfterElement(dragItem.path, dragItem.name, element);
+            } else {
+                this.insertImageAtCursor(dragItem.path, dragItem.name);
+            }
+        } catch (error) {
+            console.error('Failed to handle drop in preview:', error);
+        }
+    }
+
+    private getDragItemFromDataTransfer(
+        dataTransfer: DataTransfer | null
+    ): { type: 'csv' | 'image'; path: string; name: string } | null {
+        if (!dataTransfer) {
+            return null;
+        }
+        const json = dataTransfer.getData('application/json');
+        if (json) {
+            try {
+                const payload = JSON.parse(json) as { type?: string; path?: string; name?: string };
+                if (payload.type === 'csv' && payload.path) {
+                    return { type: 'csv', path: payload.path, name: payload.name || this.getNameFromPath(payload.path) };
+                }
+                if (payload.path) {
+                    return { type: 'image', path: payload.path, name: payload.name || this.getNameFromPath(payload.path) };
+                }
+            } catch (error) {
+                console.error('Failed to parse drag data:', error);
+            }
+        }
+        const text = dataTransfer.getData('text/plain');
+        if (text) {
+            const isCsv = text.toLowerCase().endsWith('.csv');
+            if (isCsv) {
+                return { type: 'csv', path: text, name: this.getNameFromPath(text) };
+            }
+            return { type: 'image', path: text, name: this.getNameFromPath(text) };
+        }
+        return null;
+    }
+
+    private bindPreviewDragState(): void {
+        if (!this.previewBody) {
+            return;
+        }
+
+        const isPotentialDrag = (event: DragEvent): boolean => {
+            const types = Array.from(event.dataTransfer?.types || []);
+            return types.length === 0 || types.includes('Files') || types.includes('application/json') || types.includes('text/plain');
+        };
+
+        const show = () => {
+            if (!this.previewBody) {
+                return;
+            }
+            this.previewBody.classList.add('preview-drop-active');
+        };
+
+        const hide = () => {
+            if (!this.previewBody) {
+                return;
+            }
+            this.previewBody.classList.remove('preview-drop-active');
+        };
+
+        const onDragEnter = (event: DragEvent) => {
+            if (!isPotentialDrag(event)) {
+                return;
+            }
+            this.previewDragDepth += 1;
+            show();
+        };
+
+        const onDragLeave = (event: DragEvent) => {
+            if (!isPotentialDrag(event)) {
+                return;
+            }
+            this.previewDragDepth = Math.max(0, this.previewDragDepth - 1);
+            if (this.previewDragDepth === 0) {
+                hide();
+            }
+        };
+
+        const onDrop = (event: DragEvent) => {
+            if (!isPotentialDrag(event)) {
+                return;
+            }
+            this.previewDragDepth = 0;
+            hide();
+        };
+
+        window.addEventListener('dragenter', onDragEnter);
+        window.addEventListener('dragleave', onDragLeave);
+        window.addEventListener('drop', onDrop);
+        window.addEventListener('dragend', onDrop);
+
+        this.unsubscribe.push(() => {
+            window.removeEventListener('dragenter', onDragEnter);
+            window.removeEventListener('dragleave', onDragLeave);
+            window.removeEventListener('drop', onDrop);
+            window.removeEventListener('dragend', onDrop);
+        });
+    }
+
+    private getDragItemFromGlobals(): { type: 'csv' | 'image'; path: string; name: string } | null {
+        const win = window as any;
+        if (win.currentDragCsvData?.path && win.currentDragCsvData?.name) {
+            return { type: 'csv', path: win.currentDragCsvData.path, name: win.currentDragCsvData.name };
+        }
+        if (win.currentDragImageData?.path && win.currentDragImageData?.name) {
+            return { type: 'image', path: win.currentDragImageData.path, name: win.currentDragImageData.name };
+        }
+        return null;
+    }
+
+    private getDragItemFromDom(): { type: 'csv' | 'image'; path: string; name: string } | null {
+        const csvSource = document.querySelector('.csv-item[style*="opacity: 0.5"]');
+        if (csvSource) {
+            const path = csvSource.getAttribute('data-csv-path') || '';
+            const name = csvSource.getAttribute('data-csv-name') || this.getNameFromPath(path);
+            if (path) {
+                return { type: 'csv', path, name };
+            }
+        }
+        const imageSource = document.querySelector('.image-thumbnail[style*="opacity: 0.5"]');
+        if (imageSource) {
+            const path = imageSource.getAttribute('data-image-path') || '';
+            const name = imageSource.getAttribute('data-image-name') || this.getNameFromPath(path);
+            if (path) {
+                return { type: 'image', path, name };
+            }
+        }
+        return null;
+    }
+
+    private clearGlobalDragData(): void {
+        const win = window as any;
+        win.currentDragImageData = null;
+        win.currentDragCsvData = null;
     }
 
     private async toggleRecording(): Promise<void> {
