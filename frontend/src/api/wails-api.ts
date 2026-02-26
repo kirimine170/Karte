@@ -2,7 +2,7 @@
 import type { WailsAppAPI, WailsRuntimeAPI } from '../types/wails-api';
 
 // ブラウザ環境かどうかをチェック
-const isBrowser = typeof window !== 'undefined' && !window.go;
+const isBrowser = typeof window !== 'undefined' && !(window as Window & { go?: unknown }).go;
 
 // Wails App APIの取得
 export async function getWailsAppAPI(): Promise<WailsAppAPI> {
@@ -33,4 +33,3 @@ export async function getWailsRuntimeAPI(): Promise<WailsRuntimeAPI> {
     const RuntimeModule = await import('../../wailsjs/wailsjs/runtime/runtime');
     return RuntimeModule as unknown as WailsRuntimeAPI;
 }
-

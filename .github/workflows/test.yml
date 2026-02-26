@@ -54,8 +54,20 @@ jobs:
         working-directory: frontend
         run: npm install --prefer-offline --no-audit
 
+      - name: Frontend typecheck
+        working-directory: frontend
+        run: npm run typecheck --if-present
+
+      - name: Frontend tests
+        run: |
+          mkdir -p reports
+          cd frontend
+          npm test --if-present -- --run | tee ../reports/frontend-tests.log
+
       - name: Build frontend assets
         working-directory: frontend
+        env:
+          VITE_USE_WAILS_STUBS: "true"
         run: npm run build --if-present
 
       - name: Install system dependencies
@@ -65,12 +77,6 @@ jobs:
         run: |
           mkdir -p reports
           go test $(go list ./... | grep -v internal/asr) | tee reports/backend-tests.log
-
-      - name: Frontend tests
-        run: |
-          mkdir -p reports
-          cd frontend
-          npm test --if-present | tee ../reports/frontend-tests.log
 
       - name: E2E tests
         run: |
