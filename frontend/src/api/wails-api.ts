@@ -13,6 +13,7 @@ export async function getWailsAppAPI(): Promise<WailsAppAPI> {
     }
 
     // Wails環境では実際のAPIを使用
+    // @ts-ignore Wails generates this module at build time; it may not exist in CI typecheck jobs.
     const AppModule = await import('../../wailsjs/wailsjs/go/main/App');
     return AppModule as unknown as WailsAppAPI;
 }
@@ -30,6 +31,7 @@ export async function getWailsRuntimeAPI(): Promise<WailsRuntimeAPI> {
     }
 
     // Wails環境では実際のAPIを使用
+    // @ts-ignore Wails generates this module at build time; it may not exist in CI typecheck jobs.
     const RuntimeModule = await import('../../wailsjs/wailsjs/runtime/runtime');
     return RuntimeModule as unknown as WailsRuntimeAPI;
 }
