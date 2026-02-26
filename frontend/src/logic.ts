@@ -54,7 +54,7 @@ export function parseCsvContent(csvText: string): ParsedCsv {
 
     const parsedLines = lines.map(parseCsvLine);
     const [headerLine, ...dataLines] = parsedLines;
-    return { headers: headerLine, rows: dataLines };
+    return { headers: headerLine ?? [], rows: dataLines };
 }
 
 export function buildCsvMarkdownTable(csvText: string): string {
