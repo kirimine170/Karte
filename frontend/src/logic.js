@@ -72,6 +72,24 @@ export function buildCsvMarkdownTable(csvText) {
     return [headerRow, separatorRow, bodyRows].filter(Boolean).join('\n');
 }
 
+export function buildCsvMarkdownTableFromData(data) {
+    if (!Array.isArray(data) || data.length === 0) {
+        return '';
+    }
+    const [headerRow, ...rows] = data;
+    const headers = (headerRow || []).map((cell) => (cell ?? '').toString().trim());
+    const columnHeaders = headers.length > 0
+        ? headers
+        : (rows[0] || []).map((_, index) => `Column ${index + 1}`);
+    const bodyRows = rows.map((row) => {
+        const cells = columnHeaders.map((_, index) => (row?.[index] ?? '').toString().trim());
+        return `| ${cells.join(' | ')} |`;
+    }).join('\n');
+    const headerLine = `| ${columnHeaders.join(' | ')} |`;
+    const separatorLine = `| ${columnHeaders.map(() => '---').join(' | ')} |`;
+    return [headerLine, separatorLine, bodyRows].filter(Boolean).join('\n');
+}
+
 export function applyCsvImports(markdown, csvLoader) {
     if (!markdown || typeof markdown !== 'string') {
         return '';

@@ -7,17 +7,24 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest --coverage",
+    "test:watch": "vitest --watch",
     "e2e": "playwright test"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
     "@testing-library/dom": "^10.4.0",
+    "@types/d3": "^7.4.3",
     "jsdom": "^24.1.0",
+    "typescript": "^5.3.3",
     "vite": "^3.0.7",
     "vitest": "^2.1.8"
   },
   "dependencies": {
     "d3": "^7.9.0",
-    "marked": "^9.1.6"
+    "marked": "^9.1.6",
+    "pdfjs-dist": "^3.11.174",
+    "zustand": "^4.4.7"
   }
 }

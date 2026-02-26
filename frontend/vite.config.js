@@ -20,6 +20,10 @@ export default defineConfig({
     host: true
   },
   resolve: {
-    alias
+    alias: {
+      ...alias,
+      '@': path.resolve(__dirname, './src'),
+    },
+    extensions: ['.js', '.ts', '.jsx', '.tsx', '.json'],
   }
 });
