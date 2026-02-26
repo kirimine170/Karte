@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/logic.ts",
+    "src/__tests__/logic.test.ts",
+    "src/api/wails-api.ts",
+    "src/test-support/browser-api.ts",
+    "src/test-support/wails-stubs.ts",
+    "src/test-support/wails-runtime-stub.ts",
+    "src/types/wails-generated.d.ts"
+  ],
+  "exclude": ["node_modules", "dist", "wailsjs"]
+}
