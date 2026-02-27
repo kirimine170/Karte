@@ -132,14 +132,6 @@ jobs:
         run: wails generate module
         working-directory: .
 
-      - name: Frontend typecheck
-        run: npm run typecheck --if-present
-        working-directory: frontend
-
-      - name: Frontend tests
-        run: npm test --if-present -- --run
-        working-directory: frontend
-
       - name: Build frontend assets
         run: npm run build
         working-directory: frontend

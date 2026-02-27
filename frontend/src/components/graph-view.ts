@@ -1,6 +1,6 @@
 import { BaseComponent } from './component-base';
 import { useUIStore, useDocStore, useCustomCssStore } from '../stores/index';
-import GraphModule from '../graph-d3';
+import GraphModule from '../graph-d3.js';
 import type { WailsAppAPI } from '../types/wails-api';
 import type { GraphData } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';

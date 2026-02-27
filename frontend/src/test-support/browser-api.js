@@ -1,4 +1,3 @@
-// @ts-nocheck
 const isBrowser = typeof window !== 'undefined' && !window.go;
 
 function sanitizeCsvValue(value) {
@@ -269,3 +268,4 @@ export function createBrowserApi() {
         }
     };
 }
+

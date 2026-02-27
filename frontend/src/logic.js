@@ -5,8 +5,8 @@ marked.setOptions({
     breaks: true
 });
 
-export function parseCsvLine(line: string): string[] {
-    const cells: string[] = [];
+export function parseCsvLine(line) {
+    const cells = [];
     let current = '';
     let inQuotes = false;
     for (let i = 0; i < line.length; i += 1) {
@@ -33,12 +33,7 @@ export function parseCsvLine(line: string): string[] {
     return cells;
 }
 
-export interface ParsedCsv {
-    headers: string[];
-    rows: string[][];
-}
-
-export function parseCsvContent(csvText: string): ParsedCsv {
+export function parseCsvContent(csvText) {
     if (typeof csvText !== 'string') {
         return { headers: [], rows: [] };
     }
@@ -57,7 +52,7 @@ export function parseCsvContent(csvText: string): ParsedCsv {
     return { headers: headerLine, rows: dataLines };
 }
 
-export function buildCsvMarkdownTable(csvText: string): string {
+export function buildCsvMarkdownTable(csvText) {
     const { headers, rows } = parseCsvContent(csvText);
 
     if (headers.length === 0 && rows.length === 0) {
@@ -77,7 +72,7 @@ export function buildCsvMarkdownTable(csvText: string): string {
     return [headerRow, separatorRow, bodyRows].filter(Boolean).join('\n');
 }
 
-export function buildCsvMarkdownTableFromData(data: string[][]): string {
+export function buildCsvMarkdownTableFromData(data) {
     if (!Array.isArray(data) || data.length === 0) {
         return '';
     }
@@ -95,9 +90,7 @@ export function buildCsvMarkdownTableFromData(data: string[][]): string {
     return [headerLine, separatorLine, bodyRows].filter(Boolean).join('\n');
 }
 
-export type CsvLoader = (csvPath: string) => string | null | undefined;
-
-export function applyCsvImports(markdown: string, csvLoader?: CsvLoader): string {
+export function applyCsvImports(markdown, csvLoader) {
     if (!markdown || typeof markdown !== 'string') {
         return '';
     }
@@ -121,22 +114,12 @@ export function applyCsvImports(markdown: string, csvLoader?: CsvLoader): string
     });
 }
 
-export interface ConvertMarkdownOptions {
-    csvLoader?: CsvLoader;
-}
-
-export function convertMarkdownToHtml(markdown: string, options: ConvertMarkdownOptions = {}): string {
+export function convertMarkdownToHtml(markdown, options = {}) {
     const prepared = applyCsvImports(markdown ?? '', options.csvLoader);
-    return marked.parse(prepared) as string;
+    return marked.parse(prepared);
 }
 
-export interface FileItem {
-    path: string;
-    title?: string;
-    [key: string]: unknown;
-}
-
-export function filterFilesByQuery(files: FileItem[], query: string): FileItem[] {
+export function filterFilesByQuery(files, query) {
     if (!Array.isArray(files)) {
         return [];
     }
@@ -155,7 +138,7 @@ export function filterFilesByQuery(files: FileItem[], query: string): FileItem[]
     });
 }
 
-export function buildFileDisplayLabel(file: FileItem): string {
+export function buildFileDisplayLabel(file) {
     if (!file || !file.path) {
         return '';
     }

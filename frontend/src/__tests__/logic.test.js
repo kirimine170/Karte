@@ -31,8 +31,8 @@ describe('Markdown conversion', () => {
         const rows = within(table).getAllByRole('row');
 
         expect(rows.length).toBe(3);
-        expect(within(rows[1]!).getByText('Alice')).toBeTruthy();
-        expect(within(rows[2]!).getByText('8')).toBeTruthy();
+        expect(within(rows[1]).getByText('Alice')).toBeTruthy();
+        expect(within(rows[2]).getByText('8')).toBeTruthy();
     });
 });
 
@@ -71,7 +71,7 @@ describe('File list helpers', () => {
     });
 
     it('builds display label with fallback title', () => {
-        expect(buildFileDisplayLabel(files[0]!)).toBe('Alpha  —  notes/alpha.md');
-        expect(buildFileDisplayLabel(files[2]!)).toBe('Untitled  —  tasks/todo.md');
+        expect(buildFileDisplayLabel(files[0])).toBe('Alpha  —  notes/alpha.md');
+        expect(buildFileDisplayLabel(files[2])).toBe('Untitled  —  tasks/todo.md');
     });
 });

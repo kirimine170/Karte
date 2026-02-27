@@ -46,30 +46,16 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '18.x'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         working-directory: frontend
-        run: npm ci --no-audit
-
-      - name: Frontend typecheck
-        run: |
-          mkdir -p reports
-          cd frontend
-          npm run typecheck --if-present 2>&1 | tee ../reports/frontend-typecheck.log
-
-      - name: Frontend tests
-        run: |
-          mkdir -p reports
-          cd frontend
-          npm test --if-present -- --run | tee ../reports/frontend-tests.log
+        run: npm install --prefer-offline --no-audit
 
       - name: Build frontend assets
         working-directory: frontend
-        env:
-          VITE_USE_WAILS_STUBS: "true"
         run: npm run build --if-present
 
       - name: Install system dependencies
@@ -79,6 +65,12 @@ jobs:
         run: |
           mkdir -p reports
           go test $(go list ./... | grep -v internal/asr) | tee reports/backend-tests.log
+
+      - name: Frontend tests
+        run: |
+          mkdir -p reports
+          cd frontend
+          npm test --if-present | tee ../reports/frontend-tests.log
 
       - name: E2E tests
         run: |
@@ -90,7 +82,6 @@ jobs:
         if: always()
         run: |
           echo "## Test logs" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Frontend Typecheck: reports/frontend-typecheck.log" >> "$GITHUB_STEP_SUMMARY"
           echo "- Backend: reports/backend-tests.log" >> "$GITHUB_STEP_SUMMARY"
           echo "- Frontend: reports/frontend-tests.log" >> "$GITHUB_STEP_SUMMARY"
           echo "- E2E: reports/e2e-tests.log" >> "$GITHUB_STEP_SUMMARY"

@@ -3529,7 +3529,7 @@ func (a *App) ExportPDF(html string) (pdfURL string, err error) {
 			runtime.EventsEmit(a.ctx, "pdf-export-error", map[string]interface{}{
 				"error": panicMsg,
 			})
-				err = fmt.Errorf("%s", panicMsg)
+			err = fmt.Errorf(panicMsg)
 		}
 	}()
 
