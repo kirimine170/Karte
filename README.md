@@ -127,9 +127,9 @@ wails dev
 karte-desktop/
 ├── app.go                 # Wailsアプリケーションのメインロジック
 ├── main.go               # アプリケーションエントリーポイント
-├── frontend/             # フロントエンド（HTML/CSS/JavaScript）
+├── frontend/             # フロントエンド（HTML/CSS/TypeScript）
 │   ├── index.html       # メインUI
-│   └── src/main.js      # JavaScriptロジック
+│   └── src/main.ts      # TypeScriptエントリーポイント
 ├── internal/            # 内部パッケージ
 │   ├── site/           # Markdownレンダリング
 │   └── sync/           # ファイル同期（将来のgit統合用）
@@ -168,7 +168,7 @@ karte-desktop/
 ### アーキテクチャ
 
 - **バックエンド**: Go + Wails v2
-- **フロントエンド**: Vanilla JavaScript + HTML/CSS
+- **フロントエンド**: TypeScript + HTML/CSS
 - **Markdown処理**: Goldmark
 - **ビルドシステム**: Wails CLI
 
@@ -211,7 +211,7 @@ karte-desktop/
 
 - テーマの追加: `frontend/index.html`のCSS変数を編集
 - 機能の追加: `app.go`にWailsバインディングメソッドを追加
-- UIの変更: `frontend/index.html`と`frontend/src/main.js`を編集
+- UIの変更: `frontend/index.html`と`frontend/src/main.ts`を編集
 
 ## ライセンス
 
@@ -220,4 +220,3 @@ Copyright © 2024, kirimine170
 ## サポート
 
 問題や機能要望がある場合は、GitHubのIssuesでお知らせください。
-

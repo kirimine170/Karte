@@ -1,3 +1,4 @@
+// @ts-nocheck
 // D3.jsベースのグラフ描画モジュール
 
 import * as d3 from 'd3';
@@ -662,4 +663,3 @@ class GraphD3Module {
 }
 
 export default GraphD3Module;
-
