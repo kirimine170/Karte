@@ -341,7 +341,7 @@ export class Topbar extends BaseComponent {
         const docStore = useDocStore.getState();
         const exportStore = useExportStore.getState();
 
-        const renderedHtml = this.getRenderedPreviewHtml();
+        const renderedHtml = await this.getRenderedPreviewHtml();
         const exportHtml = renderedHtml || docStore.previewHtml;
 
         if (!exportHtml) {
@@ -365,12 +365,16 @@ export class Topbar extends BaseComponent {
         }
     }
 
-    private getRenderedPreviewHtml(): string | null {
+    private async getRenderedPreviewHtml(): Promise<string | null> {
         const iframe = document.getElementById('preview') as HTMLIFrameElement | null;
         const doc = iframe?.contentDocument;
         const root = doc?.documentElement;
         if (!root) {
             return null;
+        }
+        const printoutMode = root.getAttribute('data-printout')?.toLowerCase();
+        if (printoutMode && printoutMode !== 'infinite') {
+            await this.waitForPrintoutReady(iframe);
         }
         const html = root.outerHTML || '';
         if (!html.trim()) {
@@ -380,6 +384,29 @@ export class Topbar extends BaseComponent {
             return html;
         }
         return `<!doctype html>\n${html}`;
+    }
+
+    private async waitForPrintoutReady(iframe: HTMLIFrameElement, timeoutMs = 2000): Promise<void> {
+        const started = Date.now();
+        while (Date.now() - started < timeoutMs) {
+            const win = iframe.contentWindow as (Window & { __kartePrintoutReady?: boolean | string }) | null;
+            if (!win) {
+                return;
+            }
+            if (win.__kartePrintoutReady === true) {
+                return;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 40));
+        }
+        const win = iframe.contentWindow as (Window & { __kartePrintoutReady?: boolean | string; __kartePrintoutError?: string }) | null;
+        const state = win?.__kartePrintoutReady;
+        const error = win?.__kartePrintoutError;
+        console.warn('[Topbar] waitForPrintoutReady timeout', { timeoutMs, state, error });
+        eventLogger.log('Topbar', 'printout-ready-timeout', {
+            timeoutMs,
+            state: state === undefined ? 'undefined' : String(state),
+            error: error || '',
+        });
     }
 
     private async handleCustomCSS(): Promise<void> {

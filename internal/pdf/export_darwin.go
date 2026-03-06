@@ -263,7 +263,157 @@ static NSWindow* sPDFWindow = nil;
 static WKWebView* sPDFWebView = nil;
 static PDFExportDelegate* sPDFDelegate = nil;
 
-static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, const char* logPathC) {
+static WKPDFConfiguration* buildPDFConfig(double pageWidthPt, double pageHeightPt) {
+    WKPDFConfiguration* pdfConfig = [WKPDFConfiguration new];
+    (void)pageWidthPt;
+    (void)pageHeightPt;
+    return pdfConfig;
+}
+
+static BOOL writePDFDataToPath(NSData* pdfData, NSString* outPath, const char* logPath, const char* successPrefix, const char** retErr) {
+    if (pdfData == nil) {
+        NSString* msg = @"No PDF data";
+        logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] ERROR: %@", msg] UTF8String]);
+        if (retErr) {
+            *retErr = strdup([msg UTF8String]);
+        }
+        return NO;
+    }
+    NSError* writeErr = nil;
+    BOOL writeSuccess = [pdfData writeToFile:outPath options:NSDataWritingAtomic error:&writeErr];
+    if (writeErr || !writeSuccess) {
+        NSString* msg = writeErr ? [NSString stringWithFormat:@"File write error: %@", writeErr.localizedDescription] : @"File write failed";
+        logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] ERROR: %@", msg] UTF8String]);
+        if (retErr) {
+            *retErr = strdup([msg UTF8String]);
+        }
+        return NO;
+    }
+    unsigned long long size = (unsigned long long)[pdfData length];
+    logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] %s(size=%llu)", successPrefix, size] UTF8String]);
+    return YES;
+}
+
+static BOOL exportUsingCreatePDFFallback(WKWebView* webview, NSString* outPath, const char* logPath, const char** retErr) {
+    if (!@available(macOS 11.0, *)) {
+        NSString* msg = @"macOS 11+ required for WKWebView PDF";
+        logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] ERROR: %@", msg] UTF8String]);
+        if (retErr) {
+            *retErr = strdup([msg UTF8String]);
+        }
+        return NO;
+    }
+    logPDFExport(logPath, "[PDF Export] finite-fallback-createpdf-start");
+    __block BOOL finished = NO;
+    __block BOOL success = NO;
+    __block NSString* fallbackErr = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    WKPDFConfiguration* pdfConfig = buildPDFConfig(0, 0);
+    [webview createPDFWithConfiguration:pdfConfig completionHandler:^(NSData * _Nullable pdfData, NSError * _Nullable error) {
+        if (error) {
+            fallbackErr = [NSString stringWithFormat:@"Fallback createPDF error: %@", error.localizedDescription];
+            logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] finite-fallback-createpdf-error: %@", error.localizedDescription] UTF8String]);
+        } else {
+            success = writePDFDataToPath(pdfData, outPath, logPath, "finite-fallback-write-success", retErr);
+        }
+        finished = YES;
+        dispatch_semaphore_signal(sem);
+    }];
+
+    const NSTimeInterval timeoutSec = 20.0;
+    NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:timeoutSec];
+    while (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)))) {
+        if ([[NSDate date] compare:deadline] != NSOrderedAscending) {
+            NSString* msg = @"Fallback createPDF timeout";
+            logPDFExport(logPath, "[PDF Export] finite-fallback-createpdf-timeout");
+            if (retErr) {
+                *retErr = strdup([msg UTF8String]);
+            }
+            return NO;
+        }
+        [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.005]];
+    }
+    if (!finished || !success) {
+        if (fallbackErr && retErr) {
+            *retErr = strdup([fallbackErr UTF8String]);
+        }
+        return NO;
+    }
+    return YES;
+}
+
+static BOOL exportFiniteWithTimeoutAndFallback(WKWebView* webview, NSString* outPath, const char* logPath, double pageWidthPt, double pageHeightPt, const char** retErr) {
+    logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] finite-start (paper=%.2fpt x %.2fpt)", pageWidthPt, pageHeightPt] UTF8String]);
+    logPDFExport(logPath, "[PDF Export] finite-pagination-ready");
+
+    NSPrintInfo* printInfo = [[NSPrintInfo sharedPrintInfo] copy];
+    NSMutableDictionary* settings = [printInfo dictionary];
+    if (settings == nil) {
+        settings = [NSMutableDictionary dictionary];
+    }
+    settings[NSPrintJobDisposition] = NSPrintSaveJob;
+    settings[NSPrintJobSavingURL] = [NSURL fileURLWithPath:outPath];
+    if (pageWidthPt > 0 && pageHeightPt > 0) {
+        [printInfo setPaperSize:NSMakeSize(pageWidthPt, pageHeightPt)];
+    }
+    [printInfo setLeftMargin:0];
+    [printInfo setRightMargin:0];
+    [printInfo setTopMargin:0];
+    [printInfo setBottomMargin:0];
+    [printInfo setHorizontalPagination:NSAutoPagination];
+    [printInfo setVerticalPagination:NSAutoPagination];
+
+    __block BOOL opDone = NO;
+    __block BOOL opSuccess = NO;
+    dispatch_semaphore_t opSem = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        @autoreleasepool {
+            NSPrintOperation* operation = [webview printOperationWithPrintInfo:printInfo];
+            [operation setShowsPrintPanel:NO];
+            [operation setShowsProgressPanel:NO];
+            opSuccess = [operation runOperation];
+            opDone = YES;
+            dispatch_semaphore_signal(opSem);
+        }
+    });
+
+    const NSTimeInterval timeoutSec = 20.0;
+    NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:timeoutSec];
+    while (dispatch_semaphore_wait(opSem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)))) {
+        if ([[NSDate date] compare:deadline] != NSOrderedAscending) {
+            logPDFExport(logPath, "[PDF Export] finite-timeout");
+            break;
+        }
+        [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.005]];
+    }
+
+    if (opDone && opSuccess) {
+        NSError* attrErr = nil;
+        NSDictionary* attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:outPath error:&attrErr];
+        NSNumber* fileSize = attrs ? attrs[NSFileSize] : nil;
+        if (!attrErr && fileSize != nil && [fileSize unsignedLongLongValue] > 0) {
+            logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] finite-write-success(size=%llu)", [fileSize unsignedLongLongValue]] UTF8String]);
+            return YES;
+        }
+        logPDFExport(logPath, "[PDF Export] finite-error: print operation completed but file is empty");
+    } else if (opDone && !opSuccess) {
+        logPDFExport(logPath, "[PDF Export] finite-error: NSPrintOperation failed");
+    }
+
+    logPDFExport(logPath, "[PDF Export] finite-path failed, trying fallback createPDF");
+    BOOL fallbackOK = exportUsingCreatePDFFallback(webview, outPath, logPath, retErr);
+    if (fallbackOK) {
+        logPDFExport(logPath, "[PDF Export] finite-fallback-succeeded");
+        return YES;
+    }
+    logPDFExport(logPath, "[PDF Export] finite-fallback-failed");
+    if (retErr && *retErr == NULL) {
+        *retErr = strdup("Finite printout export failed (primary and fallback)");
+    }
+    return NO;
+}
+
+static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, const char* logPathC, double pageWidthPt, double pageHeightPt) {
     @autoreleasepool {
         NSString* html = [NSString stringWithUTF8String:htmlC ? htmlC : ""];
         NSString* outPath = [NSString stringWithUTF8String:outPathC ? outPathC : ""];
@@ -714,29 +864,36 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                                 logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] Document ready or max attempts reached (ready=%d, attempts=%d), creating PDF...", ready, attempts] UTF8String]);
                                 @try {
                                     if (@available(macOS 11.0, *)) {
-                                        WKPDFConfiguration* pdfConfig = [WKPDFConfiguration new];
-                                        logPDFExport(logPath, "[PDF Export] Calling createPDFWithConfiguration...");
-                                        [webview createPDFWithConfiguration:pdfConfig completionHandler:^(NSData * _Nullable pdfData, NSError * _Nullable error2) {
-                                            logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] createPDF completionHandler called (pdfData=%@, error=%@)", pdfData ? @"not nil" : @"nil", error2 ? error2.localizedDescription : @"nil"] UTF8String]);
-                                            if (error2 || !pdfData) {
-                                                NSString* msg = error2 ? [NSString stringWithFormat:@"PDF creation error: %@", error2.localizedDescription] : @"No PDF data";
-                                                logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] ERROR: %@", msg] UTF8String]);
-                                                retErr = strdup([msg UTF8String]);
-                                            } else {
-                                                logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] PDF data created, size: %lu bytes", (unsigned long)[pdfData length]] UTF8String]);
-                                                NSError* writeErr = nil;
-                                                BOOL writeSuccess = [pdfData writeToFile:outPath options:NSDataWritingAtomic error:&writeErr];
-                                                if (writeErr || !writeSuccess) {
-                                                    NSString* msg = writeErr ? [NSString stringWithFormat:@"File write error: %@", writeErr.localizedDescription] : @"File write failed (unknown error)";
+                                        if (pageWidthPt > 0 && pageHeightPt > 0) {
+                                            logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] Finite printout mode: using NSPrintOperation (paper=%.2fpt x %.2fpt)", pageWidthPt, pageHeightPt] UTF8String]);
+                                            exportFiniteWithTimeoutAndFallback(webview, outPath, logPath, pageWidthPt, pageHeightPt, &retErr);
+                                            finished = YES;
+                                            dispatch_semaphore_signal(sem);
+                                        } else {
+                                            WKPDFConfiguration* pdfConfig = buildPDFConfig(pageWidthPt, pageHeightPt);
+                                            logPDFExport(logPath, "[PDF Export] Infinite mode: Calling createPDFWithConfiguration...");
+                                            [webview createPDFWithConfiguration:pdfConfig completionHandler:^(NSData * _Nullable pdfData, NSError * _Nullable error2) {
+                                                logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] createPDF completionHandler called (pdfData=%@, error=%@)", pdfData ? @"not nil" : @"nil", error2 ? error2.localizedDescription : @"nil"] UTF8String]);
+                                                if (error2 || !pdfData) {
+                                                    NSString* msg = error2 ? [NSString stringWithFormat:@"PDF creation error: %@", error2.localizedDescription] : @"No PDF data";
                                                     logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] ERROR: %@", msg] UTF8String]);
                                                     retErr = strdup([msg UTF8String]);
                                                 } else {
-                                                    logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] PDF file written successfully to: %@", outPath] UTF8String]);
+                                                    logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] PDF data created, size: %lu bytes", (unsigned long)[pdfData length]] UTF8String]);
+                                                    NSError* writeErr = nil;
+                                                    BOOL writeSuccess = [pdfData writeToFile:outPath options:NSDataWritingAtomic error:&writeErr];
+                                                    if (writeErr || !writeSuccess) {
+                                                        NSString* msg = writeErr ? [NSString stringWithFormat:@"File write error: %@", writeErr.localizedDescription] : @"File write failed (unknown error)";
+                                                        logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] ERROR: %@", msg] UTF8String]);
+                                                        retErr = strdup([msg UTF8String]);
+                                                    } else {
+                                                        logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] PDF file written successfully to: %@", outPath] UTF8String]);
+                                                    }
                                                 }
-                                            }
-                                            finished = YES;
-                                            dispatch_semaphore_signal(sem);
-                                        }];
+                                                finished = YES;
+                                                dispatch_semaphore_signal(sem);
+                                            }];
+                                        }
                                     } else {
                                         NSString* msg = @"macOS 11+ required for WKWebView PDF";
                                         logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] ERROR: %@", msg] UTF8String]);
@@ -762,29 +919,36 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                                     logPDFExport(logPath, "[PDF Export] readyState stuck at 'interactive', forcing PDF creation...");
                                     // 強制的にPDF作成を試みる
                                     if (@available(macOS 11.0, *)) {
-                                        WKPDFConfiguration* pdfConfig = [WKPDFConfiguration new];
-                                        logPDFExport(logPath, "[PDF Export] Forced: Calling createPDFWithConfiguration...");
-                                        [webview createPDFWithConfiguration:pdfConfig completionHandler:^(NSData * _Nullable pdfData, NSError * _Nullable error2) {
-                                            logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] Forced: createPDF completionHandler called (pdfData=%@, error=%@)", pdfData ? @"not nil" : @"nil", error2 ? error2.localizedDescription : @"nil"] UTF8String]);
-                                            if (error2 || !pdfData) {
-                                                NSString* msg = error2 ? [NSString stringWithFormat:@"PDF creation error (forced): %@", error2.localizedDescription] : @"No PDF data (forced)";
-                                                logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] ERROR: %@", msg] UTF8String]);
-                                                retErr = strdup([msg UTF8String]);
-                                            } else {
-                                                logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] PDF data created (forced), size: %lu bytes", (unsigned long)[pdfData length]] UTF8String]);
-                                                NSError* writeErr = nil;
-                                                BOOL writeSuccess = [pdfData writeToFile:outPath options:NSDataWritingAtomic error:&writeErr];
-                                                if (writeErr || !writeSuccess) {
-                                                    NSString* msg = writeErr ? [NSString stringWithFormat:@"File write error (forced): %@", writeErr.localizedDescription] : @"File write failed (forced, unknown error)";
+                                        if (pageWidthPt > 0 && pageHeightPt > 0) {
+                                            logPDFExport(logPath, "[PDF Export] Forced finite mode: using NSPrintOperation...");
+                                            exportFiniteWithTimeoutAndFallback(webview, outPath, logPath, pageWidthPt, pageHeightPt, &retErr);
+                                            finished = YES;
+                                            dispatch_semaphore_signal(sem);
+                                        } else {
+                                            WKPDFConfiguration* pdfConfig = buildPDFConfig(pageWidthPt, pageHeightPt);
+                                            logPDFExport(logPath, "[PDF Export] Forced infinite mode: Calling createPDFWithConfiguration...");
+                                            [webview createPDFWithConfiguration:pdfConfig completionHandler:^(NSData * _Nullable pdfData, NSError * _Nullable error2) {
+                                                logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] Forced: createPDF completionHandler called (pdfData=%@, error=%@)", pdfData ? @"not nil" : @"nil", error2 ? error2.localizedDescription : @"nil"] UTF8String]);
+                                                if (error2 || !pdfData) {
+                                                    NSString* msg = error2 ? [NSString stringWithFormat:@"PDF creation error (forced): %@", error2.localizedDescription] : @"No PDF data (forced)";
                                                     logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] ERROR: %@", msg] UTF8String]);
                                                     retErr = strdup([msg UTF8String]);
                                                 } else {
-                                                    logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] PDF file written successfully (forced) to: %@", outPath] UTF8String]);
+                                                    logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] PDF data created (forced), size: %lu bytes", (unsigned long)[pdfData length]] UTF8String]);
+                                                    NSError* writeErr = nil;
+                                                    BOOL writeSuccess = [pdfData writeToFile:outPath options:NSDataWritingAtomic error:&writeErr];
+                                                    if (writeErr || !writeSuccess) {
+                                                        NSString* msg = writeErr ? [NSString stringWithFormat:@"File write error (forced): %@", writeErr.localizedDescription] : @"File write failed (forced, unknown error)";
+                                                        logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] ERROR: %@", msg] UTF8String]);
+                                                        retErr = strdup([msg UTF8String]);
+                                                    } else {
+                                                        logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] PDF file written successfully (forced) to: %@", outPath] UTF8String]);
+                                                    }
                                                 }
-                                            }
-                                            finished = YES;
-                                            dispatch_semaphore_signal(sem);
-                                        }];
+                                                finished = YES;
+                                                dispatch_semaphore_signal(sem);
+                                            }];
+                                        }
                                     }
                                 } else {
                                     // リトライ間隔を0.5秒に延長（メインスレッドの負荷を軽減し、大きなHTMLでも処理可能に）
@@ -821,33 +985,40 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                         }
                         logPDFExport(logPath, "[PDF Export] Fallback timer: forcing PDF creation...");
                         if (@available(macOS 11.0, *)) {
-                            WKPDFConfiguration* pdfConfig = [WKPDFConfiguration new];
-                                        logPDFExport(logPath, "[PDF Export] Fallback: Calling createPDFWithConfiguration...");
-                            [webview createPDFWithConfiguration:pdfConfig completionHandler:^(NSData * _Nullable pdfData, NSError * _Nullable error2) {
-                                            logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] Fallback: createPDF completionHandler called (finished=%d, pdfData=%@, error=%@)", finished, pdfData ? @"not nil" : @"nil", error2 ? error2.localizedDescription : @"nil"] UTF8String]);
-                                if (finished) {
-                                                logPDFExport(logPath, "[PDF Export] Fallback: already finished, ignoring");
-                                    return;
-                                }
-                                if (error2 || !pdfData) {
-                                    NSString* msg = error2 ? [NSString stringWithFormat:@"PDF creation error (fallback): %@", error2.localizedDescription] : @"No PDF data (fallback)";
-                                    logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] ERROR (fallback): %@", msg] UTF8String]);
-                                    retErr = strdup([msg UTF8String]);
-                                } else {
-                                    logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] PDF data created (fallback), size: %lu bytes", (unsigned long)[pdfData length]] UTF8String]);
-                                    NSError* writeErr = nil;
-                                    BOOL writeSuccess = [pdfData writeToFile:outPath options:NSDataWritingAtomic error:&writeErr];
-                                    if (writeErr || !writeSuccess) {
-                                        NSString* msg = writeErr ? [NSString stringWithFormat:@"File write error (fallback): %@", writeErr.localizedDescription] : @"File write failed (fallback, unknown error)";
+                            if (pageWidthPt > 0 && pageHeightPt > 0) {
+                                logPDFExport(logPath, "[PDF Export] Fallback finite mode: using NSPrintOperation...");
+                                exportFiniteWithTimeoutAndFallback(webview, outPath, logPath, pageWidthPt, pageHeightPt, &retErr);
+                                finished = YES;
+                                dispatch_semaphore_signal(sem);
+                            } else {
+                                WKPDFConfiguration* pdfConfig = buildPDFConfig(pageWidthPt, pageHeightPt);
+                                            logPDFExport(logPath, "[PDF Export] Fallback infinite mode: Calling createPDFWithConfiguration...");
+                                [webview createPDFWithConfiguration:pdfConfig completionHandler:^(NSData * _Nullable pdfData, NSError * _Nullable error2) {
+                                                logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] Fallback: createPDF completionHandler called (finished=%d, pdfData=%@, error=%@)", finished, pdfData ? @"not nil" : @"nil", error2 ? error2.localizedDescription : @"nil"] UTF8String]);
+                                    if (finished) {
+                                                    logPDFExport(logPath, "[PDF Export] Fallback: already finished, ignoring");
+                                        return;
+                                    }
+                                    if (error2 || !pdfData) {
+                                        NSString* msg = error2 ? [NSString stringWithFormat:@"PDF creation error (fallback): %@", error2.localizedDescription] : @"No PDF data (fallback)";
                                         logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] ERROR (fallback): %@", msg] UTF8String]);
                                         retErr = strdup([msg UTF8String]);
                                     } else {
-                                        logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] PDF file written successfully (fallback) to: %@", outPath] UTF8String]);
+                                        logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] PDF data created (fallback), size: %lu bytes", (unsigned long)[pdfData length]] UTF8String]);
+                                        NSError* writeErr = nil;
+                                        BOOL writeSuccess = [pdfData writeToFile:outPath options:NSDataWritingAtomic error:&writeErr];
+                                        if (writeErr || !writeSuccess) {
+                                            NSString* msg = writeErr ? [NSString stringWithFormat:@"File write error (fallback): %@", writeErr.localizedDescription] : @"File write failed (fallback, unknown error)";
+                                            logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] ERROR (fallback): %@", msg] UTF8String]);
+                                            retErr = strdup([msg UTF8String]);
+                                        } else {
+                                            logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] PDF file written successfully (fallback) to: %@", outPath] UTF8String]);
+                                        }
                                     }
-                                }
-                                finished = YES;
-                                dispatch_semaphore_signal(sem);
-                            }];
+                                    finished = YES;
+                                    dispatch_semaphore_signal(sem);
+                                }];
+                            }
                         }
                     });
 
@@ -898,8 +1069,8 @@ import (
 	"unsafe"
 )
 
-// ExportHTMLToPDF renders HTML to a PDF at outPath using WKWebView
-func ExportHTMLToPDF(html string, outPath string, logPath string) error {
+// ExportHTMLToPDF renders HTML to a PDF at outPath using WKWebView.
+func ExportHTMLToPDF(html string, outPath string, logPath string, _ string, pageWidthPt float64, pageHeightPt float64) error {
 	// AppKit要件: メインスレッドで実行
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -911,7 +1082,7 @@ func ExportHTMLToPDF(html string, outPath string, logPath string) error {
 	cLogPath := C.CString(logPath)
 	defer C.free(unsafe.Pointer(cLogPath))
 
-	cerr := C.exportHTMLToPDFMac(cHtml, cOut, cLogPath)
+	cerr := C.exportHTMLToPDFMac(cHtml, cOut, cLogPath, C.double(pageWidthPt), C.double(pageHeightPt))
 	if cerr != nil {
 		defer C.free(unsafe.Pointer(cerr))
 		return fmt.Errorf("%s", C.GoString(cerr))

@@ -33,6 +33,7 @@ import (
 	"karte/internal/markdown"
 	"karte/internal/marp"
 	pdfexport "karte/internal/pdf"
+	"karte/internal/printout"
 	"karte/internal/screenshot"
 	"karte/internal/site"
 	syncpkg "karte/internal/sync"
@@ -1805,6 +1806,8 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 		}
 	}
 
+	html = a.applyPrintoutConfigToPreviewHTML(html, frontMatter)
+
 	return html, nil
 }
 
@@ -3529,7 +3532,7 @@ func (a *App) ExportPDF(html string) (pdfURL string, err error) {
 			runtime.EventsEmit(a.ctx, "pdf-export-error", map[string]interface{}{
 				"error": panicMsg,
 			})
-				err = fmt.Errorf("%s", panicMsg)
+			err = fmt.Errorf("%s", panicMsg)
 		}
 	}()
 
@@ -3601,6 +3604,12 @@ func (a *App) openPDFInViewer(pdfPath string) error {
 // exportPDFInternal performs the actual PDF export work
 func (a *App) exportPDFInternal(html string) (string, error) {
 	html = a.injectPDFRenderHelpers(html)
+	printoutSpec := printout.ParseFromHTML(html)
+	pageDOMCount := countPrintPageSections(html)
+	readyMeta := extractMetaContent(html, "karte-printout-ready")
+	errorMeta := extractMetaContent(html, "karte-printout-error")
+	pagesMeta := extractMetaContent(html, "karte-printout-pages")
+	a.logInfo(fmt.Sprintf("ExportPDF: resolved printout=%s (finite=%v, pageDOMCount=%d, readyMeta=%q, pageMeta=%q, errorMeta=%q, htmlLen=%d)", printoutSpec.Name, !printoutSpec.Infinite, pageDOMCount, readyMeta, pagesMeta, errorMeta, len(html)))
 	// Convert image URLs to data URIs for PDF export
 	// WKWebView cannot access HTTP URLs, so we need to embed images as data URIs
 	// Track temporary files for cleanup
@@ -3703,7 +3712,7 @@ func (a *App) exportPDFInternal(html string) (string, error) {
 	})
 
 	a.logInfo("ExportPDF: Calling pdfexport.ExportHTMLToPDF...")
-	if err := pdfexport.ExportHTMLToPDF(html, pdfPath, a.logFilePath); err != nil {
+	if err := pdfexport.ExportHTMLToPDF(html, pdfPath, a.logFilePath, printoutSpec.Name, printoutSpec.WidthPT(), printoutSpec.HeightPT()); err != nil {
 		a.logError(fmt.Sprintf("ExportPDF failed: %v", err))
 		return "", fmt.Errorf("PDF export failed: %w", err)
 	}
@@ -3863,6 +3872,378 @@ func (a *App) ensurePDFRenderAssets(html string) string {
 		return re.ReplaceAllString(html, "<!doctype html>\n<head>\n"+injection+"\n</head>")
 	}
 	return injection + "\n" + html
+}
+
+func (a *App) applyPrintoutConfigToPreviewHTML(html string, frontMatter *fm.FrontMatter) string {
+	spec := printout.Resolve("")
+	raw := ""
+	if frontMatter != nil {
+		raw = strings.TrimSpace(frontMatter.Printout)
+		spec = printout.Resolve(raw)
+	}
+	if raw != "" && spec.Name == printout.Infinite && !strings.EqualFold(raw, printout.Infinite) {
+		a.logInfo(fmt.Sprintf("PreviewMarkdown: unknown printout %q, fallback to infinite", raw))
+	}
+	html = upsertPrintoutMeta(html, spec.Name)
+	html = setHTMLDataPrintoutAttr(html, spec.Name)
+	if spec.Infinite {
+		return html
+	}
+	return injectPrintoutLayout(html, spec)
+}
+
+func upsertPrintoutMeta(html, printoutName string) string {
+	meta := fmt.Sprintf(`<meta name="karte-printout" content="%s">`, printoutName)
+	metaRe := regexp.MustCompile(`(?i)<meta[^>]+name=["']karte-printout["'][^>]*>`)
+	if metaRe.MatchString(html) {
+		return metaRe.ReplaceAllString(html, meta)
+	}
+	return injectIntoHead(html, meta)
+}
+
+func setHTMLDataPrintoutAttr(html, printoutName string) string {
+	htmlTagRe := regexp.MustCompile(`(?i)<html([^>]*)>`)
+	if htmlTagRe.MatchString(html) {
+		return htmlTagRe.ReplaceAllStringFunc(html, func(tag string) string {
+			attrRe := regexp.MustCompile(`(?i)\sdata-printout=["'][^"']*["']`)
+			if attrRe.MatchString(tag) {
+				return attrRe.ReplaceAllString(tag, fmt.Sprintf(` data-printout="%s"`, printoutName))
+			}
+			return strings.TrimSuffix(tag, ">") + fmt.Sprintf(` data-printout="%s">`, printoutName)
+		})
+	}
+	return `<html data-printout="` + printoutName + `">` + html + `</html>`
+}
+
+func injectIntoHead(html, fragment string) string {
+	if strings.Contains(html, "</head>") {
+		return strings.Replace(html, "</head>", fragment+"\n</head>", 1)
+	}
+	if strings.Contains(html, "<head>") {
+		return strings.Replace(html, "<head>", "<head>\n"+fragment+"\n", 1)
+	}
+	if strings.Contains(strings.ToLower(html), "<html") {
+		re := regexp.MustCompile(`(?i)<html([^>]*)>`)
+		return re.ReplaceAllString(html, `<html$1><head>`+fragment+`</head>`)
+	}
+	if strings.Contains(strings.ToLower(html), "<!doctype html>") {
+		re := regexp.MustCompile(`(?i)<!doctype html>`)
+		return re.ReplaceAllString(html, "<!doctype html>\n<head>\n"+fragment+"\n</head>")
+	}
+	return "<head>\n" + fragment + "\n</head>\n" + html
+}
+
+func countPrintPageSections(html string) int {
+	re := regexp.MustCompile(`(?is)<section[^>]*class=["'][^"']*\bkarte-print-page\b[^"']*["'][^>]*>`)
+	return len(re.FindAllStringIndex(html, -1))
+}
+
+func extractMetaContent(html, name string) string {
+	pattern := fmt.Sprintf(`(?is)<meta[^>]*name=["']%s["'][^>]*content=["']([^"']*)["'][^>]*>`, regexp.QuoteMeta(name))
+	re := regexp.MustCompile(pattern)
+	m := re.FindStringSubmatch(html)
+	if len(m) >= 2 {
+		return m[1]
+	}
+	return ""
+}
+
+func injectPrintoutLayout(html string, spec printout.Spec) string {
+	styleTagRe := regexp.MustCompile(`(?is)<style[^>]*id=["']karte-printout-style["'][^>]*>.*?</style>`)
+	scriptTagRe := regexp.MustCompile(`(?is)<script[^>]*id=["']karte-printout-pagination["'][^>]*>.*?</script>`)
+	html = styleTagRe.ReplaceAllString(html, "")
+	html = scriptTagRe.ReplaceAllString(html, "")
+
+	contentWidthMM := spec.WidthMM - 24.0
+	contentHeightMM := spec.HeightMM - 24.0
+	if contentWidthMM < 10 {
+		contentWidthMM = spec.WidthMM
+	}
+	if contentHeightMM < 10 {
+		contentHeightMM = spec.HeightMM
+	}
+
+	style := fmt.Sprintf(`<style id="karte-printout-style">
+:root {
+  --karte-print-page-width: %.3gmm;
+  --karte-print-page-height: %.3gmm;
+  --karte-print-content-width: %.3gmm;
+  --karte-print-content-height: %.3gmm;
+}
+@page {
+  size: %.3gmm %.3gmm;
+  margin: 0;
+}
+html[data-printout]:not([data-printout="infinite"]) main.container {
+  max-width: none !important;
+  margin: 0 auto !important;
+  padding: 16px !important;
+}
+html[data-printout]:not([data-printout="infinite"]) article {
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  inline-size: var(--karte-print-page-width);
+  max-inline-size: var(--karte-print-page-width);
+}
+html[data-printout]:not([data-printout="infinite"]) .karte-print-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page {
+  width: var(--karte-print-page-width);
+  height: var(--karte-print-page-height);
+  box-sizing: border-box;
+  background: #fff;
+  color: inherit;
+  overflow: hidden;
+  border: 1px solid #ddd;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  break-after: page;
+  page-break-after: always;
+}
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page:last-child {
+  break-after: auto;
+  page-break-after: auto;
+}
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content {
+  box-sizing: border-box;
+  inline-size: 100%%;
+  block-size: 100%%;
+  padding: 12mm;
+  overflow: hidden;
+}
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content * {
+  box-sizing: border-box;
+  max-inline-size: 100%% !important;
+}
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content p,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content li,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content h1,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content h2,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content h3,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content h4,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content h5,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content h6,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content td,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content th {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content img,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content table,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content pre,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content code {
+  max-inline-size: 100%% !important;
+}
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content table,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content pre {
+  overflow-x: auto;
+}
+@media print {
+  html[data-printout]:not([data-printout="infinite"]) body {
+    background: #fff !important;
+  }
+  html[data-printout]:not([data-printout="infinite"]) main.container {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  html[data-printout]:not([data-printout="infinite"]) .karte-print-pages {
+    gap: 0;
+  }
+  html[data-printout]:not([data-printout="infinite"]) .karte-print-page {
+    margin: 0;
+    border: 0;
+    box-shadow: none;
+  }
+}
+</style>`, spec.WidthMM, spec.HeightMM, contentWidthMM, contentHeightMM, spec.WidthMM, spec.HeightMM)
+
+	script := `<script id="karte-printout-pagination">
+(function() {
+  function setMeta(name, content) {
+    var head = document.head || document.documentElement;
+    if (!head) return;
+    var selector = 'meta[name="' + name + '"]';
+    var el = head.querySelector(selector);
+    if (!el) {
+      el = document.createElement('meta');
+      el.setAttribute('name', name);
+      head.appendChild(el);
+    }
+    el.setAttribute('content', content || '');
+  }
+  function reportReady(state, err, pages) {
+    window.__kartePrintoutReady = state;
+    if (err) {
+      window.__kartePrintoutError = String(err);
+    } else {
+      window.__kartePrintoutError = '';
+    }
+    setMeta('karte-printout-ready', String(state));
+    setMeta('karte-printout-error', err ? String(err) : '');
+    if (typeof pages === 'number') {
+      setMeta('karte-printout-pages', String(pages));
+    }
+  }
+  reportReady(false, '', 0);
+  function shouldPaginate() {
+    var root = document.documentElement;
+    if (!root) return false;
+    var mode = root.getAttribute('data-printout');
+    return mode && mode.toLowerCase() !== 'infinite';
+  }
+  function resetArticle(article) {
+    if (!article.dataset.kartePrintOriginalHtml) return;
+    article.innerHTML = article.dataset.kartePrintOriginalHtml;
+  }
+  function isAtomic(el) {
+    if (!el || !el.tagName) return false;
+    var tag = el.tagName.toUpperCase();
+    return tag === 'IMG' || tag === 'PRE' || tag === 'TABLE' || tag === 'SVG' || tag === 'CANVAS' || tag === 'IFRAME' || tag === 'VIDEO';
+  }
+  function fitBlockIfNeeded(block, maxHeight) {
+    if (!block) return;
+    block.style.zoom = '';
+    var height = block.getBoundingClientRect().height;
+    if (height <= maxHeight + 1 || height <= 0) return;
+    var scale = Math.max(0.15, maxHeight / height);
+    block.style.zoom = String(scale);
+  }
+  function flowBlocksFromArticle(article) {
+    var direct = Array.from(article.children);
+    if (direct.length === 1) {
+      var only = direct[0];
+      var hasTextSiblings = false;
+      for (var i = 0; i < article.childNodes.length; i++) {
+        var node = article.childNodes[i];
+        if (node.nodeType === Node.TEXT_NODE && node.textContent && node.textContent.trim() !== '') {
+          hasTextSiblings = true;
+          break;
+        }
+      }
+      if (!hasTextSiblings && only && only.children && only.children.length > 0) {
+        return Array.from(only.children);
+      }
+    }
+    return direct;
+  }
+  function buildPages() {
+    var pageCount = 0;
+    reportReady(false, '', pageCount);
+    try {
+      if (!shouldPaginate()) {
+        reportReady(true, '', pageCount);
+        return;
+      }
+      var article = document.querySelector('article');
+      if (!article) {
+        reportReady(true, '', pageCount);
+        return;
+      }
+      if (!article.dataset.kartePrintOriginalHtml) {
+        article.dataset.kartePrintOriginalHtml = article.innerHTML;
+      } else {
+        resetArticle(article);
+      }
+      var blocks = flowBlocksFromArticle(article);
+      if (blocks.length === 0) {
+        reportReady(true, '', pageCount);
+        return;
+      }
+      var pages = document.createElement('div');
+      pages.className = 'karte-print-pages';
+      article.innerHTML = '';
+      article.appendChild(pages);
+
+      function createPage() {
+        var page = document.createElement('section');
+        page.className = 'karte-print-page';
+        var content = document.createElement('div');
+        content.className = 'karte-print-page-content';
+        page.appendChild(content);
+        pages.appendChild(page);
+        pageCount = pages.querySelectorAll('section.karte-print-page').length;
+        return content;
+      }
+
+      var current = createPage();
+      var maxHeight = current.clientHeight;
+      blocks.forEach(function(block) {
+        block.style.zoom = '';
+        current.appendChild(block);
+        if (current.scrollHeight <= maxHeight + 1) return;
+
+        current.removeChild(block);
+        if (current.children.length === 0) {
+          current.appendChild(block);
+          if (isAtomic(block)) {
+            fitBlockIfNeeded(block, maxHeight);
+            return;
+          }
+          var children = Array.from(block.children || []);
+          if (children.length === 0) {
+            fitBlockIfNeeded(block, maxHeight);
+            return;
+          }
+          current.removeChild(block);
+          children.forEach(function(child) {
+            current.appendChild(child);
+            if (current.scrollHeight <= maxHeight + 1) return;
+            current.removeChild(child);
+            current = createPage();
+            maxHeight = current.clientHeight;
+            current.appendChild(child);
+          });
+          return;
+        }
+
+        current = createPage();
+        maxHeight = current.clientHeight;
+        current.appendChild(block);
+        if (current.scrollHeight > maxHeight + 1 && isAtomic(block)) {
+          fitBlockIfNeeded(block, maxHeight);
+        }
+      });
+      reportReady(true, '', pageCount);
+    } catch (err) {
+      var message = err && err.message ? err.message : String(err);
+      reportReady('error', message, pageCount);
+    } finally {
+      if (window.__kartePrintoutReady !== true && window.__kartePrintoutReady !== 'error') {
+        reportReady(true, '', pageCount);
+      }
+    }
+  }
+
+  var timer;
+  function schedule() {
+    clearTimeout(timer);
+    reportReady(false, '', 0);
+    timer = setTimeout(buildPages, 60);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', schedule);
+  } else {
+    schedule();
+  }
+  window.addEventListener('load', schedule);
+  window.addEventListener('resize', schedule);
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(schedule).catch(function() {});
+  }
+})();
+</script>`
+
+	html = injectIntoHead(html, style)
+	if strings.Contains(html, "</body>") {
+		return strings.Replace(html, "</body>", script+"\n</body>", 1)
+	}
+	return html + "\n" + script
 }
 
 // convertImageURLsToDataURIs converts image URLs in HTML to data URIs
