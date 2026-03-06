@@ -2,6 +2,7 @@ package frontmatter
 
 import (
 	"fmt"
+	"karte/internal/printout"
 	"regexp"
 	"strings"
 	"unicode"
@@ -11,12 +12,13 @@ import (
 
 // FrontMatter represents the YAML frontmatter structure
 type FrontMatter struct {
-	Title string         `yaml:"title"`
-	Tags  string         `yaml:"tags"` // Comma-separated tags string
-	Theme string         `yaml:"theme"`
-	Marp  bool           `yaml:"marp"` // Marp presentation mode
-	DocID string         `yaml:"doc_id"` // Document ID (logical document identifier)
-	Raw   map[string]any // Capture remaining custom fields
+	Title    string         `yaml:"title"`
+	Tags     string         `yaml:"tags"` // Comma-separated tags string
+	Theme    string         `yaml:"theme"`
+	Marp     bool           `yaml:"marp"`   // Marp presentation mode
+	DocID    string         `yaml:"doc_id"` // Document ID (logical document identifier)
+	Printout string         `yaml:"printout"`
+	Raw      map[string]any // Capture remaining custom fields
 }
 
 // UnmarshalYAML implements custom unmarshaling to handle both known and custom fields
@@ -49,6 +51,10 @@ func (fm *FrontMatter) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	if docID, ok := raw["doc_id"].(string); ok {
 		fm.DocID = docID
 		delete(raw, "doc_id")
+	}
+	if printoutValue, ok := raw["printout"].(string); ok {
+		fm.Printout = NormalizePrintout(printoutValue)
+		delete(raw, "printout")
 	}
 
 	// Store remaining fields in Raw
@@ -180,12 +186,15 @@ func FormatFrontMatter(fm *FrontMatter) string {
 	if fm.DocID != "" {
 		lines = append(lines, fmt.Sprintf(`doc_id: "%s"`, escapeYAMLString(fm.DocID)))
 	}
+	if normalized := NormalizePrintout(fm.Printout); normalized != "" {
+		lines = append(lines, fmt.Sprintf(`printout: "%s"`, escapeYAMLString(normalized)))
+	}
 
 	// Format custom fields from Raw
 	if fm.Raw != nil {
 		for key, value := range fm.Raw {
 			// Skip already handled fields
-			if key == "title" || key == "tags" || key == "theme" || key == "doc_id" {
+			if key == "title" || key == "tags" || key == "theme" || key == "doc_id" || key == "printout" {
 				continue
 			}
 			// Format with quotes for string values
@@ -204,6 +213,10 @@ func FormatFrontMatter(fm *FrontMatter) string {
 
 	lines = append(lines, "---")
 	return strings.Join(lines, "\n") + "\n"
+}
+
+func NormalizePrintout(value string) string {
+	return printout.Normalize(value)
 }
 
 // escapeYAMLString escapes special characters in YAML string
@@ -247,4 +260,12 @@ func ExtractDocID(content string) string {
 		return fm.DocID
 	}
 	return ""
+}
+
+func ExtractPrintout(content string) string {
+	fm, _ := ParseFrontMatter(content)
+	if fm == nil {
+		return printout.Infinite
+	}
+	return NormalizePrintout(fm.Printout)
 }
