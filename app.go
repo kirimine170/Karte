@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
@@ -57,6 +58,9 @@ var (
 	}
 	backupImageExtCandidates = []string{".jpg", ".jpeg", ".png", ".gif"}
 )
+
+//go:embed frontend/src/printout/generated/pagination-runtime.js
+var kartePrintoutPaginationRuntime string
 
 const maxImageSizeForPDF = 10 * 1024 * 1024 // 10MB
 const maxImageWidthForPDF = 800             // PDF表示用に最大横幅800px（Previewで開く速度を改善）
@@ -4063,180 +4067,8 @@ html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content pr
 </style>`, spec.WidthMM, spec.HeightMM, contentWidthMM, contentHeightMM, spec.WidthMM, spec.HeightMM)
 
 	script := `<script id="karte-printout-pagination">
-(function() {
-  function setMeta(name, content) {
-    var head = document.head || document.documentElement;
-    if (!head) return;
-    var selector = 'meta[name="' + name + '"]';
-    var el = head.querySelector(selector);
-    if (!el) {
-      el = document.createElement('meta');
-      el.setAttribute('name', name);
-      head.appendChild(el);
-    }
-    el.setAttribute('content', content || '');
-  }
-  function reportReady(state, err, pages) {
-    window.__kartePrintoutReady = state;
-    if (err) {
-      window.__kartePrintoutError = String(err);
-    } else {
-      window.__kartePrintoutError = '';
-    }
-    setMeta('karte-printout-ready', String(state));
-    setMeta('karte-printout-error', err ? String(err) : '');
-    if (typeof pages === 'number') {
-      setMeta('karte-printout-pages', String(pages));
-    }
-  }
-  reportReady(false, '', 0);
-  function shouldPaginate() {
-    var root = document.documentElement;
-    if (!root) return false;
-    var mode = root.getAttribute('data-printout');
-    return mode && mode.toLowerCase() !== 'infinite';
-  }
-  function resetArticle(article) {
-    if (!article.dataset.kartePrintOriginalHtml) return;
-    article.innerHTML = article.dataset.kartePrintOriginalHtml;
-  }
-  function isAtomic(el) {
-    if (!el || !el.tagName) return false;
-    var tag = el.tagName.toUpperCase();
-    return tag === 'IMG' || tag === 'PRE' || tag === 'TABLE' || tag === 'SVG' || tag === 'CANVAS' || tag === 'IFRAME' || tag === 'VIDEO';
-  }
-  function fitBlockIfNeeded(block, maxHeight) {
-    if (!block) return;
-    block.style.zoom = '';
-    var height = block.getBoundingClientRect().height;
-    if (height <= maxHeight + 1 || height <= 0) return;
-    var scale = Math.max(0.15, maxHeight / height);
-    block.style.zoom = String(scale);
-  }
-  function flowBlocksFromArticle(article) {
-    var direct = Array.from(article.children);
-    if (direct.length === 1) {
-      var only = direct[0];
-      var hasTextSiblings = false;
-      for (var i = 0; i < article.childNodes.length; i++) {
-        var node = article.childNodes[i];
-        if (node.nodeType === Node.TEXT_NODE && node.textContent && node.textContent.trim() !== '') {
-          hasTextSiblings = true;
-          break;
-        }
-      }
-      if (!hasTextSiblings && only && only.children && only.children.length > 0) {
-        return Array.from(only.children);
-      }
-    }
-    return direct;
-  }
-  function buildPages() {
-    var pageCount = 0;
-    reportReady(false, '', pageCount);
-    try {
-      if (!shouldPaginate()) {
-        reportReady(true, '', pageCount);
-        return;
-      }
-      var article = document.querySelector('article');
-      if (!article) {
-        reportReady(true, '', pageCount);
-        return;
-      }
-      if (!article.dataset.kartePrintOriginalHtml) {
-        article.dataset.kartePrintOriginalHtml = article.innerHTML;
-      } else {
-        resetArticle(article);
-      }
-      var blocks = flowBlocksFromArticle(article);
-      if (blocks.length === 0) {
-        reportReady(true, '', pageCount);
-        return;
-      }
-      var pages = document.createElement('div');
-      pages.className = 'karte-print-pages';
-      article.innerHTML = '';
-      article.appendChild(pages);
-
-      function createPage() {
-        var page = document.createElement('section');
-        page.className = 'karte-print-page';
-        var content = document.createElement('div');
-        content.className = 'karte-print-page-content';
-        page.appendChild(content);
-        pages.appendChild(page);
-        pageCount = pages.querySelectorAll('section.karte-print-page').length;
-        return content;
-      }
-
-      var current = createPage();
-      var maxHeight = current.clientHeight;
-      blocks.forEach(function(block) {
-        block.style.zoom = '';
-        current.appendChild(block);
-        if (current.scrollHeight <= maxHeight + 1) return;
-
-        current.removeChild(block);
-        if (current.children.length === 0) {
-          current.appendChild(block);
-          if (isAtomic(block)) {
-            fitBlockIfNeeded(block, maxHeight);
-            return;
-          }
-          var children = Array.from(block.children || []);
-          if (children.length === 0) {
-            fitBlockIfNeeded(block, maxHeight);
-            return;
-          }
-          current.removeChild(block);
-          children.forEach(function(child) {
-            current.appendChild(child);
-            if (current.scrollHeight <= maxHeight + 1) return;
-            current.removeChild(child);
-            current = createPage();
-            maxHeight = current.clientHeight;
-            current.appendChild(child);
-          });
-          return;
-        }
-
-        current = createPage();
-        maxHeight = current.clientHeight;
-        current.appendChild(block);
-        if (current.scrollHeight > maxHeight + 1 && isAtomic(block)) {
-          fitBlockIfNeeded(block, maxHeight);
-        }
-      });
-      reportReady(true, '', pageCount);
-    } catch (err) {
-      var message = err && err.message ? err.message : String(err);
-      reportReady('error', message, pageCount);
-    } finally {
-      if (window.__kartePrintoutReady !== true && window.__kartePrintoutReady !== 'error') {
-        reportReady(true, '', pageCount);
-      }
-    }
-  }
-
-  var timer;
-  function schedule() {
-    clearTimeout(timer);
-    reportReady(false, '', 0);
-    timer = setTimeout(buildPages, 60);
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', schedule);
-  } else {
-    schedule();
-  }
-  window.addEventListener('load', schedule);
-  window.addEventListener('resize', schedule);
-  if (document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(schedule).catch(function() {});
-  }
-})();
+` + kartePrintoutPaginationRuntime + `
+window.__karteRunPrintoutPagination && window.__karteRunPrintoutPagination(window.document);
 </script>`
 
 	html = injectIntoHead(html, style)

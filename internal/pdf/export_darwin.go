@@ -12,6 +12,8 @@ package pdf
 #include <mach/mach.h>
 #include <mach/task_info.h>
 
+extern void getFiniteFallbackPDFConfigDimensions(double pageWidthPt, double pageHeightPt, double* outWidthPt, double* outHeightPt);
+
 // ログを出力するヘルパー関数（ログファイルに直接書き込む）
 static void logPDFExport(const char* logPath, const char* msg) {
     if (logPath == NULL || strlen(logPath) == 0) {
@@ -294,7 +296,7 @@ static BOOL writePDFDataToPath(NSData* pdfData, NSString* outPath, const char* l
     return YES;
 }
 
-static BOOL exportUsingCreatePDFFallback(WKWebView* webview, NSString* outPath, const char* logPath, const char** retErr) {
+static BOOL exportUsingCreatePDFFallback(WKWebView* webview, NSString* outPath, const char* logPath, double pageWidthPt, double pageHeightPt, const char** retErr) {
     if (!@available(macOS 11.0, *)) {
         NSString* msg = @"macOS 11+ required for WKWebView PDF";
         logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] ERROR: %@", msg] UTF8String]);
@@ -308,7 +310,10 @@ static BOOL exportUsingCreatePDFFallback(WKWebView* webview, NSString* outPath, 
     __block BOOL success = NO;
     __block NSString* fallbackErr = nil;
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-    WKPDFConfiguration* pdfConfig = buildPDFConfig(0, 0);
+    double fallbackPageWidthPt = 0;
+    double fallbackPageHeightPt = 0;
+    getFiniteFallbackPDFConfigDimensions(pageWidthPt, pageHeightPt, &fallbackPageWidthPt, &fallbackPageHeightPt);
+    WKPDFConfiguration* pdfConfig = buildPDFConfig(fallbackPageWidthPt, fallbackPageHeightPt);
     [webview createPDFWithConfiguration:pdfConfig completionHandler:^(NSData * _Nullable pdfData, NSError * _Nullable error) {
         if (error) {
             fallbackErr = [NSString stringWithFormat:@"Fallback createPDF error: %@", error.localizedDescription];
@@ -401,7 +406,7 @@ static BOOL exportFiniteWithTimeoutAndFallback(WKWebView* webview, NSString* out
     }
 
     logPDFExport(logPath, "[PDF Export] finite-path failed, trying fallback createPDF");
-    BOOL fallbackOK = exportUsingCreatePDFFallback(webview, outPath, logPath, retErr);
+    BOOL fallbackOK = exportUsingCreatePDFFallback(webview, outPath, logPath, pageWidthPt, pageHeightPt, retErr);
     if (fallbackOK) {
         logPDFExport(logPath, "[PDF Export] finite-fallback-succeeded");
         return YES;
