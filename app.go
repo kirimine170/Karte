@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
@@ -33,6 +34,7 @@ import (
 	"karte/internal/markdown"
 	"karte/internal/marp"
 	pdfexport "karte/internal/pdf"
+	"karte/internal/printout"
 	"karte/internal/screenshot"
 	"karte/internal/site"
 	syncpkg "karte/internal/sync"
@@ -56,6 +58,9 @@ var (
 	}
 	backupImageExtCandidates = []string{".jpg", ".jpeg", ".png", ".gif"}
 )
+
+//go:embed frontend/src/printout/generated/pagination-runtime.js
+var kartePrintoutPaginationRuntime string
 
 const maxImageSizeForPDF = 10 * 1024 * 1024 // 10MB
 const maxImageWidthForPDF = 800             // PDF表示用に最大横幅800px（Previewで開く速度を改善）
@@ -1805,6 +1810,8 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 		}
 	}
 
+	html = a.applyPrintoutConfigToPreviewHTML(html, frontMatter)
+
 	return html, nil
 }
 
@@ -3529,7 +3536,7 @@ func (a *App) ExportPDF(html string) (pdfURL string, err error) {
 			runtime.EventsEmit(a.ctx, "pdf-export-error", map[string]interface{}{
 				"error": panicMsg,
 			})
-				err = fmt.Errorf("%s", panicMsg)
+			err = fmt.Errorf("%s", panicMsg)
 		}
 	}()
 
@@ -3601,6 +3608,12 @@ func (a *App) openPDFInViewer(pdfPath string) error {
 // exportPDFInternal performs the actual PDF export work
 func (a *App) exportPDFInternal(html string) (string, error) {
 	html = a.injectPDFRenderHelpers(html)
+	printoutSpec := printout.ParseFromHTML(html)
+	pageDOMCount := countPrintPageSections(html)
+	readyMeta := extractMetaContent(html, "karte-printout-ready")
+	errorMeta := extractMetaContent(html, "karte-printout-error")
+	pagesMeta := extractMetaContent(html, "karte-printout-pages")
+	a.logInfo(fmt.Sprintf("ExportPDF: resolved printout=%s (finite=%v, pageDOMCount=%d, readyMeta=%q, pageMeta=%q, errorMeta=%q, htmlLen=%d)", printoutSpec.Name, !printoutSpec.Infinite, pageDOMCount, readyMeta, pagesMeta, errorMeta, len(html)))
 	// Convert image URLs to data URIs for PDF export
 	// WKWebView cannot access HTTP URLs, so we need to embed images as data URIs
 	// Track temporary files for cleanup
@@ -3703,7 +3716,7 @@ func (a *App) exportPDFInternal(html string) (string, error) {
 	})
 
 	a.logInfo("ExportPDF: Calling pdfexport.ExportHTMLToPDF...")
-	if err := pdfexport.ExportHTMLToPDF(html, pdfPath, a.logFilePath); err != nil {
+	if err := pdfexport.ExportHTMLToPDF(html, pdfPath, a.logFilePath, printoutSpec.Name, printoutSpec.WidthPT(), printoutSpec.HeightPT()); err != nil {
 		a.logError(fmt.Sprintf("ExportPDF failed: %v", err))
 		return "", fmt.Errorf("PDF export failed: %w", err)
 	}
@@ -3863,6 +3876,206 @@ func (a *App) ensurePDFRenderAssets(html string) string {
 		return re.ReplaceAllString(html, "<!doctype html>\n<head>\n"+injection+"\n</head>")
 	}
 	return injection + "\n" + html
+}
+
+func (a *App) applyPrintoutConfigToPreviewHTML(html string, frontMatter *fm.FrontMatter) string {
+	spec := printout.Resolve("")
+	raw := ""
+	if frontMatter != nil {
+		raw = strings.TrimSpace(frontMatter.Printout)
+		spec = printout.Resolve(raw)
+	}
+	if raw != "" && spec.Name == printout.Infinite && !strings.EqualFold(raw, printout.Infinite) {
+		a.logInfo(fmt.Sprintf("PreviewMarkdown: unknown printout %q, fallback to infinite", raw))
+	}
+	html = upsertPrintoutMeta(html, spec.Name)
+	html = setHTMLDataPrintoutAttr(html, spec.Name)
+	if spec.Infinite {
+		return html
+	}
+	return injectPrintoutLayout(html, spec)
+}
+
+func upsertPrintoutMeta(html, printoutName string) string {
+	meta := fmt.Sprintf(`<meta name="karte-printout" content="%s">`, printoutName)
+	metaRe := regexp.MustCompile(`(?i)<meta[^>]+name=["']karte-printout["'][^>]*>`)
+	if metaRe.MatchString(html) {
+		return metaRe.ReplaceAllString(html, meta)
+	}
+	return injectIntoHead(html, meta)
+}
+
+func setHTMLDataPrintoutAttr(html, printoutName string) string {
+	htmlTagRe := regexp.MustCompile(`(?i)<html([^>]*)>`)
+	if htmlTagRe.MatchString(html) {
+		return htmlTagRe.ReplaceAllStringFunc(html, func(tag string) string {
+			attrRe := regexp.MustCompile(`(?i)\sdata-printout=["'][^"']*["']`)
+			if attrRe.MatchString(tag) {
+				return attrRe.ReplaceAllString(tag, fmt.Sprintf(` data-printout="%s"`, printoutName))
+			}
+			return strings.TrimSuffix(tag, ">") + fmt.Sprintf(` data-printout="%s">`, printoutName)
+		})
+	}
+	return `<html data-printout="` + printoutName + `">` + html + `</html>`
+}
+
+func injectIntoHead(html, fragment string) string {
+	if strings.Contains(html, "</head>") {
+		return strings.Replace(html, "</head>", fragment+"\n</head>", 1)
+	}
+	if strings.Contains(html, "<head>") {
+		return strings.Replace(html, "<head>", "<head>\n"+fragment+"\n", 1)
+	}
+	if strings.Contains(strings.ToLower(html), "<html") {
+		re := regexp.MustCompile(`(?i)<html([^>]*)>`)
+		return re.ReplaceAllString(html, `<html$1><head>`+fragment+`</head>`)
+	}
+	if strings.Contains(strings.ToLower(html), "<!doctype html>") {
+		re := regexp.MustCompile(`(?i)<!doctype html>`)
+		return re.ReplaceAllString(html, "<!doctype html>\n<head>\n"+fragment+"\n</head>")
+	}
+	return "<head>\n" + fragment + "\n</head>\n" + html
+}
+
+func countPrintPageSections(html string) int {
+	re := regexp.MustCompile(`(?is)<section[^>]*class=["'][^"']*\bkarte-print-page\b[^"']*["'][^>]*>`)
+	return len(re.FindAllStringIndex(html, -1))
+}
+
+func extractMetaContent(html, name string) string {
+	pattern := fmt.Sprintf(`(?is)<meta[^>]*name=["']%s["'][^>]*content=["']([^"']*)["'][^>]*>`, regexp.QuoteMeta(name))
+	re := regexp.MustCompile(pattern)
+	m := re.FindStringSubmatch(html)
+	if len(m) >= 2 {
+		return m[1]
+	}
+	return ""
+}
+
+func injectPrintoutLayout(html string, spec printout.Spec) string {
+	styleTagRe := regexp.MustCompile(`(?is)<style[^>]*id=["']karte-printout-style["'][^>]*>.*?</style>`)
+	scriptTagRe := regexp.MustCompile(`(?is)<script[^>]*id=["']karte-printout-pagination["'][^>]*>.*?</script>`)
+	html = styleTagRe.ReplaceAllString(html, "")
+	html = scriptTagRe.ReplaceAllString(html, "")
+
+	contentWidthMM := spec.WidthMM - 24.0
+	contentHeightMM := spec.HeightMM - 24.0
+	if contentWidthMM < 10 {
+		contentWidthMM = spec.WidthMM
+	}
+	if contentHeightMM < 10 {
+		contentHeightMM = spec.HeightMM
+	}
+
+	style := fmt.Sprintf(`<style id="karte-printout-style">
+:root {
+  --karte-print-page-width: %.3gmm;
+  --karte-print-page-height: %.3gmm;
+  --karte-print-content-width: %.3gmm;
+  --karte-print-content-height: %.3gmm;
+}
+@page {
+  size: %.3gmm %.3gmm;
+  margin: 0;
+}
+html[data-printout]:not([data-printout="infinite"]) main.container {
+  max-width: none !important;
+  margin: 0 auto !important;
+  padding: 16px !important;
+}
+html[data-printout]:not([data-printout="infinite"]) article {
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  inline-size: var(--karte-print-page-width);
+  max-inline-size: var(--karte-print-page-width);
+}
+html[data-printout]:not([data-printout="infinite"]) .karte-print-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page {
+  width: var(--karte-print-page-width);
+  height: var(--karte-print-page-height);
+  box-sizing: border-box;
+  background: #fff;
+  color: inherit;
+  overflow: hidden;
+  border: 1px solid #ddd;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  break-after: page;
+  page-break-after: always;
+}
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page:last-child {
+  break-after: auto;
+  page-break-after: auto;
+}
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content {
+  box-sizing: border-box;
+  inline-size: 100%%;
+  block-size: 100%%;
+  padding: 12mm;
+  overflow: hidden;
+}
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content * {
+  box-sizing: border-box;
+  max-inline-size: 100%% !important;
+}
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content p,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content li,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content h1,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content h2,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content h3,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content h4,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content h5,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content h6,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content td,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content th {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content img,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content table,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content pre,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content code {
+  max-inline-size: 100%% !important;
+}
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content table,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content pre {
+  overflow-x: auto;
+}
+@media print {
+  html[data-printout]:not([data-printout="infinite"]) body {
+    background: #fff !important;
+  }
+  html[data-printout]:not([data-printout="infinite"]) main.container {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  html[data-printout]:not([data-printout="infinite"]) .karte-print-pages {
+    gap: 0;
+  }
+  html[data-printout]:not([data-printout="infinite"]) .karte-print-page {
+    margin: 0;
+    border: 0;
+    box-shadow: none;
+  }
+}
+</style>`, spec.WidthMM, spec.HeightMM, contentWidthMM, contentHeightMM, spec.WidthMM, spec.HeightMM)
+
+	script := `<script id="karte-printout-pagination">
+` + kartePrintoutPaginationRuntime + `
+window.__karteRunPrintoutPagination && window.__karteRunPrintoutPagination(window.document);
+</script>`
+
+	html = injectIntoHead(html, style)
+	if strings.Contains(html, "</body>") {
+		return strings.Replace(html, "</body>", script+"\n</body>", 1)
+	}
+	return html + "\n" + script
 }
 
 // convertImageURLsToDataURIs converts image URLs in HTML to data URIs

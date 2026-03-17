@@ -1,0 +1,119 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import '../pagination-runtime';
+
+interface TestWindow extends Window {
+  __karteCreatePrintoutPagination?: (doc?: Document) => {
+    buildPages(): void;
+  };
+  __kartePrintoutReady?: unknown;
+  __kartePrintoutError?: unknown;
+}
+
+describe('printout pagination runtime', () => {
+  let clientHeightDescriptor: PropertyDescriptor | undefined;
+  let scrollHeightDescriptor: PropertyDescriptor | undefined;
+  let rectDescriptor: PropertyDescriptor | undefined;
+
+  function measureNode(node: Node): number {
+    if (!(node instanceof HTMLElement)) {
+      return 0;
+    }
+    const ownHeight = Number(node.dataset.height || 0);
+    if (ownHeight > 0) {
+      return ownHeight;
+    }
+    return Array.from(node.childNodes).reduce((total, child) => total + measureNode(child), 0);
+  }
+
+  beforeEach(() => {
+    clientHeightDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
+    scrollHeightDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
+    rectDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'getBoundingClientRect');
+
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true,
+      get() {
+        if (this.classList && this.classList.contains('karte-print-page-content')) {
+          return 100;
+        }
+        return Number(this.dataset.height || 0);
+      }
+    });
+
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get() {
+        if (this.classList && this.classList.contains('karte-print-page-content')) {
+          return Array.from(this.childNodes).reduce((total, child) => total + measureNode(child), 0);
+        }
+        return measureNode(this);
+      }
+    });
+
+    Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value() {
+        const height = measureNode(this as HTMLElement);
+        return { x: 0, y: 0, width: 0, height, top: 0, right: 0, bottom: height, left: 0, toJSON() { return {}; } };
+      }
+    });
+  });
+
+  afterEach(() => {
+    if (clientHeightDescriptor) {
+      Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientHeightDescriptor);
+    } else {
+      delete (HTMLElement.prototype as Partial<typeof HTMLElement.prototype>).clientHeight;
+    }
+    if (scrollHeightDescriptor) {
+      Object.defineProperty(HTMLElement.prototype, 'scrollHeight', scrollHeightDescriptor);
+    } else {
+      delete (HTMLElement.prototype as Partial<typeof HTMLElement.prototype>).scrollHeight;
+    }
+    if (rectDescriptor) {
+      Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', rectDescriptor);
+    } else {
+      delete (HTMLElement.prototype as Partial<typeof HTMLElement.prototype>).getBoundingClientRect;
+    }
+
+    const runtimeWindow = window as TestWindow;
+    delete runtimeWindow.__kartePrintoutReady;
+    delete runtimeWindow.__kartePrintoutError;
+  });
+
+  it('preserves list wrapper and direct text when splitting an oversized first block', () => {
+    document.documentElement.setAttribute('data-printout', 'A4');
+    document.body.innerHTML = `
+      <article>
+        <ul>
+          <li data-height="150">Lead text<span data-height="60">Part A</span><span data-height="60">Part B</span></li>
+        </ul>
+      </article>
+    `;
+
+    const runtimeWindow = window as TestWindow;
+    const pagination = runtimeWindow.__karteCreatePrintoutPagination?.(document);
+    pagination?.buildPages();
+
+    expect(document.querySelectorAll('section.karte-print-page').length).toBeGreaterThan(1);
+    expect(document.querySelector('article ul > li')).toBeTruthy();
+    expect(document.querySelector('article')?.textContent).toContain('Lead text');
+  });
+
+  it('preserves direct text nodes on a split wrapper block', () => {
+    document.documentElement.setAttribute('data-printout', 'A4');
+    document.body.innerHTML = `
+      <article>
+        <div>Lead text<span data-height="60">Part A</span><span data-height="60">Part B</span></div>
+      </article>
+    `;
+
+    const runtimeWindow = window as TestWindow;
+    const pagination = runtimeWindow.__karteCreatePrintoutPagination?.(document);
+    pagination?.buildPages();
+
+    expect(document.querySelectorAll('section.karte-print-page').length).toBeGreaterThan(1);
+    expect(document.querySelector('article .karte-print-page-content > div')).toBeTruthy();
+    expect(document.querySelector('article .karte-print-page-content > div')?.textContent).toContain('Lead text');
+  });
+});

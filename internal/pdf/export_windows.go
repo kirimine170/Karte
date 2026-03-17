@@ -18,9 +18,9 @@ import (
 //go:embed fonts/NotoSansJP-Regular.ttf
 var font []byte
 
-// ExportHTMLToPDF generates a PDF at outPath using gofpdf with UTF-8 font embedding.
+// ExportHTMLToPDF generates a PDF at outPath using wkhtmltopdf.
 // プレビューHTMLをそのままのレイアウトで出力することはできませんが、内容はテキストとして安全に出力します。
-func ExportHTMLToPDF(htmlStr string, outPath string, logPath string) error {
+func ExportHTMLToPDF(htmlStr string, outPath string, logPath string, pageSize string, _ float64, _ float64) error {
 	//TODO 第三引数としてlogPath: stringを受け取り、すべてのログはそこに向かって吐き出す
 
 	if strings.TrimSpace(htmlStr) == "" {
@@ -66,6 +66,9 @@ func ExportHTMLToPDF(htmlStr string, outPath string, logPath string) error {
 		// "--dpi", "300",
 		tmpHTML,
 		outPath,
+	}
+	if size := strings.TrimSpace(strings.ToUpper(pageSize)); size != "" && !strings.EqualFold(size, "infinite") {
+		args = append([]string{"--page-size", size}, args...)
 	}
 
 	cmd := exec.Command(wkhtmlPath, args...)
