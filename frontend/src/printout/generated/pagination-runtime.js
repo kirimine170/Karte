@@ -1,4 +1,11 @@
 "use strict";
+function shouldPreserveSingleWrapper(block) {
+    const tag = block.tagName.toUpperCase();
+    return tag === 'UL' || tag === 'OL';
+}
+function hasDirectTextNodes(block) {
+    return Array.from(block.childNodes).some((node) => node.nodeType === Node.TEXT_NODE && Boolean(node.textContent && node.textContent.trim() !== ''));
+}
 function createPrintoutPagination(doc = document) {
     const runtimeWindow = window;
     function setMeta(name, content) {
@@ -49,6 +56,38 @@ function createPrintoutPagination(doc = document) {
         const scale = Math.max(0.15, maxHeight / height);
         block.style.zoom = String(scale);
     }
+    function createSplitWrapper(current, block) {
+        const wrapper = block.cloneNode(false);
+        wrapper.style.zoom = '';
+        current.appendChild(wrapper);
+        return wrapper;
+    }
+    function distributeBlockAcrossPages(block, current, maxHeight, createPage) {
+        const nodes = Array.from(block.childNodes);
+        if (nodes.length === 0) {
+            current.appendChild(block);
+            fitBlockIfNeeded(block, maxHeight);
+            return { current, maxHeight };
+        }
+        let activeWrapper = createSplitWrapper(current, block);
+        for (const node of nodes) {
+            activeWrapper.appendChild(node);
+            if (current.scrollHeight <= maxHeight + 1) {
+                continue;
+            }
+            activeWrapper.removeChild(node);
+            if (!activeWrapper.hasChildNodes()) {
+                activeWrapper.appendChild(node);
+                fitBlockIfNeeded(activeWrapper, maxHeight);
+                return { current, maxHeight };
+            }
+            current = createPage();
+            maxHeight = current.clientHeight;
+            activeWrapper = createSplitWrapper(current, block);
+            activeWrapper.appendChild(node);
+        }
+        return { current, maxHeight };
+    }
     function flowBlocksFromArticle(article) {
         const direct = Array.from(article.children).filter((child) => child instanceof HTMLElement);
         if (direct.length === 1) {
@@ -61,7 +100,7 @@ function createPrintoutPagination(doc = document) {
                     break;
                 }
             }
-            if (!hasTextSiblings && only && only.children.length > 0) {
+            if (!hasTextSiblings && only && only.children.length > 0 && !shouldPreserveSingleWrapper(only) && !hasDirectTextNodes(only)) {
                 return Array.from(only.children).filter((child) => child instanceof HTMLElement);
             }
         }
@@ -119,21 +158,8 @@ function createPrintoutPagination(doc = document) {
                         fitBlockIfNeeded(block, maxHeight);
                         return;
                     }
-                    const children = Array.from(block.children).filter((child) => child instanceof HTMLElement);
-                    if (children.length === 0) {
-                        fitBlockIfNeeded(block, maxHeight);
-                        return;
-                    }
                     current.removeChild(block);
-                    children.forEach((child) => {
-                        current.appendChild(child);
-                        if (current.scrollHeight <= maxHeight + 1)
-                            return;
-                        current.removeChild(child);
-                        current = createPage();
-                        maxHeight = current.clientHeight;
-                        current.appendChild(child);
-                    });
+                    ({ current, maxHeight } = distributeBlockAcrossPages(block, current, maxHeight, createPage));
                     return;
                 }
                 current = createPage();

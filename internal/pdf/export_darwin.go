@@ -267,8 +267,9 @@ static PDFExportDelegate* sPDFDelegate = nil;
 
 static WKPDFConfiguration* buildPDFConfig(double pageWidthPt, double pageHeightPt) {
     WKPDFConfiguration* pdfConfig = [WKPDFConfiguration new];
-    (void)pageWidthPt;
-    (void)pageHeightPt;
+    if (pageWidthPt > 0 && pageHeightPt > 0) {
+        pdfConfig.rect = CGRectMake(0, 0, pageWidthPt, pageHeightPt);
+    }
     return pdfConfig;
 }
 

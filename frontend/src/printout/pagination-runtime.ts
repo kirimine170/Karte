@@ -13,6 +13,15 @@ interface KartePrintoutWindow extends Window {
   __kartePrintoutError?: string;
 }
 
+function shouldPreserveSingleWrapper(block: HTMLElement): boolean {
+  const tag = block.tagName.toUpperCase();
+  return tag === 'UL' || tag === 'OL';
+}
+
+function hasDirectTextNodes(block: HTMLElement): boolean {
+  return Array.from(block.childNodes).some((node) => node.nodeType === Node.TEXT_NODE && Boolean(node.textContent && node.textContent.trim() !== ''));
+}
+
 function createPrintoutPagination(doc: Document = document): PrintoutPaginationController {
   const runtimeWindow = window as KartePrintoutWindow;
 
@@ -64,6 +73,49 @@ function createPrintoutPagination(doc: Document = document): PrintoutPaginationC
     block.style.zoom = String(scale);
   }
 
+  function createSplitWrapper(current: HTMLElement, block: HTMLElement): HTMLElement {
+    const wrapper = block.cloneNode(false) as HTMLElement;
+    wrapper.style.zoom = '';
+    current.appendChild(wrapper);
+    return wrapper;
+  }
+
+  function distributeBlockAcrossPages(
+    block: HTMLElement,
+    current: HTMLElement,
+    maxHeight: number,
+    createPage: () => HTMLElement,
+  ): { current: HTMLElement; maxHeight: number } {
+    const nodes = Array.from(block.childNodes);
+    if (nodes.length === 0) {
+      current.appendChild(block);
+      fitBlockIfNeeded(block, maxHeight);
+      return { current, maxHeight };
+    }
+
+    let activeWrapper = createSplitWrapper(current, block);
+    for (const node of nodes) {
+      activeWrapper.appendChild(node);
+      if (current.scrollHeight <= maxHeight + 1) {
+        continue;
+      }
+
+      activeWrapper.removeChild(node);
+      if (!activeWrapper.hasChildNodes()) {
+        activeWrapper.appendChild(node);
+        fitBlockIfNeeded(activeWrapper, maxHeight);
+        return { current, maxHeight };
+      }
+
+      current = createPage();
+      maxHeight = current.clientHeight;
+      activeWrapper = createSplitWrapper(current, block);
+      activeWrapper.appendChild(node);
+    }
+
+    return { current, maxHeight };
+  }
+
   function flowBlocksFromArticle(article: HTMLElement): HTMLElement[] {
     const direct = Array.from(article.children).filter((child): child is HTMLElement => child instanceof HTMLElement);
     if (direct.length === 1) {
@@ -76,7 +128,7 @@ function createPrintoutPagination(doc: Document = document): PrintoutPaginationC
           break;
         }
       }
-      if (!hasTextSiblings && only && only.children.length > 0) {
+      if (!hasTextSiblings && only && only.children.length > 0 && !shouldPreserveSingleWrapper(only) && !hasDirectTextNodes(only)) {
         return Array.from(only.children).filter((child): child is HTMLElement => child instanceof HTMLElement);
       }
     }
@@ -136,20 +188,8 @@ function createPrintoutPagination(doc: Document = document): PrintoutPaginationC
             fitBlockIfNeeded(block, maxHeight);
             return;
           }
-          const children = Array.from(block.children).filter((child): child is HTMLElement => child instanceof HTMLElement);
-          if (children.length === 0) {
-            fitBlockIfNeeded(block, maxHeight);
-            return;
-          }
           current.removeChild(block);
-          children.forEach((child) => {
-            current.appendChild(child);
-            if (current.scrollHeight <= maxHeight + 1) return;
-            current.removeChild(child);
-            current = createPage();
-            maxHeight = current.clientHeight;
-            current.appendChild(child);
-          });
+          ({ current, maxHeight } = distributeBlockAcrossPages(block, current, maxHeight, createPage));
           return;
         }
 
