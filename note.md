@@ -46,3 +46,9 @@ Karte> wails build
 # もしくは
 Karte> wails dev
 ```
+
+## Sherpa-onnxについて
+
+DLLが自動で上手くリンクされないらしく、システム環境変数にsherpa-onnx-c-api.dllとonnxruntime.dllを配置したディレクトリを指定しないと動かなかった(Exit status: 0xc0000135)
+
+上記dllに関しては<https://k2-fsa.github.io/sherpa/onnx/install/windows/generated/download/windows_x64.html>にビルド済みのものが配置されている
