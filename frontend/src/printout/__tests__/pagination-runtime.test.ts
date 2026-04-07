@@ -184,4 +184,46 @@ describe('printout pagination runtime', () => {
     expect(document.querySelectorAll('section.karte-print-page').length).toBeGreaterThan(1);
     expect(document.querySelector('main.container.karte-print-flow-root')).toBeTruthy();
   });
+
+  it('forces page break when marker appears between blocks', () => {
+    document.documentElement.setAttribute('data-printout', 'B5');
+    document.body.innerHTML = `
+      <article>
+        <p data-height="60">Before</p>
+        <div class="karte-force-page-break" aria-hidden="true"></div>
+        <p data-height="60">After</p>
+      </article>
+    `;
+
+    const runtimeWindow = window as TestWindow;
+    const pagination = runtimeWindow.__karteCreatePrintoutPagination?.(document);
+    pagination?.buildPages();
+
+    const pages = document.querySelectorAll('section.karte-print-page');
+    expect(pages.length).toBe(2);
+    expect(pages[0]?.textContent).toContain('Before');
+    expect(pages[1]?.textContent).toContain('After');
+  });
+
+  it('does not create empty trailing pages for consecutive or tail markers', () => {
+    document.documentElement.setAttribute('data-printout', 'B5');
+    document.body.innerHTML = `
+      <article>
+        <p data-height="60">A</p>
+        <div class="karte-force-page-break" aria-hidden="true"></div>
+        <div class="karte-force-page-break" aria-hidden="true"></div>
+        <p data-height="60">B</p>
+        <div class="karte-force-page-break" aria-hidden="true"></div>
+      </article>
+    `;
+
+    const runtimeWindow = window as TestWindow;
+    const pagination = runtimeWindow.__karteCreatePrintoutPagination?.(document);
+    pagination?.buildPages();
+
+    const pages = document.querySelectorAll('section.karte-print-page');
+    expect(pages.length).toBe(2);
+    expect(pages[0]?.textContent).toContain('A');
+    expect(pages[1]?.textContent).toContain('B');
+  });
 });

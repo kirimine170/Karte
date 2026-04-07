@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/fs"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -199,5 +200,35 @@ func TestProcessKaTeX(t *testing.T) {
 				t.Fatalf("unexpected output:\ninput: %s\nwant:  %s\ngot:   %s", tt.input, tt.expected, got)
 			}
 		})
+	}
+}
+
+func TestInjectManualPageBreakMarkers(t *testing.T) {
+	t.Parallel()
+
+	input := strings.Join([]string{
+		"# Title",
+		"",
+		"---",
+		"---",
+		"",
+		"Section",
+		"===",
+		"",
+		"---",
+		"single hr",
+	}, "\n")
+
+	got := string(injectManualPageBreakMarkers([]byte(input)))
+	if !strings.Contains(got, forcePageBreakHTML) {
+		t.Fatalf("expected manual page break marker in output: %s", got)
+	}
+
+	if strings.Count(got, forcePageBreakHTML) != 2 {
+		t.Fatalf("expected exactly 2 page break markers, got %d: %s", strings.Count(got, forcePageBreakHTML), got)
+	}
+
+	if !strings.Contains(got, "---\nsingle hr") {
+		t.Fatalf("single --- should remain as normal horizontal-rule markdown: %s", got)
 	}
 }

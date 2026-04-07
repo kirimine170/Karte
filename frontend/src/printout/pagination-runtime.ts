@@ -23,6 +23,10 @@ function hasDirectTextNodes(block: HTMLElement): boolean {
   return Array.from(block.childNodes).some((node) => node.nodeType === Node.TEXT_NODE && Boolean(node.textContent && node.textContent.trim() !== ''));
 }
 
+function isManualPageBreakMarker(block: HTMLElement): boolean {
+  return block.classList.contains('karte-force-page-break');
+}
+
 function createPrintoutPagination(doc: Document = document): PrintoutPaginationController {
   const runtimeWindow = window as KartePrintoutWindow;
   const PRINT_META_NAME = 'karte-printout';
@@ -182,6 +186,8 @@ function createPrintoutPagination(doc: Document = document): PrintoutPaginationC
 
   function buildPages(): void {
     let pageCount = 0;
+    let manualBreakMarkers = 0;
+    let manualBreakApplied = 0;
     setDebug('start');
     reportReady(false, '', pageCount);
     try {
@@ -214,7 +220,7 @@ function createPrintoutPagination(doc: Document = document): PrintoutPaginationC
         setGuideOnlyMode(flowRoot, true);
         const elementChildren = flowRoot.children.length;
         const textNodeCount = Array.from(flowRoot.childNodes).filter((node) => node.nodeType === Node.TEXT_NODE && (node.textContent || '').trim() !== '').length;
-        setDebug(`skip:no-flow-blocks root=${flowRoot.tagName.toLowerCase()} elements=${elementChildren} textNodes=${textNodeCount}`);
+        setDebug(`skip:no-flow-blocks root=${flowRoot.tagName.toLowerCase()} elements=${elementChildren} textNodes=${textNodeCount} manualBreaks=0/0`);
         reportReady(true, '', pageCount);
         return;
       }
@@ -236,7 +242,23 @@ function createPrintoutPagination(doc: Document = document): PrintoutPaginationC
 
       let current = createPage();
       let maxHeight = current.clientHeight;
+      let pendingManualBreak = false;
       blocks.forEach((block) => {
+        if (isManualPageBreakMarker(block)) {
+          manualBreakMarkers += 1;
+          if (!pendingManualBreak && current.children.length > 0) {
+            pendingManualBreak = true;
+            manualBreakApplied += 1;
+          }
+          return;
+        }
+
+        if (pendingManualBreak) {
+          current = createPage();
+          maxHeight = current.clientHeight;
+          pendingManualBreak = false;
+        }
+
         block.style.zoom = '';
         current.appendChild(block);
         if (current.scrollHeight <= maxHeight + 1) return;
@@ -261,7 +283,7 @@ function createPrintoutPagination(doc: Document = document): PrintoutPaginationC
         }
       });
       setGuideOnlyMode(flowRoot, false);
-      setDebug(`ok:pages=${pageCount} blocks=${blocks.length} root=${flowRoot.tagName.toLowerCase()}`);
+      setDebug(`ok:pages=${pageCount} blocks=${blocks.length} root=${flowRoot.tagName.toLowerCase()} manualBreaks=${manualBreakApplied}/${manualBreakMarkers}`);
       reportReady(true, '', pageCount);
     } catch (err) {
       const flowRoot = findFlowRoot();

@@ -14,6 +14,7 @@ type PreviewWindow = Window & {
         render: (math: string, element: Element, options: { throwOnError: boolean; displayMode: boolean }) => void;
     };
     __karteMermaidReady?: boolean;
+    __karteMermaidRendering?: boolean;
     __karteKaTeXReady?: boolean;
     __kartePrintoutDebug?: string;
 };
@@ -38,6 +39,7 @@ export function writePreviewFrame(iframe: HTMLIFrameElement, html: string): void
     const win = iframe.contentWindow as PreviewWindow | null;
     if (win) {
         win.__karteMermaidReady = false;
+        win.__karteMermaidRendering = false;
         win.__karteKaTeXReady = false;
     }
     schedulePreviewEnhancers(iframe);
@@ -187,16 +189,17 @@ function waitForMermaid(win: PreviewWindow, callback: () => void): void {
 }
 
 function renderMermaid(doc: Document, win: PreviewWindow): void {
-    if (!win.mermaid || win.__karteMermaidReady) {
+    if (!win.mermaid || win.__karteMermaidRendering) {
         return;
     }
-    win.__karteMermaidReady = true;
-
     convertMermaidCodeBlocks(doc);
     const nodes = doc.querySelectorAll('.mermaid:not([data-processed])');
     if (nodes.length === 0) {
+        win.__karteMermaidReady = true;
         return;
     }
+    win.__karteMermaidReady = false;
+    win.__karteMermaidRendering = true;
     win.mermaid.initialize({
         startOnLoad: false,
         securityLevel: 'loose',
@@ -205,6 +208,8 @@ function renderMermaid(doc: Document, win: PreviewWindow): void {
         sequence: { htmlLabels: true },
     });
     Promise.resolve(win.mermaid.run({ nodes })).finally(() => {
+        win.__karteMermaidRendering = false;
+        win.__karteMermaidReady = doc.querySelectorAll('.mermaid:not([data-processed])').length === 0;
         // KaTeX might appear inside Mermaid HTML labels.
         renderKaTeX(doc, win);
         requestAnimationFrame(() => {

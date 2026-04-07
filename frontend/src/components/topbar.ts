@@ -341,10 +341,20 @@ export class Topbar extends BaseComponent {
         const docStore = useDocStore.getState();
         const exportStore = useExportStore.getState();
 
+        const iframe = document.getElementById('preview') as HTMLIFrameElement | null;
+        const previewDoc = iframe?.contentDocument;
+        const printoutMode = (previewDoc?.documentElement?.getAttribute('data-printout') || '').toLowerCase();
+        const finitePrintout = Boolean(printoutMode && printoutMode !== 'infinite');
         const renderedHtml = await this.getRenderedPreviewHtml();
-        const exportHtml = renderedHtml || docStore.previewHtml;
+        const fallbackHtml = docStore.previewHtml;
+        const exportHtml = renderedHtml || (finitePrintout ? null : fallbackHtml);
 
         if (!exportHtml) {
+            if (finitePrintout) {
+                eventLogger.log('Topbar', 'export-pdf-error', { error: 'printout-not-ready' });
+                useUIStore.getState().setStatusMessage('改ページ処理が未完了です。数秒待ってから再実行してください', 3000);
+                return;
+            }
             eventLogger.log('Topbar', 'export-pdf-error', { error: 'no-content' });
             useUIStore.getState().setStatusMessage('エクスポートするコンテンツがありません', 2000);
             return;
@@ -375,8 +385,26 @@ export class Topbar extends BaseComponent {
         const printoutMode = root.getAttribute('data-printout')?.toLowerCase();
         if (printoutMode && printoutMode !== 'infinite') {
             await this.waitForPrintoutReady(iframe);
+            const readyMeta = doc?.querySelector('meta[name="karte-printout-ready"]')?.getAttribute('content') || '';
+            const pagesMeta = doc?.querySelector('meta[name="karte-printout-pages"]')?.getAttribute('content') || '';
+            const pages = Number.parseInt(pagesMeta, 10);
+            if (readyMeta.toLowerCase() !== 'true' || !Number.isFinite(pages) || pages <= 0) {
+                eventLogger.log('Topbar', 'export-html-not-ready', {
+                    printoutMode,
+                    readyMeta,
+                    pagesMeta,
+                    debugMeta: doc?.querySelector('meta[name="karte-printout-debug"]')?.getAttribute('content') || '',
+                });
+                return null;
+            }
         }
-        const html = root.outerHTML || '';
+        eventLogger.log('Topbar', 'export-html-source-state', {
+            printoutMode: printoutMode || '',
+            readyMeta: doc?.querySelector('meta[name="karte-printout-ready"]')?.getAttribute('content') || '',
+            pagesMeta: doc?.querySelector('meta[name="karte-printout-pages"]')?.getAttribute('content') || '',
+            debugMeta: doc?.querySelector('meta[name="karte-printout-debug"]')?.getAttribute('content') || '',
+        });
+        const html = this.serializeExportHtml(root);
         if (!html.trim()) {
             return null;
         }
@@ -386,14 +414,63 @@ export class Topbar extends BaseComponent {
         return `<!doctype html>\n${html}`;
     }
 
-    private async waitForPrintoutReady(iframe: HTMLIFrameElement, timeoutMs = 2000): Promise<void> {
+    private serializeExportHtml(root: HTMLElement): string {
+        const clone = root.cloneNode(true) as HTMLElement;
+        this.preparePrintoutDomForExport(clone);
+        return clone.outerHTML || '';
+    }
+
+    private preparePrintoutDomForExport(root: HTMLElement): void {
+        const printoutMode = root.getAttribute('data-printout')?.toLowerCase();
+        if (!printoutMode || printoutMode === 'infinite') {
+            return;
+        }
+
+        const flowRoot = root.querySelector<HTMLElement>('.karte-print-flow-root');
+        const pageContents = Array.from(root.querySelectorAll<HTMLElement>('section.karte-print-page > .karte-print-page-content'));
+        if (flowRoot && pageContents.length > 0) {
+            // Preserve preview pagination boundaries for PDF by converting each page edge
+            // into explicit break markers in a single flow document.
+            flowRoot.innerHTML = '';
+            pageContents.forEach((content, index) => {
+                const nodes = Array.from(content.childNodes);
+                for (const node of nodes) {
+                    flowRoot.appendChild(node.cloneNode(true));
+                }
+                if (index < pageContents.length - 1) {
+                    const marker = root.ownerDocument.createElement('div');
+                    marker.className = 'karte-force-page-break karte-auto-page-break';
+                    marker.setAttribute('aria-hidden', 'true');
+                    flowRoot.appendChild(marker);
+                }
+            });
+            delete flowRoot.dataset.kartePrintOriginalHtml;
+        } else {
+            const originalHtml = flowRoot?.dataset?.kartePrintOriginalHtml;
+            if (flowRoot && typeof originalHtml === 'string' && originalHtml.trim() !== '') {
+                flowRoot.innerHTML = originalHtml;
+                delete flowRoot.dataset.kartePrintOriginalHtml;
+            }
+        }
+
+        // Remove preview pagination artifacts and runtime script before PDF.
+        root.querySelectorAll('section.karte-print-page').forEach((el) => el.remove());
+        root.querySelectorAll('.karte-print-pages').forEach((el) => el.remove());
+        root.querySelectorAll('script#karte-printout-pagination').forEach((el) => el.remove());
+    }
+
+    private async waitForPrintoutReady(iframe: HTMLIFrameElement, timeoutMs = 6000): Promise<void> {
         const started = Date.now();
         while (Date.now() - started < timeoutMs) {
             const win = iframe.contentWindow as (Window & { __kartePrintoutReady?: boolean | string }) | null;
+            const doc = iframe.contentDocument;
+            const readyMeta = doc?.querySelector('meta[name="karte-printout-ready"]')?.getAttribute('content') || '';
+            const pagesMeta = doc?.querySelector('meta[name="karte-printout-pages"]')?.getAttribute('content') || '';
+            const pages = Number.parseInt(pagesMeta, 10);
             if (!win) {
                 return;
             }
-            if (win.__kartePrintoutReady === true) {
+            if ((win.__kartePrintoutReady === true || readyMeta.toLowerCase() === 'true') && Number.isFinite(pages) && pages > 0) {
                 return;
             }
             await new Promise((resolve) => setTimeout(resolve, 40));

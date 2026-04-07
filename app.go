@@ -3607,13 +3607,25 @@ func (a *App) openPDFInViewer(pdfPath string) error {
 
 // exportPDFInternal performs the actual PDF export work
 func (a *App) exportPDFInternal(html string) (string, error) {
-	html = a.injectPDFRenderHelpers(html)
+	// Export must preserve preview HTML as-is to keep layout parity.
+	// Only image src conversion is allowed below.
 	printoutSpec := printout.ParseFromHTML(html)
 	pageDOMCount := countPrintPageSections(html)
 	readyMeta := extractMetaContent(html, "karte-printout-ready")
 	errorMeta := extractMetaContent(html, "karte-printout-error")
 	pagesMeta := extractMetaContent(html, "karte-printout-pages")
 	a.logInfo(fmt.Sprintf("ExportPDF: resolved printout=%s (finite=%v, pageDOMCount=%d, readyMeta=%q, pageMeta=%q, errorMeta=%q, htmlLen=%d)", printoutSpec.Name, !printoutSpec.Infinite, pageDOMCount, readyMeta, pagesMeta, errorMeta, len(html)))
+
+	// Persist exact HTML input for PDF export diagnostics.
+	// This allows direct diff against preview HTML when layout differs.
+	if a.dataDir != "" {
+		snapshotPath := filepath.Join(a.dataDir, "log", fmt.Sprintf("pdf-export-input-%s.html", time.Now().Format("20060102-150405.000")))
+		if err := os.WriteFile(snapshotPath, []byte(html), 0644); err != nil {
+			a.logError(fmt.Sprintf("ExportPDF: failed to write input HTML snapshot: %v", err))
+		} else {
+			a.logInfo(fmt.Sprintf("ExportPDF: input HTML snapshot=%s", snapshotPath))
+		}
+	}
 	// Convert image URLs to data URIs for PDF export
 	// WKWebView cannot access HTTP URLs, so we need to embed images as data URIs
 	// Track temporary files for cleanup
@@ -3990,6 +4002,10 @@ html[data-printout]:not([data-printout="infinite"]) main.container {
   margin: 0 auto !important;
   padding: 16px !important;
 }
+html[data-printout]:not([data-printout="infinite"]) body {
+  margin: 0 !important;
+  padding: 0 !important;
+}
 html[data-printout]:not([data-printout="infinite"]) article,
 html[data-printout]:not([data-printout="infinite"]) .karte-print-flow-root {
   background: transparent !important;
@@ -4066,6 +4082,15 @@ html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content co
 html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content table,
 html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content pre {
   overflow-x: auto;
+}
+html[data-printout]:not([data-printout="infinite"]) .karte-force-page-break {
+  display: block !important;
+  block-size: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  break-before: page;
+  page-break-before: always;
 }
 @media print {
   html[data-printout]:not([data-printout="infinite"]) body {

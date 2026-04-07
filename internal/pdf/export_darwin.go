@@ -306,7 +306,7 @@ static BOOL exportUsingCreatePDFFallback(WKWebView* webview, NSString* outPath, 
         }
         return NO;
     }
-    logPDFExport(logPath, "[PDF Export] finite-fallback-createpdf-start");
+    logPDFExport(logPath, "[PDF Export] finite-createpdf-start");
     __block BOOL finished = NO;
     __block BOOL success = NO;
     __block NSString* fallbackErr = nil;
@@ -314,13 +314,14 @@ static BOOL exportUsingCreatePDFFallback(WKWebView* webview, NSString* outPath, 
     double fallbackPageWidthPt = 0;
     double fallbackPageHeightPt = 0;
     getFiniteFallbackPDFConfigDimensions(pageWidthPt, pageHeightPt, &fallbackPageWidthPt, &fallbackPageHeightPt);
+    logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] finite-createpdf-config-rect=(%.2f,%.2f)", fallbackPageWidthPt, fallbackPageHeightPt] UTF8String]);
     WKPDFConfiguration* pdfConfig = buildPDFConfig(fallbackPageWidthPt, fallbackPageHeightPt);
     [webview createPDFWithConfiguration:pdfConfig completionHandler:^(NSData * _Nullable pdfData, NSError * _Nullable error) {
         if (error) {
             fallbackErr = [NSString stringWithFormat:@"Fallback createPDF error: %@", error.localizedDescription];
-            logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] finite-fallback-createpdf-error: %@", error.localizedDescription] UTF8String]);
+            logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] finite-createpdf-error: %@", error.localizedDescription] UTF8String]);
         } else {
-            success = writePDFDataToPath(pdfData, outPath, logPath, "finite-fallback-write-success", retErr);
+            success = writePDFDataToPath(pdfData, outPath, logPath, "finite-createpdf-write-success", retErr);
         }
         finished = YES;
         dispatch_semaphore_signal(sem);
@@ -331,7 +332,7 @@ static BOOL exportUsingCreatePDFFallback(WKWebView* webview, NSString* outPath, 
     while (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)))) {
         if ([[NSDate date] compare:deadline] != NSOrderedAscending) {
             NSString* msg = @"Fallback createPDF timeout";
-            logPDFExport(logPath, "[PDF Export] finite-fallback-createpdf-timeout");
+            logPDFExport(logPath, "[PDF Export] finite-createpdf-timeout");
             if (retErr) {
                 *retErr = strdup([msg UTF8String]);
             }
@@ -351,6 +352,7 @@ static BOOL exportUsingCreatePDFFallback(WKWebView* webview, NSString* outPath, 
 static BOOL exportFiniteWithTimeoutAndFallback(WKWebView* webview, NSString* outPath, const char* logPath, double pageWidthPt, double pageHeightPt, const char** retErr) {
     logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] finite-start (paper=%.2fpt x %.2fpt)", pageWidthPt, pageHeightPt] UTF8String]);
     logPDFExport(logPath, "[PDF Export] finite-pagination-ready");
+    logPDFExport(logPath, "[PDF Export] finite-primary-path=NSPrintOperation");
 
     NSPrintInfo* printInfo = [[NSPrintInfo sharedPrintInfo] copy];
     NSMutableDictionary* settings = [printInfo dictionary];
@@ -359,6 +361,9 @@ static BOOL exportFiniteWithTimeoutAndFallback(WKWebView* webview, NSString* out
     }
     settings[NSPrintJobDisposition] = NSPrintSaveJob;
     settings[NSPrintJobSavingURL] = [NSURL fileURLWithPath:outPath];
+    settings[NSPrintScalingFactor] = @(1.0);
+    settings[NSPrintHorizontallyCentered] = @NO;
+    settings[NSPrintVerticallyCentered] = @NO;
     if (pageWidthPt > 0 && pageHeightPt > 0) {
         [printInfo setPaperSize:NSMakeSize(pageWidthPt, pageHeightPt)];
     }
@@ -366,8 +371,15 @@ static BOOL exportFiniteWithTimeoutAndFallback(WKWebView* webview, NSString* out
     [printInfo setRightMargin:0];
     [printInfo setTopMargin:0];
     [printInfo setBottomMargin:0];
+    [printInfo setHorizontallyCentered:NO];
+    [printInfo setVerticallyCentered:NO];
     [printInfo setHorizontalPagination:NSAutoPagination];
     [printInfo setVerticalPagination:NSAutoPagination];
+    NSRect imageable = [printInfo imageablePageBounds];
+    logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] finite-printInfo: imageable=(x=%.2f y=%.2f w=%.2f h=%.2f) margins=(l=%.2f r=%.2f t=%.2f b=%.2f) scale=%.3f centered(h=%d v=%d)",
+        imageable.origin.x, imageable.origin.y, imageable.size.width, imageable.size.height,
+        printInfo.leftMargin, printInfo.rightMargin, printInfo.topMargin, printInfo.bottomMargin,
+        [printInfo scalingFactor], printInfo.horizontallyCentered ? 1 : 0, printInfo.verticallyCentered ? 1 : 0] UTF8String]);
 
     __block BOOL opDone = NO;
     __block BOOL opSuccess = NO;
@@ -406,15 +418,16 @@ static BOOL exportFiniteWithTimeoutAndFallback(WKWebView* webview, NSString* out
         logPDFExport(logPath, "[PDF Export] finite-error: NSPrintOperation failed");
     }
 
-    logPDFExport(logPath, "[PDF Export] finite-path failed, trying fallback createPDF");
-    BOOL fallbackOK = exportUsingCreatePDFFallback(webview, outPath, logPath, pageWidthPt, pageHeightPt, retErr);
-    if (fallbackOK) {
-        logPDFExport(logPath, "[PDF Export] finite-fallback-succeeded");
+    logPDFExport(logPath, "[PDF Export] finite-primary-nsprint-failed; trying createPDF fallback");
+    BOOL createPDFOK = exportUsingCreatePDFFallback(webview, outPath, logPath, pageWidthPt, pageHeightPt, retErr);
+    if (createPDFOK) {
+        logPDFExport(logPath, "[PDF Export] finite-fallback-createpdf-succeeded");
         return YES;
     }
+
     logPDFExport(logPath, "[PDF Export] finite-fallback-failed");
     if (retErr && *retErr == NULL) {
-        *retErr = strdup("Finite printout export failed (primary and fallback)");
+        *retErr = strdup("Finite printout export failed (NSPrintOperation primary + createPDF fallback)");
     }
     return NO;
 }
@@ -522,6 +535,13 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                     WKWebView* webview = sPDFWebView;
                     PDFExportDelegate* delegate = sPDFDelegate;
                     NSWindow* window = sPDFWindow;
+
+                    if (pageWidthPt > 0 && pageHeightPt > 0) {
+                        NSRect paperRect = NSMakeRect(0, 0, pageWidthPt, pageHeightPt);
+                        [webview setFrame:paperRect];
+                        [window setContentSize:paperRect.size];
+                        logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] finite-webview-frame: %.2f x %.2f", paperRect.size.width, paperRect.size.height] UTF8String]);
+                    }
 
                     logPDFExport(logPath, "[PDF Export] Loading HTML into webview...");
 
@@ -647,7 +667,12 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
 
                     __block int attempts = 0;
                     __block NSDate* startTime = [NSDate date];
+                    __block BOOL readinessLoopStarted = NO;
                     void (^checkReady)(void) = ^{
+                        if (finished) {
+                            logPDFExport(logPath, "[PDF Export] checkReady skipped: already finished");
+                            return;
+                        }
                         NSTimeInterval elapsed = [[NSDate date] timeIntervalSinceDate:startTime];
                         logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] checkReady called (attempts=%d, elapsed=%.2fs)", attempts, elapsed] UTF8String]);
                         fflush(stdout);
@@ -725,6 +750,12 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                             if (mermaidNodes.length > 0 && typeof window.mermaid === 'undefined') { \
                                 mermaidPending = mermaidNodes.length; \
                             } \
+                            var printoutReadyMetaEl = document.querySelector('meta[name=\"karte-printout-ready\"]'); \
+                            var printoutPagesMetaEl = document.querySelector('meta[name=\"karte-printout-pages\"]'); \
+                            var printoutDebugMetaEl = document.querySelector('meta[name=\"karte-printout-debug\"]'); \
+                            var printoutReadyMeta = printoutReadyMetaEl ? (printoutReadyMetaEl.getAttribute('content') || '') : ''; \
+                            var printoutPagesMeta = printoutPagesMetaEl ? (printoutPagesMetaEl.getAttribute('content') || '') : ''; \
+                            var printoutDebugMeta = printoutDebugMetaEl ? (printoutDebugMetaEl.getAttribute('content') || '') : ''; \
                             return { \
                                 readyState: document.readyState, \
                                 imagesLoaded: allLoaded, \
@@ -740,7 +771,10 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                                 katexPending: katexPending, \
                                 katexTotal: katexNodes.length, \
                                 mermaidPending: mermaidPending, \
-                                mermaidTotal: mermaidNodes.length \
+                                mermaidTotal: mermaidNodes.length, \
+                                printoutReadyMeta: printoutReadyMeta, \
+                                printoutPagesMeta: printoutPagesMeta, \
+                                printoutDebugMeta: printoutDebugMeta \
                             }; \
                         })()";
 
@@ -792,6 +826,9 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                             NSNumber* katexTotal = @0;
                             NSNumber* mermaidPending = @0;
                             NSNumber* mermaidTotal = @0;
+                            NSString* printoutReadyMeta = @"";
+                            NSString* printoutPagesMeta = @"";
+                            NSString* printoutDebugMeta = @"";
 
                             if (value && [value isKindOfClass:[NSDictionary class]]) {
                                 NSDictionary* result = (NSDictionary*)value;
@@ -804,6 +841,9 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                                 katexTotal = result[@"katexTotal"] ?: @0;
                                 mermaidPending = result[@"mermaidPending"] ?: @0;
                                 mermaidTotal = result[@"mermaidTotal"] ?: @0;
+                                printoutReadyMeta = result[@"printoutReadyMeta"] ?: @"";
+                                printoutPagesMeta = result[@"printoutPagesMeta"] ?: @"";
+                                printoutDebugMeta = result[@"printoutDebugMeta"] ?: @"";
 
                                 // デバッグ情報を取得
                                 NSNumber* htmlLength = result[@"htmlLength"] ?: @0;
@@ -854,6 +894,16 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                                 if (ready && [mermaidTotal intValue] > 0 && [mermaidPending intValue] > 0) {
                                     ready = NO;
                                     logPDFExport(logPath, "[PDF Export] Mermaid rendering still pending, waiting...");
+                                }
+
+                                if (ready && pageWidthPt > 0 && pageHeightPt > 0) {
+                                    BOOL paginationReady = [printoutReadyMeta caseInsensitiveCompare:@"true"] == NSOrderedSame;
+                                    NSInteger pageCountFromMeta = [printoutPagesMeta integerValue];
+                                    if (!paginationReady || pageCountFromMeta <= 0) {
+                                        ready = NO;
+                                        logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] Printout pagination not ready yet (metaReady=%@, metaPages=%@, debug=%@), waiting...",
+                                            printoutReadyMeta, printoutPagesMeta, printoutDebugMeta] UTF8String]);
+                                    }
                                 }
 
                                 logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] readyState=%@, imagesLoaded=%@, imageCount=%@, loadedImageCount=%@, hasDataImageInHTML=%@, ready=%d",
@@ -971,14 +1021,38 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                         }];
                     };
 
+                    void (^startReadinessLoop)(const char*) = ^(const char* source) {
+                        if (finished) {
+                            logPDFExport(logPath, "[PDF Export] Readiness loop start skipped: already finished");
+                            return;
+                        }
+                        if (readinessLoopStarted) {
+                            if (source && strlen(source) > 0) {
+                                logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] Readiness loop already started (source=%s)", source] UTF8String]);
+                            } else {
+                                logPDFExport(logPath, "[PDF Export] Readiness loop already started");
+                            }
+                            return;
+                        }
+                        readinessLoopStarted = YES;
+                        if (source && strlen(source) > 0) {
+                            logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] Readiness loop started (source=%s)", source] UTF8String]);
+                        } else {
+                            logPDFExport(logPath, "[PDF Export] Readiness loop started");
+                        }
+                        checkReady();
+                    };
+
                     // checkReadyブロックをdelegateに設定（didFinishNavigationで呼び出される）
-                    delegate.checkReadyBlock = checkReady;
+                    delegate.checkReadyBlock = ^{
+                        startReadinessLoop("didFinishNavigation");
+                    };
                     logPDFExport(logPath, "[PDF Export] Waiting for navigation to finish before starting readiness check...");
 
                     // フォールバック: ナビゲーションが完了しない場合に備えて、一定時間後にcheckReadyを呼ぶ
                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                         logPDFExport(logPath, "[PDF Export] Fallback: Starting readiness check after 2 seconds (navigation may not have finished)");
-                        checkReady();
+                        startReadinessLoop("fallback-2s");
                     });
 
                     // Fallback: force PDF after 15 seconds even if readyState polling fails

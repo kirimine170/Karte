@@ -41,6 +41,32 @@ func newMarkdown(hardwrap bool) goldmark.Markdown {
 var fmRe = regexp.MustCompile(`(?s)^---\n(.*?)\n---\n`)
 var impRe = regexp.MustCompile(`(?m)^@import\((.*?)\)\s*$`)
 
+const forcePageBreakHTML = `<div class="karte-force-page-break" aria-hidden="true"></div>`
+
+func injectManualPageBreakMarkers(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	text := strings.ReplaceAll(string(body), "\r\n", "\n")
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "===" {
+			out = append(out, forcePageBreakHTML)
+			continue
+		}
+		if line == "---" && i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == "---" {
+			out = append(out, forcePageBreakHTML)
+			i++
+			continue
+		}
+		out = append(out, lines[i])
+	}
+	return []byte(strings.Join(out, "\n"))
+}
+
 // FileSystem abstracts file access for rendering.
 type FileSystem interface {
 	ReadFile(name string) ([]byte, error)
@@ -117,6 +143,7 @@ func (r *Renderer) RenderMarkdownWithOptions(root, path string, hardwrap bool) (
 			return []byte(fmt.Sprintf("<p>unknown import type: %s</p>", html.EscapeString(typ)))
 		}
 	})
+	expanded = injectManualPageBreakMarkers(expanded)
 	var buf bytes.Buffer
 	md := newMarkdown(hardwrap)
 	if err := md.Convert(expanded, &buf); err != nil {
