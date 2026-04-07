@@ -4098,6 +4098,9 @@ html[data-printout]:not([data-printout="infinite"]) .karte-force-page-break {
   break-before: page;
   page-break-before: always;
 }
+html[data-printout]:not([data-printout="infinite"])[data-export-target="pdf"] .karte-force-page-break {
+  block-size: var(--karte-print-preview-padding) !important;
+}
 @media print {
   html[data-printout]:not([data-printout="infinite"]) body {
     background: #fff !important;
