@@ -3916,6 +3916,13 @@ func setHTMLDataPrintoutAttr(html, printoutName string) string {
 			return strings.TrimSuffix(tag, ">") + fmt.Sprintf(` data-printout="%s">`, printoutName)
 		})
 	}
+
+	doctypeRe := regexp.MustCompile(`(?is)^\s*<!doctype html>\s*`)
+	if m := doctypeRe.FindString(html); m != "" {
+		rest := strings.TrimPrefix(html, m)
+		return m + `<html data-printout="` + printoutName + `">` + rest + `</html>`
+	}
+
 	return `<html data-printout="` + printoutName + `">` + html + `</html>`
 }
 
@@ -3983,13 +3990,26 @@ html[data-printout]:not([data-printout="infinite"]) main.container {
   margin: 0 auto !important;
   padding: 16px !important;
 }
-html[data-printout]:not([data-printout="infinite"]) article {
+html[data-printout]:not([data-printout="infinite"]) article,
+html[data-printout]:not([data-printout="infinite"]) .karte-print-flow-root {
   background: transparent !important;
   border: 0 !important;
   border-radius: 0 !important;
   padding: 0 !important;
   inline-size: var(--karte-print-page-width);
   max-inline-size: var(--karte-print-page-width);
+}
+html[data-printout]:not([data-printout="infinite"]) .karte-print-flow-root.karte-print-guide-only {
+  position: relative;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(var(--karte-print-page-height) - 1px),
+    rgba(127, 127, 127, 0.42) calc(var(--karte-print-page-height) - 1px),
+    rgba(127, 127, 127, 0.42) var(--karte-print-page-height)
+  );
+  background-size: 100%% var(--karte-print-page-height);
+  background-attachment: local;
 }
 html[data-printout]:not([data-printout="infinite"]) .karte-print-pages {
   display: flex;

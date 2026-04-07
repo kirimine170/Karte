@@ -116,4 +116,72 @@ describe('printout pagination runtime', () => {
     expect(document.querySelector('article .karte-print-page-content > div')).toBeTruthy();
     expect(document.querySelector('article .karte-print-page-content > div')?.textContent).toContain('Lead text');
   });
+
+  it('falls back to karte-printout meta when data-printout is missing', () => {
+    document.documentElement.removeAttribute('data-printout');
+    document.head.innerHTML = '<meta name="karte-printout" content="B5">';
+    document.body.innerHTML = `
+      <article>
+        <p data-height="80">A</p>
+        <p data-height="80">B</p>
+      </article>
+    `;
+
+    const runtimeWindow = window as TestWindow;
+    const pagination = runtimeWindow.__karteCreatePrintoutPagination?.(document);
+    pagination?.buildPages();
+
+    expect(document.documentElement.getAttribute('data-printout')).toBe('B5');
+    expect(document.querySelectorAll('section.karte-print-page').length).toBeGreaterThan(1);
+  });
+
+  it('does not paginate in infinite mode', () => {
+    document.documentElement.setAttribute('data-printout', 'infinite');
+    document.body.innerHTML = `
+      <article>
+        <p data-height="80">A</p>
+        <p data-height="80">B</p>
+      </article>
+    `;
+
+    const runtimeWindow = window as TestWindow;
+    const pagination = runtimeWindow.__karteCreatePrintoutPagination?.(document);
+    pagination?.buildPages();
+
+    expect(document.querySelectorAll('section.karte-print-page').length).toBe(0);
+  });
+
+  it('rebuilds snapshot when stored original html is empty', () => {
+    document.documentElement.setAttribute('data-printout', 'B5');
+    document.body.innerHTML = `
+      <article data-karte-print-original-html="">
+        <p data-height="80">A</p>
+        <p data-height="80">B</p>
+      </article>
+    `;
+
+    const runtimeWindow = window as TestWindow;
+    const pagination = runtimeWindow.__karteCreatePrintoutPagination?.(document);
+    pagination?.buildPages();
+
+    expect(document.querySelectorAll('section.karte-print-page').length).toBeGreaterThan(1);
+  });
+
+  it('paginates using main container when article is absent', () => {
+    document.documentElement.setAttribute('data-printout', 'B5');
+    document.body.innerHTML = `
+      <main class="container">
+        <h1 data-height="90">Title</h1>
+        <p data-height="90">A</p>
+        <p data-height="90">B</p>
+      </main>
+    `;
+
+    const runtimeWindow = window as TestWindow;
+    const pagination = runtimeWindow.__karteCreatePrintoutPagination?.(document);
+    pagination?.buildPages();
+
+    expect(document.querySelectorAll('section.karte-print-page').length).toBeGreaterThan(1);
+    expect(document.querySelector('main.container.karte-print-flow-root')).toBeTruthy();
+  });
 });

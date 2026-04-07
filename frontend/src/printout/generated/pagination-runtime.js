@@ -8,6 +8,19 @@ function hasDirectTextNodes(block) {
 }
 function createPrintoutPagination(doc = document) {
     const runtimeWindow = window;
+    const PRINT_META_NAME = 'karte-printout';
+    function resolvePrintoutMode() {
+        const root = doc.documentElement;
+        const attr = root?.getAttribute('data-printout');
+        if (attr && attr.trim() !== '') {
+            return attr.trim();
+        }
+        const fromMeta = doc.querySelector(`meta[name="${PRINT_META_NAME}"]`)?.content?.trim() || '';
+        if (fromMeta && root) {
+            root.setAttribute('data-printout', fromMeta);
+        }
+        return fromMeta;
+    }
     function setMeta(name, content) {
         const head = doc.head || doc.documentElement;
         if (!head)
@@ -24,21 +37,48 @@ function createPrintoutPagination(doc = document) {
     function reportReady(state, err, pages) {
         runtimeWindow.__kartePrintoutReady = state;
         runtimeWindow.__kartePrintoutError = err ? String(err) : '';
+        if (runtimeWindow.__kartePrintoutDebug === undefined) {
+            runtimeWindow.__kartePrintoutDebug = '';
+        }
         setMeta('karte-printout-ready', String(state));
         setMeta('karte-printout-error', err ? String(err) : '');
         setMeta('karte-printout-pages', String(pages));
+        setMeta('karte-printout-debug', runtimeWindow.__kartePrintoutDebug || '');
+    }
+    function setDebug(message) {
+        runtimeWindow.__kartePrintoutDebug = message;
+        setMeta('karte-printout-debug', message);
     }
     function shouldPaginate() {
-        const root = doc.documentElement;
-        if (!root)
-            return false;
-        const mode = root.getAttribute('data-printout');
+        const mode = resolvePrintoutMode();
         return Boolean(mode && mode.toLowerCase() !== 'infinite');
     }
-    function resetArticle(article) {
-        if (!article.dataset.kartePrintOriginalHtml)
+    function findFlowRoot() {
+        const article = doc.querySelector('article');
+        if (article) {
+            article.classList.add('karte-print-flow-root');
+            return article;
+        }
+        const main = doc.querySelector('main.container, main, .container');
+        if (main) {
+            main.classList.add('karte-print-flow-root');
+            return main;
+        }
+        if (doc.body) {
+            doc.body.classList.add('karte-print-flow-root');
+            return doc.body;
+        }
+        return null;
+    }
+    function resetFlowRoot(root) {
+        if (!root.dataset.kartePrintOriginalHtml)
             return;
-        article.innerHTML = article.dataset.kartePrintOriginalHtml;
+        root.innerHTML = root.dataset.kartePrintOriginalHtml;
+    }
+    function setGuideOnlyMode(root, enabled) {
+        if (!root)
+            return;
+        root.classList.toggle('karte-print-guide-only', enabled);
     }
     function isAtomic(el) {
         if (!el || !(el instanceof HTMLElement))
@@ -108,32 +148,45 @@ function createPrintoutPagination(doc = document) {
     }
     function buildPages() {
         let pageCount = 0;
+        setDebug('start');
         reportReady(false, '', pageCount);
         try {
+            const flowRoot = findFlowRoot();
             if (!shouldPaginate()) {
+                setGuideOnlyMode(flowRoot, false);
+                setDebug('skip:printout=infinite-or-empty');
                 reportReady(true, '', pageCount);
                 return;
             }
-            const article = doc.querySelector('article');
-            if (!article) {
+            if (!flowRoot) {
+                setDebug('skip:no-flow-root');
                 reportReady(true, '', pageCount);
                 return;
             }
-            if (!article.dataset.kartePrintOriginalHtml) {
-                article.dataset.kartePrintOriginalHtml = article.innerHTML;
+            setGuideOnlyMode(flowRoot, false);
+            const currentInnerHtml = flowRoot.innerHTML;
+            const currentTrimmed = currentInnerHtml.trim();
+            const storedOriginal = flowRoot.dataset.kartePrintOriginalHtml?.trim() || '';
+            const looksPagedNow = currentTrimmed.includes('karte-print-pages');
+            if (!storedOriginal && currentTrimmed !== '' && !looksPagedNow) {
+                flowRoot.dataset.kartePrintOriginalHtml = currentInnerHtml;
             }
-            else {
-                resetArticle(article);
+            else if (storedOriginal) {
+                resetFlowRoot(flowRoot);
             }
-            const blocks = flowBlocksFromArticle(article);
+            const blocks = flowBlocksFromArticle(flowRoot);
             if (blocks.length === 0) {
+                setGuideOnlyMode(flowRoot, true);
+                const elementChildren = flowRoot.children.length;
+                const textNodeCount = Array.from(flowRoot.childNodes).filter((node) => node.nodeType === Node.TEXT_NODE && (node.textContent || '').trim() !== '').length;
+                setDebug(`skip:no-flow-blocks root=${flowRoot.tagName.toLowerCase()} elements=${elementChildren} textNodes=${textNodeCount}`);
                 reportReady(true, '', pageCount);
                 return;
             }
             const pages = doc.createElement('div');
             pages.className = 'karte-print-pages';
-            article.innerHTML = '';
-            article.appendChild(pages);
+            flowRoot.innerHTML = '';
+            flowRoot.appendChild(pages);
             function createPage() {
                 const page = doc.createElement('section');
                 page.className = 'karte-print-page';
@@ -169,10 +222,15 @@ function createPrintoutPagination(doc = document) {
                     fitBlockIfNeeded(block, maxHeight);
                 }
             });
+            setGuideOnlyMode(flowRoot, false);
+            setDebug(`ok:pages=${pageCount} blocks=${blocks.length} root=${flowRoot.tagName.toLowerCase()}`);
             reportReady(true, '', pageCount);
         }
         catch (err) {
+            const flowRoot = findFlowRoot();
+            setGuideOnlyMode(flowRoot, true);
             const message = err instanceof Error ? err.message : String(err);
+            setDebug(`error:${message}`);
             reportReady('error', message, pageCount);
         }
         finally {
