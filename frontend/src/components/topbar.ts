@@ -425,6 +425,7 @@ export class Topbar extends BaseComponent {
         if (!printoutMode || printoutMode === 'infinite') {
             return;
         }
+        root.setAttribute('data-export-target', 'pdf');
 
         const flowRoot = root.querySelector<HTMLElement>('.karte-print-flow-root');
         const pageContents = Array.from(root.querySelectorAll<HTMLElement>('section.karte-print-page > .karte-print-page-content'));

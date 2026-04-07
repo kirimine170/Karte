@@ -3992,6 +3992,7 @@ func injectPrintoutLayout(html string, spec printout.Spec) string {
   --karte-print-page-height: %.3gmm;
   --karte-print-content-width: %.3gmm;
   --karte-print-content-height: %.3gmm;
+  --karte-print-preview-padding: 22pt;
 }
 @page {
   size: %.3gmm %.3gmm;
@@ -4011,9 +4012,14 @@ html[data-printout]:not([data-printout="infinite"]) .karte-print-flow-root {
   background: transparent !important;
   border: 0 !important;
   border-radius: 0 !important;
+  box-sizing: border-box;
   padding: 0 !important;
   inline-size: var(--karte-print-page-width);
   max-inline-size: var(--karte-print-page-width);
+}
+html[data-printout]:not([data-printout="infinite"])[data-export-target="pdf"] article.karte-print-flow-root,
+html[data-printout]:not([data-printout="infinite"])[data-export-target="pdf"] .karte-print-flow-root {
+  padding: var(--karte-print-preview-padding) !important;
 }
 html[data-printout]:not([data-printout="infinite"]) .karte-print-flow-root.karte-print-guide-only {
   position: relative;
@@ -4053,7 +4059,7 @@ html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content {
   box-sizing: border-box;
   inline-size: 100%%;
   block-size: 100%%;
-  padding: 12mm;
+  padding: var(--karte-print-preview-padding);
   overflow: hidden;
 }
 html[data-printout]:not([data-printout="infinite"]) .karte-print-page-content * {
