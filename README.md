@@ -172,6 +172,10 @@ karte-desktop/
 - **Markdown処理**: Goldmark
 - **ビルドシステム**: Wails CLI
 
+### LLM向けCLIドキュメント
+
+- LLM からの操作説明は [README.llm-cli.md](/Users/kirimine170/Desktop/Kiri_Lab/Karte.nosync/README.llm-cli.md) を参照してください
+
 ### テストの実行と推奨フロー
 
 1. **Go**: バックエンドのユニットテスト。
