@@ -42,6 +42,9 @@ Thumbs.db
 *.log
 
 sandbox/
+CLI_sandbox/
+cli_sandbox/
+clisandbox/
 
 dist/
 build/
