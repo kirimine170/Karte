@@ -721,13 +721,16 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                                     allLoaded = false; \
                                 } \
                             } \
-                            var htmlContent = document.documentElement.innerHTML; \
-                            var hasDataImage = htmlContent.indexOf('data:image') !== -1; \
-                            var htmlLength = htmlContent.length; \
-                            var htmlPreview = htmlContent.substring(0, Math.min(2000, htmlLength)); \
-                            var imgTagCount = (htmlContent.match(/<img/gi) || []).length; \
-                            var dataImageCount = (htmlContent.match(/data:image/gi) || []).length; \
-                            var bodyHTML = document.body ? document.body.innerHTML.substring(0, Math.min(1000, document.body.innerHTML.length)) : 'no body'; \
+                            var htmlLength = document.documentElement ? document.documentElement.outerHTML.length : 0; \
+                            var imgTagCount = totalCount; \
+                            var dataImageCount = 0; \
+                            for (var di = 0; di < images.length; di++) { \
+                                var diSrc = images[di].src || ''; \
+                                if (diSrc.indexOf('data:image') === 0) { \
+                                    dataImageCount++; \
+                                } \
+                            } \
+                            var hasDataImage = dataImageCount > 0; \
                             var katexNodes = document.querySelectorAll('.katex-inline, .katex-block'); \
                             var katexPending = 0; \
                             for (var k = 0; k < katexNodes.length; k++) { \
@@ -763,10 +766,8 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                                 loadedImageCount: loadedCount, \
                                 hasDataImageInHTML: hasDataImage, \
                                 htmlLength: htmlLength, \
-                                htmlPreview: htmlPreview, \
                                 imgTagCount: imgTagCount, \
                                 dataImageCount: dataImageCount, \
-                                bodyHTML: bodyHTML, \
                                 imageDetails: imageDetails, \
                                 katexPending: katexPending, \
                                 katexTotal: katexNodes.length, \
@@ -779,7 +780,7 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                         })()";
 
                         [webview evaluateJavaScript:checkScript completionHandler:^(id _Nullable value, NSError * _Nullable error) {
-                            logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] JavaScript completionHandler called (value=%@, error=%@)", value ? value : @"nil", error ? error.localizedDescription : @"nil"] UTF8String]);
+                            logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] JavaScript completionHandler called (hasValue=%d, error=%@)", value ? 1 : 0, error ? error.localizedDescription : @"nil"] UTF8String]);
                             fflush(stdout);
 
                             // ========== 検証用: JavaScript評価結果の詳細ダンプ ==========
@@ -792,14 +793,23 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
                             } else {
                                 logPDFDebug(logPath, "JavaScript evaluation succeeded");
                                 if (value) {
-                                    // 結果をJSON形式で出力
-                                    NSError* jsonError = nil;
-                                    NSData* jsonData = [NSJSONSerialization dataWithJSONObject:value options:NSJSONWritingPrettyPrinted error:&jsonError];
-                                    if (jsonData && !jsonError) {
-                                        NSString* jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
-                                        logPDFDebug(logPath, [[NSString stringWithFormat:@"Result JSON:\n%@", jsonString] UTF8String]);
+                                    if ([value isKindOfClass:[NSDictionary class]]) {
+                                        NSDictionary* result = (NSDictionary*)value;
+                                        logPDFDebug(logPath, [[NSString stringWithFormat:@"Result summary: readyState=%@ imageCount=%@ loadedImageCount=%@ hasDataImage=%@ katexPending=%@ katexTotal=%@ mermaidPending=%@ mermaidTotal=%@ printoutReady=%@ printoutPages=%@ printoutDebug=%@ htmlLength=%@",
+                                            result[@"readyState"] ?: @"",
+                                            result[@"imageCount"] ?: @0,
+                                            result[@"loadedImageCount"] ?: @0,
+                                            result[@"hasDataImageInHTML"] ?: @NO,
+                                            result[@"katexPending"] ?: @0,
+                                            result[@"katexTotal"] ?: @0,
+                                            result[@"mermaidPending"] ?: @0,
+                                            result[@"mermaidTotal"] ?: @0,
+                                            result[@"printoutReadyMeta"] ?: @"",
+                                            result[@"printoutPagesMeta"] ?: @"",
+                                            result[@"printoutDebugMeta"] ?: @"",
+                                            result[@"htmlLength"] ?: @0] UTF8String]);
                                     } else {
-                                        logPDFDebug(logPath, [[NSString stringWithFormat:@"Result (raw): %@", value] UTF8String]);
+                                        logPDFDebug(logPath, [[NSString stringWithFormat:@"Result type: %@", NSStringFromClass([value class])] UTF8String]);
                                     }
                                 } else {
                                     logPDFDebug(logPath, "Result is nil");
@@ -847,16 +857,12 @@ static const char* exportHTMLToPDFMac(const char* htmlC, const char* outPathC, c
 
                                 // デバッグ情報を取得
                                 NSNumber* htmlLength = result[@"htmlLength"] ?: @0;
-                                NSString* htmlPreview = result[@"htmlPreview"] ?: @"";
                                 NSNumber* imgTagCount = result[@"imgTagCount"] ?: @0;
                                 NSNumber* dataImageCount = result[@"dataImageCount"] ?: @0;
-                                NSString* bodyHTML = result[@"bodyHTML"] ?: @"";
                                 NSArray* imageDetails = result[@"imageDetails"] ?: @[];
 
                                 logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] DEBUG: htmlLength=%d, imgTagCount=%d, dataImageCount=%d, imageCount=%d, katexPending=%d, mermaidPending=%d",
                                     [htmlLength intValue], [imgTagCount intValue], [dataImageCount intValue], [imageCount intValue], [katexPending intValue], [mermaidPending intValue]] UTF8String]);
-                                logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] DEBUG: htmlPreview (first 2000 chars):\n%@", htmlPreview] UTF8String]);
-                                logPDFExport(logPath, [[NSString stringWithFormat:@"[PDF Export] DEBUG: bodyHTML (first 1000 chars):\n%@", bodyHTML] UTF8String]);
 
                                 // 画像の詳細情報をログに出力
                                 if ([imageDetails isKindOfClass:[NSArray class]] && [imageDetails count] > 0) {

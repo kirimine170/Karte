@@ -6,6 +6,7 @@ type PreviewWindow = Window & {
         buildPages(): void;
     };
     __karteRunPrintoutPagination?: (doc?: Document) => unknown;
+    __karteRunRenderEnhancers?: () => void;
     mermaid?: {
         initialize: (config: Record<string, unknown>) => void;
         run: (options: { nodes: NodeListOf<Element> }) => Promise<void> | void;
@@ -22,15 +23,24 @@ type PreviewWindow = Window & {
 const MERMAID_CDN = 'https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js';
 const KATEX_CSS = 'https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.css';
 const KATEX_JS = 'https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.js';
+const PREVIEW_MERMAID_SCRIPT_ID = 'karte-preview-mermaid-script';
+const PREVIEW_KATEX_SCRIPT_ID = 'karte-preview-katex-script';
+const PREVIEW_KATEX_CSS_ID = 'karte-preview-katex-css';
 const PREVIEW_PRINTOUT_STATUS_ID = 'previewPrintoutStatus';
 const statusPollingTimers = new WeakMap<HTMLIFrameElement, number>();
 const lastPrintoutSignatures = new WeakMap<HTMLIFrameElement, string>();
 const zeroPageRetryCount = new WeakMap<HTMLIFrameElement, number>();
+const enhancerRetryTimers = new WeakMap<HTMLIFrameElement, number>();
 
 export function writePreviewFrame(iframe: HTMLIFrameElement, html: string): void {
     const doc = iframe.contentDocument;
     if (!doc) {
         return;
+    }
+    const prevEnhancerTimer = enhancerRetryTimers.get(iframe);
+    if (prevEnhancerTimer !== undefined) {
+        window.clearTimeout(prevEnhancerTimer);
+        enhancerRetryTimers.delete(iframe);
     }
     doc.open();
     doc.write(html);
@@ -58,13 +68,36 @@ function schedulePreviewEnhancers(iframe: HTMLIFrameElement): void {
     if (!win || !doc) {
         return;
     }
-    // Let synchronous scripts attach first.
-    setTimeout(() => {
-        ensureKaTeX(doc, win);
-        ensureMermaid(doc, win);
-        rerunPrintoutPagination(iframe);
-        updatePreviewPrintoutStatus(iframe);
-    }, 0);
+    kickPreviewEnhancers(iframe, 0);
+}
+
+function kickPreviewEnhancers(iframe: HTMLIFrameElement, attempt: number): void {
+    const win = iframe.contentWindow as PreviewWindow | null;
+    const doc = iframe.contentDocument;
+    if (!win || !doc) {
+        return;
+    }
+
+    try {
+        win.__karteRunRenderEnhancers?.();
+    } catch (error) {
+        console.warn('[preview-frame] shared render enhancers failed', error);
+    }
+    ensureKaTeX(doc, win);
+    ensureMermaid(doc, win);
+    rerunPrintoutPagination(iframe);
+    updatePreviewPrintoutStatus(iframe);
+
+    const hasMermaidSource = doc.querySelector('.mermaid, pre > code.language-mermaid, pre > code.lang-mermaid');
+    const hasRenderedMermaid = doc.querySelector('.mermaid svg');
+    if (!hasMermaidSource || hasRenderedMermaid || attempt >= 40) {
+        enhancerRetryTimers.delete(iframe);
+        return;
+    }
+
+    const delayMs = Math.min(100 + attempt * 25, 500);
+    const timer = window.setTimeout(() => kickPreviewEnhancers(iframe, attempt + 1), delayMs);
+    enhancerRetryTimers.set(iframe, timer);
 }
 
 function ensureMermaidKaTeXStyles(doc: Document): void {
@@ -98,8 +131,9 @@ function ensureMermaidKaTeXStyles(doc: Document): void {
 }
 
 function ensureKaTeX(doc: Document, win: PreviewWindow): void {
-    if (!doc.querySelector(`link[href*="katex"]`)) {
+    if (!doc.getElementById(PREVIEW_KATEX_CSS_ID) && !doc.querySelector(`link[href*="katex"]`)) {
         const link = doc.createElement('link');
+        link.id = PREVIEW_KATEX_CSS_ID;
         link.rel = 'stylesheet';
         link.href = KATEX_CSS;
         doc.head?.appendChild(link);
@@ -110,23 +144,28 @@ function ensureKaTeX(doc: Document, win: PreviewWindow): void {
         return;
     }
 
-    if (!doc.querySelector(`script[src*="katex"]`)) {
+    if (!doc.getElementById(PREVIEW_KATEX_SCRIPT_ID)) {
         const script = doc.createElement('script');
+        script.id = PREVIEW_KATEX_SCRIPT_ID;
         script.src = KATEX_JS;
         script.async = true;
         script.onload = () => renderKaTeX(doc, win);
         doc.head?.appendChild(script);
     } else {
-        waitForKaTeX(win, () => renderKaTeX(doc, win));
+        waitForKaTeX(win, () => renderKaTeX(doc, win), doc, true);
     }
 }
 
-function waitForKaTeX(win: PreviewWindow, callback: () => void): void {
+function waitForKaTeX(win: PreviewWindow, callback: () => void, doc?: Document, retryLoad = false, attempts = 0): void {
     if (win.katex) {
         callback();
         return;
     }
-    setTimeout(() => waitForKaTeX(win, callback), 50);
+    if (retryLoad && doc && attempts === 20 && !doc.getElementById(PREVIEW_KATEX_SCRIPT_ID)) {
+        ensureKaTeX(doc, win);
+        return;
+    }
+    setTimeout(() => waitForKaTeX(win, callback, doc, retryLoad, attempts + 1), 50);
 }
 
 function renderKaTeX(doc: Document, win: PreviewWindow): void {
@@ -158,6 +197,7 @@ function renderKaTeX(doc: Document, win: PreviewWindow): void {
 
     const iframe = doc.defaultView?.frameElement;
     if (iframe instanceof HTMLIFrameElement) {
+        syncPrintoutSourceSnapshot(doc);
         rerunPrintoutPagination(iframe);
         updatePreviewPrintoutStatus(iframe);
     }
@@ -169,23 +209,28 @@ function ensureMermaid(doc: Document, win: PreviewWindow): void {
         return;
     }
 
-    if (!doc.querySelector(`script[src*="mermaid"]`)) {
+    if (!doc.getElementById(PREVIEW_MERMAID_SCRIPT_ID)) {
         const script = doc.createElement('script');
+        script.id = PREVIEW_MERMAID_SCRIPT_ID;
         script.src = MERMAID_CDN;
         script.async = true;
         script.onload = () => renderMermaid(doc, win);
         doc.head?.appendChild(script);
     } else {
-        waitForMermaid(win, () => renderMermaid(doc, win));
+        waitForMermaid(win, () => renderMermaid(doc, win), doc, true);
     }
 }
 
-function waitForMermaid(win: PreviewWindow, callback: () => void): void {
+function waitForMermaid(win: PreviewWindow, callback: () => void, doc?: Document, retryLoad = false, attempts = 0): void {
     if (win.mermaid) {
         callback();
         return;
     }
-    setTimeout(() => waitForMermaid(win, callback), 50);
+    if (retryLoad && doc && attempts === 20 && !doc.getElementById(PREVIEW_MERMAID_SCRIPT_ID)) {
+        ensureMermaid(doc, win);
+        return;
+    }
+    setTimeout(() => waitForMermaid(win, callback, doc, retryLoad, attempts + 1), 50);
 }
 
 function renderMermaid(doc: Document, win: PreviewWindow): void {
@@ -193,7 +238,7 @@ function renderMermaid(doc: Document, win: PreviewWindow): void {
         return;
     }
     convertMermaidCodeBlocks(doc);
-    const nodes = doc.querySelectorAll('.mermaid:not([data-processed])');
+    const nodes = prepareMermaidNodes(doc);
     if (nodes.length === 0) {
         win.__karteMermaidReady = true;
         return;
@@ -207,13 +252,14 @@ function renderMermaid(doc: Document, win: PreviewWindow): void {
         flowchart: { htmlLabels: true },
         sequence: { htmlLabels: true },
     });
-    Promise.resolve(win.mermaid.run({ nodes })).finally(() => {
+    Promise.resolve(win.mermaid.run({ nodes: nodes as unknown as NodeListOf<Element> })).finally(() => {
         win.__karteMermaidRendering = false;
-        win.__karteMermaidReady = doc.querySelectorAll('.mermaid:not([data-processed])').length === 0;
+        win.__karteMermaidReady = prepareMermaidNodes(doc).length === 0;
         // KaTeX might appear inside Mermaid HTML labels.
         renderKaTeX(doc, win);
         requestAnimationFrame(() => {
             resizeMermaidLabels(doc);
+            syncPrintoutSourceSnapshot(doc);
             const iframe = doc.defaultView?.frameElement;
             if (iframe instanceof HTMLIFrameElement) {
                 rerunPrintoutPagination(iframe);
@@ -232,9 +278,59 @@ function convertMermaidCodeBlocks(doc: Document): void {
         }
         const container = doc.createElement('div');
         container.className = 'mermaid';
-        container.textContent = code.textContent || '';
+        const source = code.textContent || '';
+        container.dataset.mermaidSource = source;
+        container.textContent = source;
         pre.replaceWith(container);
     });
+}
+
+function prepareMermaidNodes(doc: Document): HTMLElement[] {
+    return Array.from(doc.querySelectorAll('.mermaid')).filter((node): node is HTMLElement => node instanceof HTMLElement).filter((node) => {
+        const renderedSvg = node.querySelector('svg');
+        if (renderedSvg) {
+            return false;
+        }
+
+        const source = node.dataset.mermaidSource || node.textContent || '';
+        if (source.trim() === '') {
+            return false;
+        }
+
+        if (!node.dataset.mermaidSource) {
+            node.dataset.mermaidSource = source;
+        }
+
+        if (node.getAttribute('data-processed') === 'true' || node.childElementCount > 0) {
+            node.textContent = node.dataset.mermaidSource;
+            node.removeAttribute('data-processed');
+        }
+
+        return true;
+    });
+}
+
+function syncPrintoutSourceSnapshot(doc: Document): void {
+    const flowRoot = doc.querySelector<HTMLElement>('.karte-print-flow-root, article, main.container, main, .container');
+    if (!flowRoot) {
+        return;
+    }
+
+    const pageContents = Array.from(doc.querySelectorAll<HTMLElement>('section.karte-print-page > .karte-print-page-content'));
+    if (pageContents.length > 0) {
+        const wrapper = doc.createElement('div');
+        pageContents.forEach((content) => {
+            Array.from(content.childNodes).forEach((node) => {
+                wrapper.appendChild(node.cloneNode(true));
+            });
+        });
+        flowRoot.dataset.kartePrintOriginalHtml = wrapper.innerHTML;
+        return;
+    }
+
+    if (!flowRoot.querySelector('.karte-print-pages')) {
+        flowRoot.dataset.kartePrintOriginalHtml = flowRoot.innerHTML;
+    }
 }
 
 function resizeMermaidLabels(doc: Document): void {

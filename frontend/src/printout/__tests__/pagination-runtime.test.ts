@@ -205,7 +205,7 @@ describe('printout pagination runtime', () => {
     expect(pages[1]?.textContent).toContain('After');
   });
 
-  it('does not create empty trailing pages for consecutive or tail markers', () => {
+  it('creates an empty page for consecutive markers without forcing a trailing blank page', () => {
     document.documentElement.setAttribute('data-printout', 'B5');
     document.body.innerHTML = `
       <article>
@@ -222,8 +222,30 @@ describe('printout pagination runtime', () => {
     pagination?.buildPages();
 
     const pages = document.querySelectorAll('section.karte-print-page');
-    expect(pages.length).toBe(2);
+    expect(pages.length).toBe(3);
     expect(pages[0]?.textContent).toContain('A');
-    expect(pages[1]?.textContent).toContain('B');
+    expect(pages[1]?.textContent?.trim()).toBe('');
+    expect(pages[2]?.textContent).toContain('B');
+  });
+
+  it('keeps manual break markers in page content for later reruns', () => {
+    document.documentElement.setAttribute('data-printout', 'B5');
+    document.body.innerHTML = `
+      <article>
+        <p data-height="60">A</p>
+        <div class="karte-force-page-break" aria-hidden="true"></div>
+        <p data-height="60">B</p>
+        <div class="karte-force-page-break" aria-hidden="true"></div>
+        <p data-height="60">C</p>
+      </article>
+    `;
+
+    const runtimeWindow = window as TestWindow;
+    const pagination = runtimeWindow.__karteCreatePrintoutPagination?.(document);
+    pagination?.buildPages();
+
+    const pages = document.querySelectorAll('section.karte-print-page');
+    expect(pages.length).toBe(3);
+    expect(document.querySelectorAll('section.karte-print-page .karte-force-page-break').length).toBe(2);
   });
 });

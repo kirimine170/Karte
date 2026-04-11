@@ -246,10 +246,13 @@ function createPrintoutPagination(doc: Document = document): PrintoutPaginationC
       blocks.forEach((block) => {
         if (isManualPageBreakMarker(block)) {
           manualBreakMarkers += 1;
-          if (!pendingManualBreak && current.children.length > 0) {
-            pendingManualBreak = true;
-            manualBreakApplied += 1;
+          if (pendingManualBreak) {
+            current = createPage();
+            maxHeight = current.clientHeight;
           }
+          current.appendChild(block);
+          pendingManualBreak = true;
+          manualBreakApplied += 1;
           return;
         }
 

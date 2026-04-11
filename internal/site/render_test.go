@@ -232,3 +232,67 @@ func TestInjectManualPageBreakMarkers(t *testing.T) {
 		t.Fatalf("single --- should remain as normal horizontal-rule markdown: %s", got)
 	}
 }
+
+func TestWrapWithLayoutInjectsRenderAssetsAndHelpers(t *testing.T) {
+	root := "./root"
+	layoutPath := filepath.Join(root, "themes", "default", "layout.html")
+	fsys := &mockFileSystem{
+		files: map[string][]byte{
+			layoutPath: []byte("<!doctype html><html><head><title>{{TITLE}}</title></head><body><main>{{CONTENT}}</main></body></html>"),
+		},
+	}
+
+	renderer := NewRenderer(fsys)
+	got := renderer.wrapWithLayout(root, &FrontMatter{Title: "Doc"}, `<div class="mermaid">graph TD;A-->B;</div><span class="katex-inline">x+y</span>`)
+
+	for _, want := range []string{
+		mermaidCDNURL,
+		katexCSSURL,
+		katexJSURL,
+		"karte-render-enhancers",
+		"__karteRunRenderEnhancers",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("wrapped layout missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestInjectRenderAssetsAvoidsDuplicateTags(t *testing.T) {
+	input := strings.Join([]string{
+		"<!doctype html>",
+		"<html><head>",
+		`<script src="` + mermaidCDNURL + `"></script>`,
+		`<link rel="stylesheet" href="` + katexCSSURL + `">`,
+		`<script src="` + katexJSURL + `"></script>`,
+		"</head><body></body></html>",
+	}, "\n")
+
+	got := injectRenderAssets(input)
+	if strings.Count(got, mermaidCDNURL) != 1 {
+		t.Fatalf("expected single mermaid asset, got %d", strings.Count(got, mermaidCDNURL))
+	}
+	if strings.Count(got, katexCSSURL) != 1 {
+		t.Fatalf("expected single katex css asset, got %d", strings.Count(got, katexCSSURL))
+	}
+	if strings.Count(got, katexJSURL) != 1 {
+		t.Fatalf("expected single katex js asset, got %d", strings.Count(got, katexJSURL))
+	}
+}
+
+func TestProcessMermaidBlocks(t *testing.T) {
+	t.Parallel()
+
+	input := `<p>before</p><pre><code class="language-mermaid">graph TD;
+A--&gt;B
+</code></pre><p>after</p>`
+	got := processMermaidBlocks(input)
+
+	if !strings.Contains(got, `<div class="mermaid">graph TD;
+A-->B</div>`) {
+		t.Fatalf("expected mermaid div conversion, got: %s", got)
+	}
+	if strings.Contains(got, `language-mermaid`) {
+		t.Fatalf("expected original code block to be removed, got: %s", got)
+	}
+}

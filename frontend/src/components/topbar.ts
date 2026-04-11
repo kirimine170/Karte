@@ -438,7 +438,9 @@ export class Topbar extends BaseComponent {
                 for (const node of nodes) {
                     flowRoot.appendChild(node.cloneNode(true));
                 }
-                if (index < pageContents.length - 1) {
+                const lastElement = flowRoot.lastElementChild as HTMLElement | null;
+                const endsWithBreakMarker = Boolean(lastElement?.classList.contains('karte-force-page-break'));
+                if (index < pageContents.length - 1 && !endsWithBreakMarker) {
                     const marker = root.ownerDocument.createElement('div');
                     marker.className = 'karte-force-page-break karte-auto-page-break';
                     marker.setAttribute('aria-hidden', 'true');
