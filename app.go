@@ -71,6 +71,9 @@ type App struct {
 	ctx             context.Context
 	root            string
 	dataDir         string
+	karteUtilDir    string
+	karteUtilPath   string
+	karteUtilReady  bool
 	logFilePath     string
 	fs              FileSystem
 	syncManager     *syncpkg.SyncManager
@@ -109,13 +112,17 @@ type App struct {
 
 // logInfo writes info logs to both Wails runtime and app log file
 func (a *App) logInfo(msg string) {
-	runtime.LogInfo(a.ctx, msg)
+	if a.ctx != nil {
+		runtime.LogInfo(a.ctx, msg)
+	}
 	a.appendLog("INFO", msg)
 }
 
 // logError writes error logs to both Wails runtime and app log file
 func (a *App) logError(msg string) {
-	runtime.LogError(a.ctx, msg)
+	if a.ctx != nil {
+		runtime.LogError(a.ctx, msg)
+	}
 	a.appendLog("ERROR", msg)
 }
 
@@ -321,6 +328,9 @@ func (a *App) startup(ctx context.Context) {
 	if err := a.initializeDataDirectory(); err != nil {
 		runtime.LogError(ctx, fmt.Sprintf("Failed to initialize data directory: %v", err))
 		return
+	}
+	if err := a.initializeKarteUtil(); err != nil {
+		a.logError(fmt.Sprintf("Karte util bootstrap failed: %v", err))
 	}
 
 	a.asrInitDone = make(chan struct{})
@@ -1817,7 +1827,7 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 
 // BuildSite builds the static site
 func (a *App) BuildSite() error {
-	return a.build(a.root)
+	return a.build(a.dataDir)
 }
 
 // InitProject initializes a new Karte project

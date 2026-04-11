@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 const (
@@ -67,6 +68,7 @@ func main() {
 
 	for _, t := range selected {
 		fmt.Printf("==> Building %s (%s)\n", t.Name, t.Platform)
+		utilVersion := fmt.Sprintf("%s-%s", t.Name, time.Now().UTC().Format("20060102T150405Z"))
 
 		if *cleanFlag {
 			if err := os.RemoveAll(t.ArtifactDir); err != nil {
@@ -80,12 +82,16 @@ func main() {
 			log.Fatalf("failed to clean %s: %v", binDir, err)
 		}
 
-		if err := runWailsBuild(ctx, t); err != nil {
+		if err := runWailsBuild(ctx, t, utilVersion); err != nil {
 			log.Fatalf("wails build failed for %s: %v", t.Name, err)
 		}
 
 		if err := moveArtifacts(t.ArtifactDir); err != nil {
 			log.Fatalf("failed to move artifacts for %s: %v", t.Name, err)
+		}
+
+		if err := packageKarteUtilBinary(ctx, projectRoot, t, utilVersion); err != nil {
+			log.Fatalf("failed to package karte-cli for %s: %v", t.Name, err)
 		}
 
 		// macOS 向けビルドでは、templateをコピーする
@@ -198,9 +204,10 @@ func ensurePortAudioOnDarwin(ctx context.Context) error {
 	return runCommand(ctx, ".", nil, "brew", "install", "portaudio")
 }
 
-func runWailsBuild(ctx context.Context, t target) error {
+func runWailsBuild(ctx context.Context, t target, utilVersion string) error {
 	args := []string{"build", "-platform", t.Platform}
 	args = append(args, t.Flags...)
+	args = append(args, "-ldflags", fmt.Sprintf("-X main.karteUtilVersion=%s", utilVersion))
 	return runCommand(ctx, ".", t.Env, "wails", args...)
 }
 
@@ -291,6 +298,86 @@ func packageTemplateIntoAppBundle(projectRoot, artifactDir string) error {
 	}
 
 	return nil
+}
+
+func packageKarteUtilBinary(ctx context.Context, projectRoot string, t target, utilVersion string) error {
+	goos := t.Env["GOOS"]
+	goarch := t.Env["GOARCH"]
+	if goos == "" {
+		goos = runtime.GOOS
+	}
+	if goarch == "" {
+		goarch = runtime.GOARCH
+	}
+
+	binaryName := "karte-cli"
+	if goos == "windows" {
+		binaryName += ".exe"
+	}
+
+	platformKey := fmt.Sprintf("%s-%s", goos, goarch)
+	if t.Name == "darwin" && strings.Contains(t.Platform, "universal") {
+		platformKey = "darwin-universal"
+	}
+
+	dstBase := filepath.Join(t.ArtifactDir, "karte_util_bundles", platformKey)
+	if isDarwinTarget(t.Name) {
+		appBundle := filepath.Join(t.ArtifactDir, "Karte.app")
+		if fi, err := os.Stat(appBundle); err == nil && fi.IsDir() {
+			dstBase = filepath.Join(appBundle, "Contents", "Resources", "karte_util_bundles", platformKey)
+		}
+	}
+	if err := os.MkdirAll(dstBase, 0o755); err != nil {
+		return fmt.Errorf("create util bundle dir %s: %w", dstBase, err)
+	}
+	dstPath := filepath.Join(dstBase, binaryName)
+
+	if t.Name == "darwin" && strings.Contains(t.Platform, "universal") && runtime.GOOS == "darwin" {
+		return buildUniversalDarwinCLI(ctx, projectRoot, dstPath, utilVersion)
+	}
+
+	env := map[string]string{
+		"GOOS":   goos,
+		"GOARCH": goarch,
+	}
+	args := []string{
+		"build",
+		"-ldflags", fmt.Sprintf("-X main.CLIVersion=%s", utilVersion),
+		"-o", dstPath,
+		"./cmd/karte-cli",
+	}
+	if err := runCommand(ctx, projectRoot, env, "go", args...); err != nil {
+		return fmt.Errorf("go build karte-cli: %w", err)
+	}
+	if goos != "windows" {
+		if err := os.Chmod(dstPath, 0o755); err != nil {
+			return fmt.Errorf("chmod util binary: %w", err)
+		}
+	}
+	return nil
+}
+
+func buildUniversalDarwinCLI(ctx context.Context, projectRoot, dstPath, version string) error {
+	tmpDir, err := os.MkdirTemp("", "karte-cli-universal-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	amd64Path := filepath.Join(tmpDir, "karte-cli-amd64")
+	arm64Path := filepath.Join(tmpDir, "karte-cli-arm64")
+
+	commonArgs := []string{"build", "-ldflags", fmt.Sprintf("-X main.CLIVersion=%s", version)}
+	if err := runCommand(ctx, projectRoot, map[string]string{"GOOS": "darwin", "GOARCH": "amd64"}, "go", append(commonArgs, "-o", amd64Path, "./cmd/karte-cli")...); err != nil {
+		return fmt.Errorf("build amd64 cli: %w", err)
+	}
+	if err := runCommand(ctx, projectRoot, map[string]string{"GOOS": "darwin", "GOARCH": "arm64"}, "go", append(commonArgs, "-o", arm64Path, "./cmd/karte-cli")...); err != nil {
+		return fmt.Errorf("build arm64 cli: %w", err)
+	}
+	if err := runCommand(ctx, projectRoot, nil, "lipo", "-create", "-output", dstPath, amd64Path, arm64Path); err != nil {
+		return fmt.Errorf("create universal cli with lipo: %w", err)
+	}
+	return os.Chmod(dstPath, 0o755)
 }
 
 // copyDir recursively copies a directory tree.
