@@ -41,6 +41,38 @@ func newMarkdown(hardwrap bool) goldmark.Markdown {
 var fmRe = regexp.MustCompile(`(?s)^---\n(.*?)\n---\n`)
 var impRe = regexp.MustCompile(`(?m)^@import\((.*?)\)\s*$`)
 
+const forcePageBreakHTML = `<div class="karte-force-page-break" aria-hidden="true"></div>`
+
+const (
+	mermaidCDNURL = "https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"
+	katexCSSURL   = "https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.css"
+	katexJSURL    = "https://cdn.jsdelivr.net/npm/katex@latest/dist/katex.min.js"
+)
+
+func injectManualPageBreakMarkers(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	text := strings.ReplaceAll(string(body), "\r\n", "\n")
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "===" {
+			out = append(out, forcePageBreakHTML)
+			continue
+		}
+		if line == "---" && i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == "---" {
+			out = append(out, forcePageBreakHTML)
+			i++
+			continue
+		}
+		out = append(out, lines[i])
+	}
+	return []byte(strings.Join(out, "\n"))
+}
+
 // FileSystem abstracts file access for rendering.
 type FileSystem interface {
 	ReadFile(name string) ([]byte, error)
@@ -117,16 +149,33 @@ func (r *Renderer) RenderMarkdownWithOptions(root, path string, hardwrap bool) (
 			return []byte(fmt.Sprintf("<p>unknown import type: %s</p>", html.EscapeString(typ)))
 		}
 	})
+	expanded = injectManualPageBreakMarkers(expanded)
 	var buf bytes.Buffer
 	md := newMarkdown(hardwrap)
 	if err := md.Convert(expanded, &buf); err != nil {
 		return "", nil, err
 	}
 	htmlContent := buf.String()
+	htmlContent = processMermaidBlocks(htmlContent)
 	// Process KaTeX math expressions
 	htmlContent = processKaTeX(htmlContent)
 	htmlOut := r.wrapWithLayout(root, fm, htmlContent)
 	return htmlOut, fm, nil
+}
+
+func processMermaidBlocks(htmlContent string) string {
+	re := regexp.MustCompile(`(?is)<pre>\s*<code class="(?:language-mermaid|lang-mermaid)">([\s\S]*?)</code>\s*</pre>`)
+	return re.ReplaceAllStringFunc(htmlContent, func(match string) string {
+		sub := re.FindStringSubmatch(match)
+		if len(sub) < 2 {
+			return match
+		}
+		source := html.UnescapeString(strings.TrimSpace(sub[1]))
+		if source == "" {
+			return match
+		}
+		return `<div class="mermaid">` + source + `</div>`
+	})
 }
 
 func (r *Renderer) wrapWithLayout(root string, fm *FrontMatter, inner string) string {
@@ -156,7 +205,136 @@ func (r *Renderer) wrapWithLayout(root string, fm *FrontMatter, inner string) st
 	s := string(b)
 	s = strings.ReplaceAll(s, "{{TITLE}}", html.EscapeString(fm.Title))
 	s = strings.ReplaceAll(s, "{{CONTENT}}", inner)
+	s = injectRenderAssets(s)
+	s = injectRenderHelpers(s)
 	return s
+}
+
+func injectRenderAssets(htmlContent string) string {
+	var inserts []string
+	if !strings.Contains(htmlContent, mermaidCDNURL) {
+		inserts = append(inserts, `<script src="`+mermaidCDNURL+`"></script>`)
+	}
+	if !strings.Contains(htmlContent, katexCSSURL) {
+		inserts = append(inserts, `<link rel="stylesheet" href="`+katexCSSURL+`">`)
+	}
+	if !strings.Contains(htmlContent, katexJSURL) {
+		inserts = append(inserts, `<script src="`+katexJSURL+`"></script>`)
+	}
+	if len(inserts) == 0 {
+		return htmlContent
+	}
+
+	injection := strings.Join(inserts, "\n")
+	if strings.Contains(htmlContent, "</head>") {
+		return strings.Replace(htmlContent, "</head>", injection+"\n</head>", 1)
+	}
+	if strings.Contains(htmlContent, "<head>") {
+		return strings.Replace(htmlContent, "<head>", "<head>\n"+injection+"\n", 1)
+	}
+	if strings.Contains(strings.ToLower(htmlContent), "<html") {
+		re := regexp.MustCompile(`(?i)<html([^>]*)>`)
+		return re.ReplaceAllString(htmlContent, `<html$1><head>`+injection+`</head>`)
+	}
+	if strings.Contains(strings.ToLower(htmlContent), "<!doctype html>") {
+		re := regexp.MustCompile(`(?i)<!doctype html>`)
+		return re.ReplaceAllString(htmlContent, "<!doctype html>\n<head>\n"+injection+"\n</head>")
+	}
+	return injection + "\n" + htmlContent
+}
+
+func injectRenderHelpers(htmlContent string) string {
+	if strings.Contains(htmlContent, "karte-render-enhancers") {
+		return htmlContent
+	}
+	script := `<script id="karte-render-enhancers">
+(function() {
+  function decodeHtmlEntities(text) {
+    var textarea = document.createElement('textarea');
+    textarea.innerHTML = text;
+    return textarea.value;
+  }
+  function renderKaTeX() {
+    if (typeof katex === 'undefined') return false;
+    document.querySelectorAll('.katex-inline').forEach(function(el) {
+      if (el.querySelector('.katex')) return;
+      var raw = (el.textContent || '').trim();
+      if (!raw) return;
+      try { katex.render(decodeHtmlEntities(raw), el, { throwOnError: false, displayMode: false }); } catch (e) {}
+    });
+    document.querySelectorAll('.katex-block').forEach(function(el) {
+      if (el.querySelector('.katex')) return;
+      var raw = (el.textContent || '').trim();
+      if (!raw) return;
+      try { katex.render(decodeHtmlEntities(raw), el, { throwOnError: false, displayMode: true }); } catch (e) {}
+    });
+    window.__karteKaTeXReady = true;
+    return true;
+  }
+  function convertMermaidCodeBlocks() {
+    document.querySelectorAll('pre > code.language-mermaid, pre > code.lang-mermaid').forEach(function(code) {
+      var pre = code.parentElement;
+      if (!pre) return;
+      var container = document.createElement('div');
+      container.className = 'mermaid';
+      container.textContent = code.textContent || '';
+      pre.replaceWith(container);
+    });
+  }
+  function renderMermaid() {
+    convertMermaidCodeBlocks();
+    if (typeof mermaid === 'undefined') return false;
+    var nodes = document.querySelectorAll('.mermaid:not([data-processed])');
+    if (nodes.length === 0) {
+      window.__karteMermaidReady = true;
+      return true;
+    }
+    try {
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'loose',
+        htmlLabels: true,
+        flowchart: { htmlLabels: true },
+        sequence: { htmlLabels: true }
+      });
+    } catch (e) {}
+    try {
+      var result = mermaid.run({ nodes: nodes });
+      Promise.resolve(result).finally(function() {
+        window.__karteMermaidReady = document.querySelectorAll('.mermaid:not([data-processed])').length === 0;
+        renderKaTeX();
+      });
+    } catch (e) {}
+    return true;
+  }
+  function runAll() {
+    renderKaTeX();
+    renderMermaid();
+  }
+  window.__karteRunRenderEnhancers = runAll;
+  function schedule() {
+    var attempts = 0;
+    var timer = setInterval(function() {
+      attempts++;
+      runAll();
+      if (attempts > 200) clearInterval(timer);
+      if (typeof katex !== 'undefined' && typeof mermaid !== 'undefined') clearInterval(timer);
+    }, 50);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', schedule);
+  } else {
+    schedule();
+  }
+})();
+</script>`
+	if strings.Contains(htmlContent, "</body>") {
+		return strings.Replace(htmlContent, "</body>", script+"</body>", 1)
+	}
+	if strings.Contains(htmlContent, "</html>") {
+		return strings.Replace(htmlContent, "</html>", script+"</html>", 1)
+	}
+	return htmlContent + script
 }
 
 var argKV = regexp.MustCompile(`([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*"([^"]*)"`)
