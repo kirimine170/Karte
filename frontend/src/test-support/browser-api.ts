@@ -63,6 +63,7 @@ function basicMarkdownToHtml(content) {
         .replace(/^# (.*$)/gim, '<h1>$1</h1>')
         .replace(/^## (.*$)/gim, '<h2>$1</h2>')
         .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+        .replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/gim, '<img alt="$1" src="$2" title="$3">')
         .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
         .replace(/\*(.*)\*/gim, '<em>$1</em>')
         .replace(/\n/gim, '<br>');
@@ -232,6 +233,34 @@ export function createBrowserApi() {
         async GetImageMetadata(path) {
             console.log('Mock GetImageMetadata called:', path);
             return 'title: mock image\nnotes: サンプルメタデータ';
+        },
+
+        async GetCsvList() {
+            console.log('Mock GetCsvList called');
+            return [
+                { path: 'data/sample.csv', name: 'sample.csv', size: 256, modTime: new Date().toISOString() }
+            ];
+        },
+
+        async GetCsvFile(path) {
+            console.log('Mock GetCsvFile called:', path);
+            if (path === 'data/sample.csv') {
+                return [
+                    ['Name', 'Role', 'Location'],
+                    ['Alice', 'Engineer', 'Tokyo'],
+                    ['Bob', 'Designer', 'Osaka'],
+                    ['Carol', 'PM', 'Nagoya']
+                ];
+            }
+            return [
+                ['Column 1', 'Column 2'],
+                ['Value 1', 'Value 2']
+            ];
+        },
+
+        async SaveCsvFile(path, data) {
+            console.log('Mock SaveCsvFile called:', path, data.length);
+            return true;
         },
 
         async SaveImageMetadata(path, yaml) {

@@ -4,7 +4,7 @@ import type { WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
 import { prepareMarkdownForPreview } from '../utils/preview-content';
-import { writePreviewFrame } from '../utils/preview-frame';
+import { writePreviewFrame, type PreviewFocusTarget } from '../utils/preview-frame';
 import { convertTimestampsToLinks, updateAudioPlayerFromContent } from '../utils/preview-audio';
 import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
@@ -44,6 +44,7 @@ export class EditorLayout extends BaseComponent {
     private pdfPageNumber = 1;
     private pdfSpreadIndex = 0;
     private pdfRenderRequestId = 0;
+    private pendingPreviewFocusTarget: PreviewFocusTarget | null = null;
     private pdfCanvasContainer: HTMLElement | null = null;
     private pdfCanvasLeft: HTMLCanvasElement | null = null;
     private pdfCanvasRight: HTMLCanvasElement | null = null;
@@ -124,6 +125,7 @@ export class EditorLayout extends BaseComponent {
                     const target = e.target as HTMLTextAreaElement;
                     const content = target.value;
                     eventLogger.log('EditorLayout', 'editor-input', { contentLength: content.length });
+                    this.pendingPreviewFocusTarget = this.capturePreviewFocusTargetFromEditor(target, content);
                     docStore.setMarkdownContent(content);
                     docStore.setHasUnsavedChanges(true);
                     this.updatePreview(content);
@@ -509,8 +511,6 @@ export class EditorLayout extends BaseComponent {
             const html = await this.api.PreviewMarkdown(prepared);
             const finalHtml = this.buildPreviewHtml(prepared, html);
             useDocStore.getState().setPreviewHtml(finalHtml);
-            this.updatePreviewFrame(finalHtml);
-            this.updateAudioPlayer(content);
         } catch (error) {
             console.error('Failed to update preview:', error);
         }
@@ -520,7 +520,9 @@ export class EditorLayout extends BaseComponent {
         if (!this.preview) {
             return;
         }
-        writePreviewFrame(this.preview, html);
+        const focusTarget = this.pendingPreviewFocusTarget;
+        this.pendingPreviewFocusTarget = null;
+        writePreviewFrame(this.preview, html, { focusTarget });
         this.setupPreviewDropHandlers();
     }
 
@@ -1040,9 +1042,15 @@ export class EditorLayout extends BaseComponent {
         const csvMarkdown = `@import(type="csv", path="${path}")\n`;
         const currentValue = this.editor.value;
         const nextValue = currentValue.slice(0, cursorPos) + csvMarkdown + currentValue.slice(cursorPos);
+        this.pendingPreviewFocusTarget = this.withMarkdownRange(
+            this.createInsertedCsvFocusTarget(path),
+            cursorPos,
+            cursorPos + csvMarkdown.length
+        );
         this.editor.value = nextValue;
         const nextCursor = cursorPos + csvMarkdown.length;
         this.editor.setSelectionRange(nextCursor, nextCursor);
+        this.scrollEditorToSelection();
 
         const docStore = useDocStore.getState();
         docStore.setMarkdownContent(nextValue);
@@ -1050,19 +1058,26 @@ export class EditorLayout extends BaseComponent {
         this.updatePreview(nextValue);
     }
 
-    private insertCsvAfterElement(path: string, element: Element): void {
+    private insertCsvAfterElement(path: string, element: Element, fallbackPosition?: number): void {
         if (!this.editor) {
             return;
         }
         const markdownContent = this.editor.value;
         const position = this.findMarkdownPositionFromElement(element, markdownContent);
         const csvMarkdown = `\n\n@import(type="csv", path="${path}")\n`;
-        const insertAt = position === -1 ? markdownContent.length : position;
+        const insertAt = position === -1 ? (fallbackPosition ?? markdownContent.length) : position;
         const nextValue = markdownContent.slice(0, insertAt) + csvMarkdown + markdownContent.slice(insertAt);
+        this.pendingPreviewFocusTarget = this.withMarkdownRange(
+            this.createInsertedCsvFocusTarget(path),
+            insertAt,
+            insertAt + csvMarkdown.length,
+            element
+        );
         this.editor.value = nextValue;
         const nextCursor = insertAt + csvMarkdown.length;
         this.editor.setSelectionRange(nextCursor, nextCursor);
         this.editor.focus();
+        this.scrollEditorToSelection();
 
         const docStore = useDocStore.getState();
         docStore.setMarkdownContent(nextValue);
@@ -1079,9 +1094,15 @@ export class EditorLayout extends BaseComponent {
         const imageMarkdown = `![${nameWithoutExt}](${path} "${name}")`;
         const currentValue = this.editor.value;
         const nextValue = currentValue.slice(0, cursorPos) + imageMarkdown + currentValue.slice(cursorPos);
+        this.pendingPreviewFocusTarget = this.withMarkdownRange(
+            this.createInsertedImageFocusTarget(path, nameWithoutExt, name),
+            cursorPos,
+            cursorPos + imageMarkdown.length
+        );
         this.editor.value = nextValue;
         const nextCursor = cursorPos + imageMarkdown.length;
         this.editor.setSelectionRange(nextCursor, nextCursor);
+        this.scrollEditorToSelection();
 
         const docStore = useDocStore.getState();
         docStore.setMarkdownContent(nextValue);
@@ -1089,7 +1110,7 @@ export class EditorLayout extends BaseComponent {
         this.updatePreview(nextValue);
     }
 
-    private async insertImageAfterElement(path: string, name: string, element: Element): Promise<void> {
+    private async insertImageAfterElement(path: string, name: string, element: Element, fallbackPosition?: number): Promise<void> {
         if (!this.editor) {
             return;
         }
@@ -1097,13 +1118,20 @@ export class EditorLayout extends BaseComponent {
         const position = this.findMarkdownPositionFromElement(element, markdownContent);
         const nameWithoutExt = name.replace(/\.[^/.]+$/, '');
         const imageMarkdown = `\n\n![${nameWithoutExt}](${path} "${name}")\n`;
-        const insertAt = position === -1 ? markdownContent.length : position;
+        const insertAt = position === -1 ? (fallbackPosition ?? markdownContent.length) : position;
         const nextValue = markdownContent.slice(0, insertAt) + imageMarkdown + markdownContent.slice(insertAt);
+        this.pendingPreviewFocusTarget = this.withMarkdownRange(
+            this.createInsertedImageFocusTarget(path, nameWithoutExt, name),
+            insertAt,
+            insertAt + imageMarkdown.length,
+            element
+        );
         this.editor.value = nextValue;
 
         const nextCursor = insertAt + imageMarkdown.length;
         this.editor.setSelectionRange(nextCursor, nextCursor);
         this.editor.focus();
+        this.scrollEditorToSelection();
 
         const docStore = useDocStore.getState();
         docStore.setMarkdownContent(nextValue);
@@ -1113,12 +1141,17 @@ export class EditorLayout extends BaseComponent {
 
     private findMarkdownPositionFromElement(element: Element, markdownContent: string): number {
         if (!element || !markdownContent) {
+            eventLogger.log('EditorLayout', 'preview-drop-position-unavailable', {
+                hasElement: Boolean(element),
+                markdownLength: markdownContent.length,
+            });
             return -1;
         }
 
         let currentElement: Element | null = element;
         let attempts = 0;
         const maxAttempts = 10;
+        const origin = this.describePreviewElement(element);
 
         while (currentElement && attempts < maxAttempts) {
             if (currentElement.tagName && /^H[1-6]$/.test(currentElement.tagName)) {
@@ -1130,6 +1163,14 @@ export class EditorLayout extends BaseComponent {
                     const match = markdownContent.match(headingPattern);
                     if (match) {
                         const headingEnd = markdownContent.indexOf('\n', match.index + match[0].length);
+                        eventLogger.log('EditorLayout', 'preview-drop-position-match', {
+                            strategy: 'heading',
+                            attempts,
+                            matchIndex: match.index,
+                            headingLevel: level,
+                            ...origin,
+                            ...this.describePreviewElement(currentElement),
+                        });
                         return headingEnd !== -1 ? headingEnd : markdownContent.length;
                     }
                 }
@@ -1144,19 +1185,38 @@ export class EditorLayout extends BaseComponent {
                     const match = markdownContent.match(regex);
                     if (match) {
                         const lineEnd = markdownContent.indexOf('\n', match.index);
+                        eventLogger.log('EditorLayout', 'preview-drop-position-match', {
+                            strategy: 'block-text',
+                            attempts,
+                            matchIndex: match.index,
+                            textSignature: this.normalizeText(searchText).slice(0, 100),
+                            ...origin,
+                            ...this.describePreviewElement(currentElement),
+                        });
                         return lineEnd !== -1 ? lineEnd : markdownContent.length;
                     }
                 }
             }
 
             if (currentElement.tagName === 'LI') {
-                const itemText = currentElement.textContent?.trim();
+                const itemText = this.getListItemText(currentElement);
                 if (itemText) {
                     const escapedText = itemText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                    const listPattern = new RegExp(`^[\\s\\-*+\\d\\.]+\\s+${escapedText.substring(0, 50)}`, 'm');
+                    const listPattern = new RegExp(
+                        `^[ \\t]*(?:[-+*]|\\d+\\.)\\s+${escapedText.substring(0, 80).replace(/\s+/g, '\\s+')}`,
+                        'm'
+                    );
                     const match = markdownContent.match(listPattern);
                     if (match) {
                         const lineEnd = markdownContent.indexOf('\n', match.index);
+                        eventLogger.log('EditorLayout', 'preview-drop-position-match', {
+                            strategy: 'list-item',
+                            attempts,
+                            matchIndex: match.index,
+                            textSignature: this.normalizeText(itemText).slice(0, 60),
+                            ...origin,
+                            ...this.describePreviewElement(currentElement),
+                        });
                         return lineEnd !== -1 ? lineEnd : markdownContent.length;
                     }
                 }
@@ -1166,12 +1226,245 @@ export class EditorLayout extends BaseComponent {
             attempts += 1;
         }
 
-        return markdownContent.length;
+        eventLogger.log('EditorLayout', 'preview-drop-position-fallback', {
+            strategy: 'selection-fallback',
+            markdownLength: markdownContent.length,
+            attempts,
+            ...origin,
+        });
+        return -1;
     }
 
     private getNameFromPath(path: string): string {
         const name = path.split('/').pop();
         return name || 'image';
+    }
+
+    private normalizeText(value: string | null | undefined): string {
+        return (value || '').replace(/\s+/g, ' ').trim();
+    }
+
+    private getDirectTextContent(element: Element | null): string {
+        if (!element) {
+            return '';
+        }
+
+        const directText = Array.from(element.childNodes)
+            .filter((node) => node.nodeType === Node.TEXT_NODE)
+            .map((node) => node.textContent || '')
+            .join(' ');
+        return this.normalizeText(directText);
+    }
+
+    private getListItemText(element: Element | null): string {
+        if (!element) {
+            return '';
+        }
+
+        const directText = this.getDirectTextContent(element);
+        if (directText) {
+            return directText;
+        }
+
+        const nonListChildren = Array.from(element.children).filter((child) => {
+            const tagName = child.tagName.toUpperCase();
+            return tagName !== 'UL' && tagName !== 'OL';
+        });
+        const fallbackText = nonListChildren
+            .map((child) => this.normalizeText(child.textContent))
+            .filter(Boolean)
+            .join(' ');
+        return this.normalizeText(fallbackText);
+    }
+
+    private describePreviewElement(element: Element | null): Record<string, string | boolean | null> {
+        if (!element) {
+            return {
+                elementTag: null,
+                elementClasses: null,
+                elementTextSignature: null,
+                nearestHeading: null,
+                isGenericContainer: false,
+            };
+        }
+
+        const nearestHeading = element.closest('section.karte-print-page')?.querySelector('h1, h2, h3, h4, h5, h6')
+            || element.closest('article, section, main, body')?.querySelector('h1, h2, h3, h4, h5, h6');
+
+        return {
+            elementTag: element.tagName,
+            elementClasses: this.normalizeText((element as HTMLElement).className || '').slice(0, 120) || null,
+            elementTextSignature: this.normalizeText(element.textContent).slice(0, 120) || null,
+            nearestHeading: this.normalizeText(nearestHeading?.textContent).slice(0, 80) || null,
+            isGenericContainer: this.isGenericPreviewContainer(element),
+        };
+    }
+
+    private isGenericPreviewContainer(element: Element | null): boolean {
+        if (!element) {
+            return false;
+        }
+
+        const tagName = element.tagName.toUpperCase();
+        if (tagName === 'HTML' || tagName === 'BODY' || tagName === 'MAIN' || tagName === 'ARTICLE') {
+            return true;
+        }
+
+        const classList = Array.from(element.classList);
+        return classList.some((className) => (
+            className === 'markdown-body'
+            || className === 'preview-content'
+            || className === 'karte-print-page'
+            || className === 'karte-print-page-content'
+        ));
+    }
+
+    private getPreviewScrollRatio(): number {
+        if (!this.preview?.contentDocument) {
+            return 0;
+        }
+        const scrollRoot = this.preview.contentDocument.scrollingElement
+            || this.preview.contentDocument.documentElement
+            || this.preview.contentDocument.body;
+        if (!scrollRoot) {
+            return 0;
+        }
+        const maxScroll = Math.max(0, scrollRoot.scrollHeight - scrollRoot.clientHeight);
+        if (maxScroll <= 0) {
+            return 0;
+        }
+        return Math.max(0, Math.min(1, scrollRoot.scrollTop / maxScroll));
+    }
+
+    private getLinesAroundCursor(content: string, cursorPos: number): { previous: string; current: string; next: string } {
+        const lines = content.split(/\r?\n/);
+        let offset = 0;
+        let index = lines.length - 1;
+        for (let i = 0; i < lines.length; i += 1) {
+            const lineLength = lines[i].length + 1;
+            if (cursorPos <= offset + lineLength - 1) {
+                index = i;
+                break;
+            }
+            offset += lineLength;
+        }
+        return {
+            previous: lines[index - 1] || '',
+            current: lines[index] || '',
+            next: lines[index + 1] || '',
+        };
+    }
+
+    private getNearestHeadingText(content: string, cursorPos: number): string {
+        const before = content.slice(0, cursorPos);
+        const lines = before.split(/\r?\n/).reverse();
+        for (const line of lines) {
+            const match = line.match(/^\s*#{1,6}\s+(.*)$/);
+            if (match?.[1]) {
+                return this.normalizeText(match[1]);
+            }
+        }
+        return '';
+    }
+
+    private getLineNumberAtOffset(content: string, offset: number): number {
+        return content.slice(0, Math.max(0, Math.min(offset, content.length))).split(/\r?\n/).length;
+    }
+
+    private scrollEditorToSelection(): void {
+        if (!this.editor) {
+            return;
+        }
+        const caret = this.editor.selectionStart ?? this.editor.value.length;
+        const line = this.editor.value.slice(0, caret).split(/\r?\n/).length - 1;
+        const computed = window.getComputedStyle(this.editor);
+        const lineHeight = Number.parseFloat(computed.lineHeight || '') || 20;
+        this.editor.scrollTop = Math.max(0, line * lineHeight - this.editor.clientHeight * 0.35);
+    }
+
+    private getPrintPageContext(element: Element | null): { pageTextSignature?: string; pageHeadingText?: string } {
+        const page = element?.closest?.('section.karte-print-page') as HTMLElement | null;
+        if (!page) {
+            return {};
+        }
+        return {
+            pageTextSignature: this.normalizeText(page.textContent).slice(0, 120),
+            pageHeadingText: this.normalizeText(page.querySelector('h1, h2, h3, h4, h5, h6')?.textContent).slice(0, 100),
+        };
+    }
+
+    private withMarkdownRange<T extends PreviewFocusTarget>(focusTarget: T, startOffset: number, endOffset: number, pageElement?: Element | null): T {
+        if (focusTarget.type === 'scroll-ratio-fallback') {
+            return focusTarget;
+        }
+        const content = this.editor?.value || '';
+        return {
+            ...focusTarget,
+            startOffset,
+            endOffset,
+            lineStart: this.getLineNumberAtOffset(content, startOffset),
+            lineEnd: this.getLineNumberAtOffset(content, endOffset),
+            ...this.getPrintPageContext(pageElement || null),
+        } as T;
+    }
+
+    private createScrollRatioFallbackTarget(): PreviewFocusTarget {
+        return {
+            type: 'scroll-ratio-fallback',
+            scrollRatio: this.getPreviewScrollRatio(),
+        };
+    }
+
+    private createInsertedImageFocusTarget(path: string, alt: string, title: string): PreviewFocusTarget {
+        return {
+            type: 'inserted-image',
+            path,
+            alt,
+            title,
+            scrollRatio: this.getPreviewScrollRatio(),
+        };
+    }
+
+    private createInsertedCsvFocusTarget(path: string): PreviewFocusTarget {
+        return {
+            type: 'inserted-csv',
+            path,
+            label: `@import(type="csv", path="${path}")`,
+            scrollRatio: this.getPreviewScrollRatio(),
+        };
+    }
+
+    private capturePreviewFocusTargetFromEditor(editor: HTMLTextAreaElement, content: string): PreviewFocusTarget {
+        const cursorPos = editor.selectionStart ?? content.length;
+        const lines = this.getLinesAroundCursor(content, cursorPos);
+        const currentLine = this.normalizeText(lines.current);
+        return {
+            type: 'text-caret',
+            startOffset: cursorPos,
+            endOffset: cursorPos,
+            lineStart: this.getLineNumberAtOffset(content, cursorPos),
+            lineEnd: this.getLineNumberAtOffset(content, cursorPos),
+            lineText: currentLine,
+            previousLineText: this.normalizeText(lines.previous),
+            nextLineText: this.normalizeText(lines.next),
+            headingText: this.getNearestHeadingText(content, cursorPos),
+            scrollRatio: this.getPreviewScrollRatio(),
+        };
+    }
+
+    private capturePreviewFocusTargetFromDrop(element: Element | null): PreviewFocusTarget {
+        if (!element) {
+            return this.createScrollRatioFallbackTarget();
+        }
+        const heading = element.closest('section, article, main, div')?.querySelector('h1, h2, h3, h4, h5, h6');
+        return {
+            type: 'dropped-anchor',
+            tagName: element.tagName.toLowerCase(),
+            textSignature: this.normalizeText(element.textContent).slice(0, 100),
+            headingText: this.normalizeText(heading?.textContent).slice(0, 100),
+            ...this.getPrintPageContext(element),
+            scrollRatio: this.getPreviewScrollRatio(),
+        };
     }
 
     private handlePreviewDragOver(event: DragEvent): void {
@@ -1207,13 +1500,35 @@ export class EditorLayout extends BaseComponent {
             this.getDragItemFromGlobals() ??
             this.getDragItemFromDom();
         if (!dragItem) {
+            eventLogger.log('EditorLayout', 'preview-drop-missing-item', {
+                source,
+                clientX: event.clientX,
+                clientY: event.clientY,
+            });
             console.error('Failed to get item data from drag');
             return;
         }
         this.clearGlobalDragData();
 
+        eventLogger.log('EditorLayout', 'preview-drop-start', {
+            source,
+            clientX: event.clientX,
+            clientY: event.clientY,
+            dragType: dragItem.type,
+            dragPath: dragItem.path,
+            dragName: dragItem.name,
+            editorSelectionStart: this.editor?.selectionStart ?? null,
+            editorSelectionEnd: this.editor?.selectionEnd ?? null,
+        });
+
         const iframeDoc = this.preview?.contentDocument || this.preview?.contentWindow?.document;
         if (!iframeDoc || !this.preview) {
+            eventLogger.log('EditorLayout', 'preview-drop-fallback-editor', {
+                source,
+                reason: 'iframe-unavailable',
+                dragType: dragItem.type,
+                dragPath: dragItem.path,
+            });
             if (dragItem.type === 'csv') {
                 this.insertCsvAtCursor(dragItem.path);
             } else {
@@ -1230,22 +1545,71 @@ export class EditorLayout extends BaseComponent {
                 const rect = this.preview.getBoundingClientRect();
                 element = iframeDoc.elementFromPoint(event.clientX - rect.left, event.clientY - rect.top);
             }
+            eventLogger.log('EditorLayout', 'preview-drop-hit-test', {
+                source,
+                ...this.describePreviewElement(element),
+            });
+            const dropTarget = this.capturePreviewFocusTargetFromDrop(element);
+            const markdownContent = this.editor?.value || '';
+            const selectionFallbackPosition = this.editor?.selectionStart ?? markdownContent.length;
+            const resolvedPosition = element
+                ? this.findMarkdownPositionFromElement(element, markdownContent)
+                : selectionFallbackPosition;
+            const usedSelectionFallback = !element || resolvedPosition === -1;
+            const dropPosition = usedSelectionFallback ? selectionFallbackPosition : resolvedPosition;
+            eventLogger.log('EditorLayout', 'preview-drop-resolved', {
+                source,
+                dragType: dragItem.type,
+                dragPath: dragItem.path,
+                markdownLength: markdownContent.length,
+                selectionFallbackPosition,
+                resolvedPosition,
+                dropPosition,
+                usedSelectionFallback,
+                focusTargetType: dropTarget?.type ?? null,
+                ...this.describePreviewElement(element),
+            });
 
             if (dragItem.type === 'csv') {
+                this.pendingPreviewFocusTarget = this.withMarkdownRange(
+                    this.createInsertedCsvFocusTarget(dragItem.path),
+                    dropPosition,
+                    dropPosition,
+                    element
+                );
+                if (this.pendingPreviewFocusTarget.type !== 'inserted-csv') {
+                    this.pendingPreviewFocusTarget = dropTarget;
+                }
                 if (element) {
-                    this.insertCsvAfterElement(dragItem.path, element);
+                    this.insertCsvAfterElement(dragItem.path, element, dropPosition);
                 } else {
+                    this.pendingPreviewFocusTarget = dropTarget;
                     this.insertCsvAtCursor(dragItem.path);
                 }
                 return;
             }
 
+            this.pendingPreviewFocusTarget = this.withMarkdownRange(
+                this.createInsertedImageFocusTarget(
+                    dragItem.path,
+                    dragItem.name.replace(/\.[^/.]+$/, ''),
+                    dragItem.name
+                ),
+                dropPosition,
+                dropPosition,
+                element
+            );
             if (element) {
-                await this.insertImageAfterElement(dragItem.path, dragItem.name, element);
+                await this.insertImageAfterElement(dragItem.path, dragItem.name, element, dropPosition);
             } else {
+                this.pendingPreviewFocusTarget = dropTarget;
                 this.insertImageAtCursor(dragItem.path, dragItem.name);
             }
         } catch (error) {
+            eventLogger.log('EditorLayout', 'preview-drop-error', {
+                source,
+                error: String(error),
+            });
             console.error('Failed to handle drop in preview:', error);
         }
     }

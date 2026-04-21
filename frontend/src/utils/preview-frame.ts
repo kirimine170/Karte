@@ -1,6 +1,62 @@
 import { setupTimestampLinkHandlers } from './preview-audio';
 import { eventLogger } from './event-logger';
 
+export type PreviewFocusTarget =
+    | {
+        type: 'text-caret';
+        startOffset?: number;
+        endOffset?: number;
+        lineStart?: number;
+        lineEnd?: number;
+        lineText: string;
+        previousLineText: string;
+        nextLineText: string;
+        headingText: string;
+        scrollRatio: number;
+    }
+    | {
+        type: 'inserted-image';
+        path: string;
+        alt: string;
+        title: string;
+        startOffset?: number;
+        endOffset?: number;
+        lineStart?: number;
+        lineEnd?: number;
+        pageTextSignature?: string;
+        pageHeadingText?: string;
+        scrollRatio: number;
+    }
+    | {
+        type: 'inserted-csv';
+        path: string;
+        label: string;
+        startOffset?: number;
+        endOffset?: number;
+        lineStart?: number;
+        lineEnd?: number;
+        pageTextSignature?: string;
+        pageHeadingText?: string;
+        scrollRatio: number;
+    }
+    | {
+        type: 'dropped-anchor';
+        tagName: string;
+        textSignature: string;
+        headingText: string;
+        pageTextSignature?: string;
+        pageHeadingText?: string;
+        scrollRatio: number;
+    }
+    | {
+        type: 'scroll-ratio-fallback';
+        scrollRatio: number;
+    };
+
+type PreviewFrameOptions = {
+    focusTarget?: PreviewFocusTarget | null;
+};
+
 type PreviewWindow = Window & {
     __karteCreatePrintoutPagination?: (doc?: Document) => {
         buildPages(): void;
@@ -31,11 +87,18 @@ const statusPollingTimers = new WeakMap<HTMLIFrameElement, number>();
 const lastPrintoutSignatures = new WeakMap<HTMLIFrameElement, string>();
 const zeroPageRetryCount = new WeakMap<HTMLIFrameElement, number>();
 const enhancerRetryTimers = new WeakMap<HTMLIFrameElement, number>();
+const pendingFocusTargets = new WeakMap<HTMLIFrameElement, PreviewFocusTarget>();
+const focusRetryTimers = new WeakMap<HTMLIFrameElement, number>();
 
-export function writePreviewFrame(iframe: HTMLIFrameElement, html: string): void {
+export function writePreviewFrame(iframe: HTMLIFrameElement, html: string, options: PreviewFrameOptions = {}): void {
     const doc = iframe.contentDocument;
     if (!doc) {
         return;
+    }
+    if (options.focusTarget) {
+        pendingFocusTargets.set(iframe, options.focusTarget);
+    } else {
+        pendingFocusTargets.delete(iframe);
     }
     const prevEnhancerTimer = enhancerRetryTimers.get(iframe);
     if (prevEnhancerTimer !== undefined) {
@@ -53,12 +116,17 @@ export function writePreviewFrame(iframe: HTMLIFrameElement, html: string): void
         win.__karteKaTeXReady = false;
     }
     schedulePreviewEnhancers(iframe);
+    attachPreviewAssetLoadHandlers(iframe);
     rerunPrintoutPagination(iframe);
+    attemptPreviewFocusRestore(iframe);
+    schedulePreviewFocusRetry(iframe, 0);
     startPreviewPrintoutStatusPolling(iframe);
     iframe.addEventListener('load', () => {
         setupTimestampLinkHandlers(iframe);
         rerunPrintoutPagination(iframe);
         updatePreviewPrintoutStatus(iframe);
+        attemptPreviewFocusRestore(iframe);
+        schedulePreviewFocusRetry(iframe, 0);
     }, { once: true });
 }
 
@@ -87,6 +155,8 @@ function kickPreviewEnhancers(iframe: HTMLIFrameElement, attempt: number): void 
     ensureMermaid(doc, win);
     rerunPrintoutPagination(iframe);
     updatePreviewPrintoutStatus(iframe);
+    attemptPreviewFocusRestore(iframe);
+    schedulePreviewFocusRetry(iframe, attempt);
 
     const hasMermaidSource = doc.querySelector('.mermaid, pre > code.language-mermaid, pre > code.lang-mermaid');
     const hasRenderedMermaid = doc.querySelector('.mermaid svg');
@@ -200,6 +270,8 @@ function renderKaTeX(doc: Document, win: PreviewWindow): void {
         syncPrintoutSourceSnapshot(doc);
         rerunPrintoutPagination(iframe);
         updatePreviewPrintoutStatus(iframe);
+        attemptPreviewFocusRestore(iframe);
+        schedulePreviewFocusRetry(iframe, 0);
     }
 }
 
@@ -264,8 +336,311 @@ function renderMermaid(doc: Document, win: PreviewWindow): void {
             if (iframe instanceof HTMLIFrameElement) {
                 rerunPrintoutPagination(iframe);
                 updatePreviewPrintoutStatus(iframe);
+                attemptPreviewFocusRestore(iframe);
+                schedulePreviewFocusRetry(iframe, 0);
             }
         });
+    });
+}
+
+function normalizePreviewText(value: string | null | undefined): string {
+    return (value || '').replace(/\s+/g, ' ').trim();
+}
+
+function buildTextSignature(value: string | null | undefined, maxLength = 100): string {
+    return normalizePreviewText(value).slice(0, maxLength);
+}
+
+function isFinitePrintout(doc: Document | null | undefined): boolean {
+    const mode = (doc?.documentElement?.getAttribute('data-printout') || '').trim().toLowerCase();
+    return Boolean(mode && mode !== 'infinite');
+}
+
+function hasPendingImageLoads(doc: Document): boolean {
+    return Array.from(doc.images).some((img) => !img.complete);
+}
+
+function getPreviewScrollRatio(iframe: HTMLIFrameElement): number {
+    const doc = iframe.contentDocument;
+    if (!doc) {
+        return 0;
+    }
+    const scrollRoot = doc.scrollingElement || doc.documentElement || doc.body;
+    if (!scrollRoot) {
+        return 0;
+    }
+    const maxScroll = Math.max(0, scrollRoot.scrollHeight - scrollRoot.clientHeight);
+    if (maxScroll <= 0) {
+        return 0;
+    }
+    return Math.max(0, Math.min(1, scrollRoot.scrollTop / maxScroll));
+}
+
+function restorePreviewScrollRatio(iframe: HTMLIFrameElement, ratio: number): boolean {
+    const doc = iframe.contentDocument;
+    if (!doc) {
+        return false;
+    }
+    const scrollRoot = doc.scrollingElement || doc.documentElement || doc.body;
+    if (!scrollRoot) {
+        return false;
+    }
+    const maxScroll = Math.max(0, scrollRoot.scrollHeight - scrollRoot.clientHeight);
+    scrollRoot.scrollTop = Math.round(maxScroll * Math.max(0, Math.min(1, ratio)));
+    return true;
+}
+
+function getCandidateElements(doc: Document): HTMLElement[] {
+    return Array.from(
+        doc.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6, p, li, blockquote, pre, table, img, figure')
+    );
+}
+
+function getPrintPageCandidates(doc: Document): HTMLElement[] {
+    return Array.from(doc.querySelectorAll<HTMLElement>('section.karte-print-page'));
+}
+
+function scoreTextCandidate(
+    candidate: HTMLElement,
+    textTarget: string,
+    headingTarget: string,
+    secondaryTargets: string[]
+): number {
+    let score = 0;
+    const ownText = buildTextSignature(candidate.textContent, 120);
+    const headingText = buildTextSignature(candidate.closest('section, article, main, div')?.querySelector('h1, h2, h3, h4, h5, h6')?.textContent, 100);
+
+    if (textTarget && ownText.includes(textTarget)) {
+        score += 6;
+    }
+    if (headingTarget && headingText.includes(headingTarget)) {
+        score += 3;
+    }
+    for (const value of secondaryTargets) {
+        if (value && ownText.includes(value)) {
+            score += 2;
+        }
+    }
+    if (/^H[1-6]$/.test(candidate.tagName) && textTarget && ownText === textTarget) {
+        score += 2;
+    }
+    return score;
+}
+
+function findBestTextCandidate(
+    doc: Document,
+    textTarget: string,
+    headingTarget: string,
+    secondaryTargets: string[]
+): HTMLElement | null {
+    let best: HTMLElement | null = null;
+    let bestScore = 0;
+    for (const candidate of getCandidateElements(doc)) {
+        const score = scoreTextCandidate(candidate, textTarget, headingTarget, secondaryTargets);
+        if (score > bestScore) {
+            best = candidate;
+            bestScore = score;
+        }
+    }
+    return bestScore > 0 ? best : null;
+}
+
+function scrollTargetIntoView(target: Element): boolean {
+    if (!('scrollIntoView' in target) || typeof target.scrollIntoView !== 'function') {
+        return false;
+    }
+    const page = target.closest?.('section.karte-print-page');
+    if (page && 'scrollIntoView' in page && typeof page.scrollIntoView === 'function') {
+        page.scrollIntoView({ block: 'center', inline: 'nearest' });
+    }
+    target.scrollIntoView({ block: 'center', inline: 'nearest' });
+    return true;
+}
+
+function findBestPrintPage(doc: Document, pageTextSignature?: string, pageHeadingText?: string): HTMLElement | null {
+    const textTarget = buildTextSignature(pageTextSignature, 120);
+    const headingTarget = buildTextSignature(pageHeadingText, 100);
+    if (!textTarget && !headingTarget) {
+        return null;
+    }
+
+    let best: HTMLElement | null = null;
+    let bestScore = 0;
+    for (const page of getPrintPageCandidates(doc)) {
+        const pageText = buildTextSignature(page.textContent, 180);
+        const pageHeading = buildTextSignature(page.querySelector('h1, h2, h3, h4, h5, h6')?.textContent, 100);
+        let score = 0;
+        if (textTarget && pageText.includes(textTarget)) {
+            score += 5;
+        }
+        if (headingTarget && pageHeading.includes(headingTarget)) {
+            score += 3;
+        }
+        if (score > bestScore) {
+            best = page;
+            bestScore = score;
+        }
+    }
+    return bestScore > 0 ? best : null;
+}
+
+export function restorePreviewFocus(iframe: HTMLIFrameElement, focusTarget: PreviewFocusTarget): boolean {
+    const doc = iframe.contentDocument;
+    if (!doc) {
+        return false;
+    }
+
+    if (focusTarget.type === 'inserted-image') {
+        const matchedPage = findBestPrintPage(doc, focusTarget.pageTextSignature, focusTarget.pageHeadingText);
+        if (matchedPage) {
+            scrollTargetIntoView(matchedPage);
+        }
+        const candidates = Array.from(doc.querySelectorAll<HTMLImageElement>('img'));
+        const path = focusTarget.path;
+        const alt = buildTextSignature(focusTarget.alt, 100);
+        const title = buildTextSignature(focusTarget.title, 100);
+        const match = candidates.find((img) => {
+            const src = img.getAttribute('src') || '';
+            const imgAlt = buildTextSignature(img.getAttribute('alt'), 100);
+            const imgTitle = buildTextSignature(img.getAttribute('title'), 100);
+            return src.includes(path) || (alt && imgAlt.includes(alt)) || (title && imgTitle.includes(title));
+        });
+        if (match) {
+            return scrollTargetIntoView(match);
+        }
+        return restorePreviewScrollRatio(iframe, focusTarget.scrollRatio);
+    }
+
+    if (focusTarget.type === 'inserted-csv') {
+        const matchedPage = findBestPrintPage(doc, focusTarget.pageTextSignature, focusTarget.pageHeadingText);
+        if (matchedPage) {
+            scrollTargetIntoView(matchedPage);
+        }
+        const tables = Array.from(doc.querySelectorAll<HTMLElement>('figure, table, figcaption, p, li'));
+        const label = buildTextSignature(focusTarget.label, 100);
+        const path = focusTarget.path;
+        const match = tables.find((candidate) => {
+            const text = buildTextSignature(candidate.textContent, 120);
+            return text.includes(path) || (label && text.includes(label));
+        });
+        if (match) {
+            return scrollTargetIntoView(match.tagName === 'FIGCAPTION' ? (match.closest('figure') || match) : match);
+        }
+        return restorePreviewScrollRatio(iframe, focusTarget.scrollRatio);
+    }
+
+    if (focusTarget.type === 'dropped-anchor') {
+        const matchedPage = findBestPrintPage(doc, focusTarget.pageTextSignature, focusTarget.pageHeadingText);
+        if (matchedPage) {
+            scrollTargetIntoView(matchedPage);
+        }
+        const target = findBestTextCandidate(
+            doc,
+            buildTextSignature(focusTarget.textSignature, 100),
+            buildTextSignature(focusTarget.headingText, 100),
+            [buildTextSignature(focusTarget.tagName, 40)]
+        );
+        if (target) {
+            return scrollTargetIntoView(target);
+        }
+        return restorePreviewScrollRatio(iframe, focusTarget.scrollRatio);
+    }
+
+    if (focusTarget.type === 'text-caret') {
+        const target = findBestTextCandidate(
+            doc,
+            buildTextSignature(focusTarget.lineText, 100),
+            buildTextSignature(focusTarget.headingText, 100),
+            [
+                buildTextSignature(focusTarget.previousLineText, 80),
+                buildTextSignature(focusTarget.nextLineText, 80),
+            ]
+        );
+        if (target) {
+            return scrollTargetIntoView(target);
+        }
+        return restorePreviewScrollRatio(iframe, focusTarget.scrollRatio);
+    }
+
+    return restorePreviewScrollRatio(iframe, focusTarget.scrollRatio);
+}
+
+function attemptPreviewFocusRestore(iframe: HTMLIFrameElement): void {
+    const focusTarget = pendingFocusTargets.get(iframe);
+    if (!focusTarget) {
+        return;
+    }
+    const restored = restorePreviewFocus(iframe, focusTarget);
+    if (!restored) {
+        return;
+    }
+
+    const doc = iframe.contentDocument;
+    const shouldRetainForImageSettle =
+        focusTarget.type === 'inserted-image'
+        && Boolean(doc)
+        && isFinitePrintout(doc)
+        && hasPendingImageLoads(doc);
+
+    if (!shouldRetainForImageSettle) {
+        pendingFocusTargets.delete(iframe);
+    }
+}
+
+function schedulePreviewFocusRetry(iframe: HTMLIFrameElement, attempt: number): void {
+    if (!pendingFocusTargets.has(iframe) || attempt >= 20) {
+        return;
+    }
+    const existing = focusRetryTimers.get(iframe);
+    if (existing !== undefined) {
+        window.clearTimeout(existing);
+    }
+    const timer = window.setTimeout(() => {
+        focusRetryTimers.delete(iframe);
+        if (!pendingFocusTargets.has(iframe)) {
+            return;
+        }
+        const doc = iframe.contentDocument;
+        if (!doc) {
+            return;
+        }
+        if (isFinitePrintout(doc)) {
+            rerunPrintoutPagination(iframe);
+            updatePreviewPrintoutStatus(iframe);
+        }
+        attemptPreviewFocusRestore(iframe);
+        if (pendingFocusTargets.has(iframe)) {
+            schedulePreviewFocusRetry(iframe, attempt + 1);
+        }
+    }, Math.min(80 + attempt * 30, 300));
+    focusRetryTimers.set(iframe, timer);
+}
+
+function attachPreviewAssetLoadHandlers(iframe: HTMLIFrameElement): void {
+    const doc = iframe.contentDocument;
+    if (!doc) {
+        return;
+    }
+
+    const flaggedDoc = doc as Document & { __kartePreviewAssetLoadSetup?: boolean };
+    if (flaggedDoc.__kartePreviewAssetLoadSetup) {
+        return;
+    }
+    flaggedDoc.__kartePreviewAssetLoadSetup = true;
+
+    const onAssetLoad = () => {
+        rerunPrintoutPagination(iframe);
+        updatePreviewPrintoutStatus(iframe);
+        attemptPreviewFocusRestore(iframe);
+        schedulePreviewFocusRetry(iframe, 0);
+    };
+
+    doc.querySelectorAll('img').forEach((img) => {
+        if (img.complete) {
+            return;
+        }
+        img.addEventListener('load', onAssetLoad, { once: true });
+        img.addEventListener('error', onAssetLoad, { once: true });
     });
 }
 
