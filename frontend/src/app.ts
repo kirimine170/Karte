@@ -386,7 +386,7 @@ export class App {
             useASRStore.getState().setStatus(status);
 
             // 初期化されていない場合は定期的にチェック
-            if (!status.initialized && !status.initializing) {
+            if (!status.initialized /*&& !status.initializing*/) {
                 const interval = setInterval(async () => {
                     const newStatus = await this.api!.GetASRStatus();
                     useASRStore.getState().setStatus(newStatus);

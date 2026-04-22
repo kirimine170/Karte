@@ -1,4 +1,4 @@
-//go:build windows
+//go:build not_implemented
 
 package asr
 
@@ -7,7 +7,40 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	sherpa "github.com/k2-fsa/sherpa-onnx-go-windows"
 )
+
+func (c *Config) offlineRecognizerConfig() *sherpa.OfflineRecognizerConfig {
+	modelCfg := sherpa.OfflineModelConfig{
+		Tokens:     c.Model.Tokens,
+		NumThreads: c.Runtime.Threads,
+		Provider:   c.Runtime.Provider,
+	}
+
+	if c.Model.ZipformerCTC != "" {
+		modelCfg.ZipformerCtc = sherpa.OfflineZipformerCtcModelConfig{
+			Model: c.Model.ZipformerCTC,
+		}
+	} else {
+		modelCfg.Transducer = sherpa.OfflineTransducerModelConfig{
+			Encoder: c.Model.Encoder,
+			Decoder: c.Model.Decoder,
+			Joiner:  c.Model.Joiner,
+		}
+	}
+
+	return &sherpa.OfflineRecognizerConfig{
+		FeatConfig: sherpa.FeatureConfig{
+			SampleRate: c.SampleRate,
+			FeatureDim: 80,
+		},
+		ModelConfig:    modelCfg,
+		DecodingMethod: c.Decoding.Method,
+		MaxActivePaths: 4,
+		BlankPenalty:   0.0,
+	}
+}
 
 // Windows 向けの簡易 Config 定義（sherpa-onnx には依存しない）
 
@@ -37,7 +70,7 @@ type RuntimeSpec struct {
 }
 
 // LoadConfigFromFile は JSON を読み込むが、Windows では ASR を実装しない
-func LoadConfigFromFile(path string) (*Config, error) {
+func LoadConfigFromFile(path string) (*Config, error) { // config.goの機能の一部、未実装OS向けのスタブのため配置されている
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -139,5 +172,3 @@ func (s *RealtimeService) Flush() string {
 }
 
 func (s *RealtimeService) Reset() {}
-
-
