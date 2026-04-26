@@ -93,3 +93,48 @@ onnxruntime.dllの手動操作については以下に記録を残しておく�
 enabledとmodel.tokensのセットする必要がある
 
 モデルに関しては`templates/karte_data_template/data/asr`以下にテンプレートがあるのでそのまま利用できる
+
+## install_portaudio
+
+windowsではportaudioを利用するために各種実行ファイルをビルドする必要がある。
+
+### 1. Install MINGW(MSYS2)
+
+1. MSYS2をインストール  <https://www.msys2.org/>にてDL可能
+2. MSYS2のターミナル上にて`pacman -S make gcc`で必要ツールをインストール
+
+### 2. Install portaudio
+
+- `pacman -S mingw-w64-x86_64-portaudio`
+
+### 3. Test
+
+これで使用可能なデバイス一覧が出てくれば成功
+
+```go
+package main
+
+import (
+	"fmt"
+	"github.com/gordonklaus/portaudio"
+)
+
+func main() {
+	portaudio.Initialize()
+	defer portaudio.Terminate()
+
+	devices, err := portaudio.Devices()
+	if err != nil {
+		panic(err)
+	}
+
+	for _, d := range devices {
+		fmt.Println(d.Name)
+	}
+}
+
+```
+
+CGO_CFLAGS `-IC:\portaudio\include`  
+CGO_LDFLAGS `-LC:\portaudio\lib`  
+を設定
