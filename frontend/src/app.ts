@@ -259,6 +259,45 @@ export class App {
             useExportStore.getState().setTranscriptionProgress(true, progress, message);
         });
 
+        this.runtime.EventsOn('recording-transcript-final', (data: unknown) => {
+            console.log('Recording transcript final:', data);
+            const payload = data as { text?: string; transcriptPath?: string };
+            if (payload?.text) {
+                useASRStore.getState().appendFinalTranscript(payload.text);
+            }
+            if (payload?.transcriptPath) {
+                useASRStore.getState().setRecordingTranscriptPath(payload.transcriptPath);
+            }
+        });
+
+        this.runtime.EventsOn('recording-stopped', (data: unknown) => {
+            console.log('Recording stopped:', data);
+            const payload = data as { error?: string; audioPath?: string; transcriptPath?: string };
+            useASRStore.getState().setIsRecording(false);
+
+            if (payload?.error) {
+                useUIStore.getState().setStatusMessage(`録音の停止に失敗しました: ${payload.error}`, 5000);
+                return;
+            }
+
+            if (payload?.transcriptPath) {
+                useASRStore.getState().setRecordingTranscriptPath(payload.transcriptPath);
+                this.refreshFileList().catch((error) => {
+                    console.error('Failed to refresh file list after recording:', error);
+                });
+                this.loadFileByPath(payload.transcriptPath).catch((error) => {
+                    console.error('Failed to load recording transcript:', error);
+                });
+                useUIStore.getState().setActiveTab('editor');
+                useUIStore.getState().setStatusMessage('録音と文字起こしが完了しました', 3000);
+            } else {
+                this.refreshFileList().catch((error) => {
+                    console.error('Failed to refresh file list after recording:', error);
+                });
+                useUIStore.getState().setStatusMessage('録音が完了しました', 3000);
+            }
+        });
+
         // 画像インポートイベント
         this.runtime.EventsOn('image-imported', (data: unknown) => {
             console.log('Image imported:', data);
