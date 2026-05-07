@@ -88,6 +88,9 @@ func main() {
 			log.Fatalf("failed to move artifacts for %s: %v", t.Name, err)
 		}
 		if isWindowsTarget(t) {
+			if err := packageTemplateIntoArtifact(projectRoot, t.ArtifactDir); err != nil {
+				log.Fatalf("failed to package karte_data_template for %s: %v", t.Name, err)
+			}
 			if err := packageWindowsRuntimeDLLs(ctx, t.ArtifactDir); err != nil {
 				log.Fatalf("failed to package Windows runtime DLLs for %s: %v", t.Name, err)
 			}
@@ -303,7 +306,31 @@ func copyExistingDLL(src, artifactDir string) error {
 		return fmt.Errorf("required DLL not found %s: %w", src, err)
 	}
 	dst := filepath.Join(artifactDir, filepath.Base(src))
-	return copyFile(src, dst)
+	if _, err := os.Stat(dst); err == nil {
+		_ = os.Chmod(dst, 0o666)
+		if err := os.Remove(dst); err != nil {
+			return fmt.Errorf("remove existing DLL %s: %w", dst, err)
+		}
+	}
+	if err := copyFile(src, dst); err != nil {
+		return err
+	}
+	return os.Chmod(dst, 0o644)
+}
+
+func packageTemplateIntoArtifact(projectRoot, artifactDir string) error {
+	templateSource := filepath.Join(projectRoot, "templates", "karte_data_template")
+	if fi, err := os.Stat(templateSource); err != nil || !fi.IsDir() {
+		return nil
+	}
+	templateTarget := filepath.Join(artifactDir, "karte_data")
+	if err := os.MkdirAll(templateTarget, 0o755); err != nil {
+		return fmt.Errorf("create template target %s: %w", templateTarget, err)
+	}
+	if err := copyDir(templateSource, templateTarget); err != nil {
+		return fmt.Errorf("copy template from %s to %s: %w", templateSource, templateTarget, err)
+	}
+	return nil
 }
 
 func moveArtifacts(destDir string) error {
