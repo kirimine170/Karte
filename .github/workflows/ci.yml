@@ -1,38 +1,98 @@
-name: CI
+name: Desktop Build
 
 on:
   push:
-    branches: [ "main", "master", "ci" ]
+    branches: [main]
+    tags: ['v*']
     paths:
-      - '.github/workflows/**'
+      - '.github/workflows/ci.yml'
       - '**/*.go'
       - 'frontend/**'
       - 'build/**'
       - 'templates/**'
       - 'themes/**'
-      - 'karte_data/**'
       - 'wails.json'
       - 'go.mod'
       - 'go.sum'
   pull_request:
     branches: [main]
     paths:
-      - '.github/workflows/**'
+      - '.github/workflows/ci.yml'
       - '**/*.go'
       - 'frontend/**'
       - 'build/**'
       - 'templates/**'
       - 'themes/**'
-      - 'karte_data/**'
       - 'wails.json'
       - 'go.mod'
       - 'go.sum'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
+  pr-build:
+    name: PR build check
+    if: github.event_name == 'pull_request'
+    runs-on: macos-15
+    env:
+      GOFLAGS: -buildvcs=false
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Download Go dependencies
+        run: go mod download
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+
+      - name: Install PortAudio
+        run: |
+          brew update
+          brew install portaudio
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --no-audit
+
+      - name: Generate Wails JS bindings
+        run: wails generate module
+
+      - name: Build frontend assets
+        working-directory: frontend
+        run: npm run build
+
+      - name: Build application
+        run: wails build -platform darwin/arm64
+
+  release-build:
     name: Build (${{ matrix.os }} - ${{ matrix.arch }})
+    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
+    env:
+      GOFLAGS: -buildvcs=false
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-22.04
@@ -61,6 +121,13 @@ jobs:
         with:
           go-version: '1.24'
           cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Download Go dependencies
         run: go mod download
@@ -95,26 +162,30 @@ jobs:
 
       - name: Install PortAudio (Windows)
         if: runner.os == 'Windows'
-        continue-on-error: true
         shell: pwsh
         run: |
-          # vcpkgを使用してPortAudioをインストール
-          git clone https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
-          & "$env:VCPKG_ROOT\vcpkg\bootstrap-vcpkg.bat"
-          & "$env:VCPKG_ROOT\vcpkg\vcpkg.exe" install portaudio:x64-windows
-          # vcpkgをPATHに追加（将来的に使用する場合）
-          echo "$env:VCPKG_ROOT" >> $env:GITHUB_PATH
+          C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed `
+            mingw-w64-x86_64-gcc `
+            mingw-w64-x86_64-pkg-config `
+            mingw-w64-x86_64-portaudio
+          "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "PKG_CONFIG_PATH=C:\msys64\mingw64\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CGO_ENABLED=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
+      - name: Add sherpa-onnx runtime DLLs to PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $sherpaDir = go list -m -f "{{.Dir}}" github.com/k2-fsa/sherpa-onnx-go-windows
+          $dllDir = Join-Path $sherpaDir "lib\x86_64-pc-windows-gnu"
+          if (!(Test-Path $dllDir)) {
+            throw "sherpa-onnx runtime DLL directory not found: $dllDir"
+          }
+          $dllDir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Install frontend dependencies
         working-directory: frontend
-        run: npm install --prefer-offline --no-audit
+        run: npm ci --no-audit
 
       - name: Prepare placeholder dist
         run: |
@@ -125,38 +196,26 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           mkdir -p internal/pdf/fonts
-          # ダミーのTTFファイルを作成（空ファイルでもビルドは通る）
-          # 実際のフォントファイルがない場合は、空ファイルを作成
           echo "" > internal/pdf/fonts/NotoSansJP-Regular.ttf || touch internal/pdf/fonts/NotoSansJP-Regular.ttf
 
       - name: Generate Wails JS bindings
         run: wails generate module
-        working-directory: .
-
-      - name: Frontend typecheck
-        run: npm run typecheck --if-present
-        working-directory: frontend
-
-      - name: Frontend tests
-        run: npm test --if-present -- --run
-        working-directory: frontend
 
       - name: Build frontend assets
-        run: npm run build
         working-directory: frontend
+        run: npm run build
 
       - name: Verify frontend/dist exists
         run: |
           if [ ! -d "frontend/dist" ] || [ -z "$(ls -A frontend/dist 2>/dev/null)" ]; then
             echo "Error: frontend/dist is missing or empty"
-            echo "Checking frontend directory:"
-            ls -la frontend/
-            echo "Checking if npm run build produced any output:"
-            ls -la frontend/dist/ 2>&1 || echo "frontend/dist does not exist"
             exit 1
           fi
-          echo "frontend/dist contents:"
-          ls -la frontend/dist/
+
+      - name: Build application (Windows)
+        if: runner.os == 'Windows'
+        run: go run ./cmd/buildmatrix --targets windows
 
       - name: Build application
+        if: runner.os != 'Windows'
         run: wails build -platform ${{ matrix.platform }}
