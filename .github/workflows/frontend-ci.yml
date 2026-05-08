@@ -1,0 +1,57 @@
+name: Frontend CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/frontend-ci.yml'
+      - 'frontend/**'
+      - '!frontend/tests/**/*.e2e.*'
+      - '!frontend/playwright.config.*'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/frontend-ci.yml'
+      - 'frontend/**'
+      - '!frontend/tests/**/*.e2e.*'
+      - '!frontend/playwright.config.*'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --no-audit
+
+      - name: Frontend typecheck
+        working-directory: frontend
+        run: npm run typecheck --if-present
+
+      - name: Frontend tests
+        working-directory: frontend
+        run: npm test --if-present -- --run
+
+      - name: Build frontend assets
+        working-directory: frontend
+        env:
+          VITE_USE_WAILS_STUBS: "true"
+        run: npm run build --if-present
