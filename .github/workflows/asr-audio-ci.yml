@@ -1,0 +1,48 @@
+name: ASR Audio CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/asr-audio-ci.yml'
+      - 'internal/asr/**'
+      - 'internal/audio/**'
+      - 'go.mod'
+      - 'go.sum'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/asr-audio-ci.yml'
+      - 'internal/asr/**'
+      - 'internal/audio/**'
+      - 'go.mod'
+      - 'go.sum'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  asr-audio:
+    runs-on: ubuntu-22.04
+    env:
+      GOFLAGS: -buildvcs=false
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Download Go dependencies
+        run: go mod download
+
+      - name: Run ASR and audio tests
+        run: go test ./internal/asr ./internal/audio
