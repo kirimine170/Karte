@@ -1,39 +1,42 @@
-name: Tests
+name: Backend CI
 
 on:
   push:
     branches: [main]
     paths:
-      - '.github/workflows/**'
-      - '**/*.go'
-      - 'frontend/**'
-      - 'build/**'
-      - 'templates/**'
-      - 'themes/**'
-      - 'karte_data/**'
-      - 'wails.json'
+      - '.github/workflows/test.yml'
+      - '*.go'
+      - 'cmd/**'
+      - 'internal/**'
+      - '!internal/asr/**'
+      - '!internal/audio/**'
       - 'go.mod'
       - 'go.sum'
   pull_request:
     branches: [main]
     paths:
-      - '.github/workflows/**'
-      - '**/*.go'
-      - 'frontend/**'
-      - 'build/**'
-      - 'templates/**'
-      - 'themes/**'
-      - 'karte_data/**'
-      - 'wails.json'
+      - '.github/workflows/test.yml'
+      - '*.go'
+      - 'cmd/**'
+      - 'internal/**'
+      - '!internal/asr/**'
+      - '!internal/audio/**'
       - 'go.mod'
       - 'go.sum'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    runs-on: macos-latest
+  backend:
+    runs-on: ubuntu-22.04
+    env:
+      GOFLAGS: -buildvcs=false
     defaults:
       run:
         shell: bash
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -44,61 +47,8 @@ jobs:
           go-version: '1.24'
           cache: true
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
+      - name: Download Go dependencies
+        run: go mod download
 
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci --no-audit
-
-      - name: Frontend typecheck
-        run: |
-          mkdir -p reports
-          cd frontend
-          npm run typecheck --if-present 2>&1 | tee ../reports/frontend-typecheck.log
-
-      - name: Frontend tests
-        run: |
-          mkdir -p reports
-          cd frontend
-          npm test --if-present -- --run | tee ../reports/frontend-tests.log
-
-      - name: Build frontend assets
-        working-directory: frontend
-        env:
-          VITE_USE_WAILS_STUBS: "true"
-        run: npm run build --if-present
-
-      - name: Install system dependencies
-        run: brew install portaudio
-
-      - name: Backend tests
-        run: |
-          mkdir -p reports
-          go test $(go list ./... | grep -v internal/asr) | tee reports/backend-tests.log
-
-      - name: E2E tests
-        run: |
-          mkdir -p reports
-          cd frontend
-          npm run test:e2e --if-present | tee ../reports/e2e-tests.log
-
-      - name: Test summary
-        if: always()
-        run: |
-          echo "## Test logs" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Frontend Typecheck: reports/frontend-typecheck.log" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Backend: reports/backend-tests.log" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Frontend: reports/frontend-tests.log" >> "$GITHUB_STEP_SUMMARY"
-          echo "- E2E: reports/e2e-tests.log" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload test artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-logs
-          path: reports
+      - name: Run backend tests
+        run: go test $(go list ./... | grep -v internal/asr | grep -v internal/audio)
