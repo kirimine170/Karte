@@ -131,6 +131,22 @@ export function createBrowserApi() {
             };
         },
 
+        async GetCsvFile(path) {
+            const url = path.startsWith('http')
+                ? path
+                : `/${path.replace(/^\//, '')}`;
+            const response = await fetch(url);
+            if (!response.ok) {
+                throw new Error(`Failed to load CSV (${response.status})`);
+            }
+            const csvText = await response.text();
+            const parsed = parseCsvContent(csvText);
+            if (!parsed) {
+                return [];
+            }
+            return [parsed.headers, ...parsed.rows];
+        },
+
         async CreateNewFile(filename) {
             console.log('Mock CreateNewFile called:', filename);
             return true;

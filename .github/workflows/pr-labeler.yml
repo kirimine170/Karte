@@ -2,8 +2,29 @@
 name: Label PRs
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened]
+    paths:
+      - '.github/**'
+      - 'scripts/**'
+      - 'frontend/**'
+      - 'wails/**'
+      - '*.go'
+      - 'cmd/**'
+      - 'backend/**'
+      - 'internal/**'
+      - 'data/asr/**'
+      - 'data/ocr/**'
+      - 'karte_data/data/asr/**'
+      - 'karte_data/data/ocr/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   label:

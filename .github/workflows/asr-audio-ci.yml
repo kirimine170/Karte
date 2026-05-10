@@ -1,26 +1,20 @@
-name: Backend CI
+name: ASR Audio CI
 
 on:
   push:
     branches: [main]
     paths:
-      - '.github/workflows/test.yml'
-      - '*.go'
-      - 'cmd/**'
-      - 'internal/**'
-      - '!internal/asr/**'
-      - '!internal/audio/**'
+      - '.github/workflows/asr-audio-ci.yml'
+      - 'internal/asr/**'
+      - 'internal/audio/**'
       - 'go.mod'
       - 'go.sum'
   pull_request:
     branches: [main]
     paths:
-      - '.github/workflows/test.yml'
-      - '*.go'
-      - 'cmd/**'
-      - 'internal/**'
-      - '!internal/asr/**'
-      - '!internal/audio/**'
+      - '.github/workflows/asr-audio-ci.yml'
+      - 'internal/asr/**'
+      - 'internal/audio/**'
       - 'go.mod'
       - 'go.sum'
 
@@ -29,7 +23,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  backend:
+  asr-audio:
     runs-on: ubuntu-22.04
     env:
       GOFLAGS: -buildvcs=false
@@ -50,5 +44,5 @@ jobs:
       - name: Download Go dependencies
         run: go mod download
 
-      - name: Run backend tests
-        run: go test $(go list ./cmd/... ./internal/... | grep -v internal/asr | grep -v internal/audio)
+      - name: Run ASR and audio tests
+        run: go test ./internal/asr ./internal/audio
