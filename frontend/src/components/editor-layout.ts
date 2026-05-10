@@ -6,8 +6,8 @@ import { applyCustomCssToHtml } from '../utils/custom-css';
 import { prepareMarkdownForPreview } from '../utils/preview-content';
 import { writePreviewFrame } from '../utils/preview-frame';
 import { convertTimestampsToLinks, updateAudioPlayerFromContent } from '../utils/preview-audio';
-import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from 'pdfjs-dist';
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
+import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
