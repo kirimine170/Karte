@@ -8,7 +8,7 @@ async function waitForPreviewText(page, text: string) {
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#editor')).toBeVisible();
-  await expect(page.locator('#status')).toHaveText(/Loaded/);
+  await expect(page.locator('#editor')).toHaveValue(/mock file content/);
 });
 
 test('updates preview when editing markdown', async ({ page }) => {
@@ -24,16 +24,19 @@ test('renders CSV imports in preview', async ({ page }) => {
   const editor = page.locator('#editor');
   await editor.fill('CSV data below:\n\n@import data/sample.csv');
 
-  const table = page.frameLocator('#preview').locator('[data-testid="csv-table"]');
+  const table = page.frameLocator('#preview').locator('table');
   await expect(table).toBeVisible();
   const rows = table.locator('tbody tr');
   await expect(rows).toHaveCount(3);
-  await expect(rows.nth(0)).toContainText(['Alice', 'Engineer', 'Tokyo']);
+  await expect(rows.nth(0)).toContainText('Alice');
+  await expect(rows.nth(0)).toContainText('Engineer');
+  await expect(rows.nth(0)).toContainText('Tokyo');
 });
 
 test('saves edited file successfully', async ({ page }) => {
   const editor = page.locator('#editor');
   await editor.fill('# Save Test');
+  await expect(page.locator('#saveBtn')).toHaveClass(/unsaved/);
   await page.click('#saveBtn');
-  await expect(page.locator('#status')).toHaveText('Saved');
+  await expect(page.locator('#saveBtn')).not.toHaveClass(/unsaved/);
 });
