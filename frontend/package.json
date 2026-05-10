@@ -25,7 +25,7 @@
   },
   "dependencies": {
     "d3": "^7.9.0",
-    "marked": "^9.1.6",
+    "marked": "^18.0.3",
     "pdfjs-dist": "^3.11.174",
     "zustand": "^4.4.7"
   }
