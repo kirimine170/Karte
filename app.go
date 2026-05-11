@@ -335,6 +335,12 @@ func (a *App) startup(ctx context.Context) {
 
 	a.logInfo(fmt.Sprintf("Karte started. root=%s dataDir=%s exeDir=%s", a.root, a.dataDir, exeDir))
 
+	go func() {
+		if err := pdfexport.EnsureWKHTMLToPDFAvailable(a.logFilePath); err != nil {
+			a.logError(fmt.Sprintf("Failed to prepare wkhtmltopdf: %v", err))
+		}
+	}()
+
 	// Initialize sync manager (disabled for now - will be implemented with git integration)
 	// a.syncManager = syncpkg.NewSyncManager(ctx, a.root)
 	// if err := a.syncManager.Start(); err != nil {
