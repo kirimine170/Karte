@@ -7,6 +7,7 @@ require (
 	github.com/go-git/go-git/v5 v5.19.0
 	github.com/gordonklaus/portaudio v0.0.0-20250206071425-98a94950218b
 	github.com/k2-fsa/sherpa-onnx-go-macos v1.13.1
+	github.com/k2-fsa/sherpa-onnx-go-windows v1.12.31
 	github.com/wailsapp/wails/v2 v2.12.0
 	github.com/yuin/goldmark v1.8.2
 	golang.org/x/image v0.40.0

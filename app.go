@@ -5612,6 +5612,10 @@ func (a *App) finalizeRecordingSegment(segmentIndex *int, startSampleIndex int, 
 		}
 	}()
 
+	if a.realtimeService != nil {
+		return
+	}
+
 	if len(samples) == 0 {
 		return
 	}

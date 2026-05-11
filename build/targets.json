@@ -5,7 +5,8 @@
     "artifactDir": "dist/windows",
     "env": {
       "GOOS": "windows",
-      "GOARCH": "amd64"
+      "GOARCH": "amd64",
+      "CGO_ENABLED": "1"
     },
     "flags": []
   },

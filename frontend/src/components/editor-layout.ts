@@ -1390,7 +1390,6 @@ export class EditorLayout extends BaseComponent {
             try {
                 const audioPath = await this.api.StopRecording();
                 asrStore.setIsRecording(false);
-                asrStore.setRecordingTranscriptPath(audioPath);
                 eventLogger.log('EditorLayout', 'recording-stop-success', { audioPath });
 
                 // オーディオプレーヤーを表示
@@ -1435,6 +1434,7 @@ export class EditorLayout extends BaseComponent {
             try {
                 await this.api.StartRecording();
                 asrStore.setIsRecording(true);
+                asrStore.setRecordingTranscriptPath(null);
                 asrStore.clearRealtimeTranscript();
                 eventLogger.log('EditorLayout', 'recording-start-success');
             } catch (error) {

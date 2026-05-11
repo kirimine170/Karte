@@ -87,6 +87,14 @@ func main() {
 		if err := moveArtifacts(t.ArtifactDir); err != nil {
 			log.Fatalf("failed to move artifacts for %s: %v", t.Name, err)
 		}
+		if isWindowsTarget(t) {
+			if err := packageTemplateIntoArtifact(projectRoot, t.ArtifactDir); err != nil {
+				log.Fatalf("failed to package karte_data_template for %s: %v", t.Name, err)
+			}
+			if err := packageWindowsRuntimeDLLs(ctx, t.ArtifactDir); err != nil {
+				log.Fatalf("failed to package Windows runtime DLLs for %s: %v", t.Name, err)
+			}
+		}
 
 		// macOS 向けビルドでは、templateをコピーする
 		if isDarwinTarget(t.Name) {
@@ -201,7 +209,128 @@ func ensurePortAudioOnDarwin(ctx context.Context) error {
 func runWailsBuild(ctx context.Context, t target) error {
 	args := []string{"build", "-platform", t.Platform}
 	args = append(args, t.Flags...)
-	return runCommand(ctx, ".", t.Env, "wails", args...)
+	env := t.Env
+	if isWindowsTarget(t) {
+		var err error
+		env, err = withWindowsBuildPath(ctx, env)
+		if err != nil {
+			fmt.Printf("WARN: failed to configure Windows build PATH: %v\n", err)
+		}
+	}
+	return runCommand(ctx, ".", env, "wails", args...)
+}
+
+func isWindowsTarget(t target) bool {
+	return strings.HasPrefix(t.Platform, "windows/") || t.Env["GOOS"] == "windows"
+}
+
+func withWindowsBuildPath(ctx context.Context, base map[string]string) (map[string]string, error) {
+	env := copyEnvMap(base)
+	var pathEntries []string
+
+	if mingwBin := `C:\msys64\mingw64\bin`; dirExists(mingwBin) {
+		pathEntries = append(pathEntries, mingwBin)
+	}
+
+	sherpaDir, err := goListModuleDir(ctx, "github.com/k2-fsa/sherpa-onnx-go-windows")
+	if err == nil {
+		dllDir := filepath.Join(sherpaDir, "lib", "x86_64-pc-windows-gnu")
+		if dirExists(dllDir) {
+			pathEntries = append(pathEntries, dllDir)
+		}
+	}
+
+	if len(pathEntries) == 0 {
+		return env, err
+	}
+	env["PATH"] = strings.Join(append(pathEntries, os.Getenv("PATH")), string(os.PathListSeparator))
+	return env, nil
+}
+
+func copyEnvMap(src map[string]string) map[string]string {
+	dst := make(map[string]string, len(src)+1)
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func goListModuleDir(ctx context.Context, module string) (string, error) {
+	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-f", "{{.Dir}}", module)
+	cmd.Dir = "."
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+func packageWindowsRuntimeDLLs(ctx context.Context, artifactDir string) error {
+	sherpaDir, err := goListModuleDir(ctx, "github.com/k2-fsa/sherpa-onnx-go-windows")
+	if err != nil {
+		return fmt.Errorf("locate sherpa-onnx-go-windows module: %w", err)
+	}
+	sherpaDLLDir := filepath.Join(sherpaDir, "lib", "x86_64-pc-windows-gnu")
+	for _, name := range []string{
+		"onnxruntime.dll",
+		"sherpa-onnx-c-api.dll",
+		"sherpa-onnx-cxx-api.dll",
+	} {
+		if err := copyExistingDLL(filepath.Join(sherpaDLLDir, name), artifactDir); err != nil {
+			return err
+		}
+	}
+
+	mingwBin := `C:\msys64\mingw64\bin`
+	for _, name := range []string{
+		"libportaudio.dll",
+		"libgcc_s_seh-1.dll",
+		"libstdc++-6.dll",
+		"libwinpthread-1.dll",
+	} {
+		if err := copyExistingDLL(filepath.Join(mingwBin, name), artifactDir); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func copyExistingDLL(src, artifactDir string) error {
+	if _, err := os.Stat(src); err != nil {
+		return fmt.Errorf("required DLL not found %s: %w", src, err)
+	}
+	dst := filepath.Join(artifactDir, filepath.Base(src))
+	if _, err := os.Stat(dst); err == nil {
+		_ = os.Chmod(dst, 0o666)
+		if err := os.Remove(dst); err != nil {
+			return fmt.Errorf("remove existing DLL %s: %w", dst, err)
+		}
+	}
+	if err := copyFile(src, dst); err != nil {
+		return err
+	}
+	return os.Chmod(dst, 0o644)
+}
+
+func packageTemplateIntoArtifact(projectRoot, artifactDir string) error {
+	templateSource := filepath.Join(projectRoot, "templates", "karte_data_template")
+	if fi, err := os.Stat(templateSource); err != nil || !fi.IsDir() {
+		return nil
+	}
+	templateTarget := filepath.Join(artifactDir, "karte_data")
+	if err := os.MkdirAll(templateTarget, 0o755); err != nil {
+		return fmt.Errorf("create template target %s: %w", templateTarget, err)
+	}
+	if err := copyDir(templateSource, templateTarget); err != nil {
+		return fmt.Errorf("copy template from %s to %s: %w", templateSource, templateTarget, err)
+	}
+	return nil
 }
 
 func moveArtifacts(destDir string) error {
