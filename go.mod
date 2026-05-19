@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/chai2010/webp v1.4.0
-	github.com/go-git/go-git/v5 v5.19.0
+	github.com/go-git/go-git/v5 v5.19.1
 	github.com/gordonklaus/portaudio v0.0.0-20250206071425-98a94950218b
 	github.com/k2-fsa/sherpa-onnx-go-macos v1.13.1
 	github.com/k2-fsa/sherpa-onnx-go-windows v1.12.31
