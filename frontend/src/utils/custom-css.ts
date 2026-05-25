@@ -42,19 +42,20 @@ export function isMarpMarkdown(content: string): boolean {
     if (!content.startsWith('---')) {
         return false;
     }
-    const fmEnd = content.indexOf('\n---\n');
-    if (fmEnd <= 0) {
+    const frontmatterMatch = content.match(/^---\s*\n([\s\S]*?)\n---(?:\s*\n|$)/);
+    if (!frontmatterMatch) {
         return false;
     }
-    const yamlContent = content.substring(4, fmEnd);
-    const marpMatch = yamlContent.match(/^marp:\s*(true|false)\s*$/m);
+    const yamlContent = frontmatterMatch[1];
+    const marpMatch = yamlContent.match(/^marp:\s*['"]?(true|false)['"]?\s*$/m);
     if (marpMatch && marpMatch[1] === 'true') {
         return true;
     }
     const hasHeader = yamlContent.match(/^header:\s*["']?/m);
     const hasFooter = yamlContent.match(/^footer:\s*["']?/m);
-    const hasPaginate = yamlContent.match(/^paginate:\s*(true|false)\s*$/m);
-    return Boolean(hasHeader || hasFooter || hasPaginate);
+    const hasPaginate = yamlContent.match(/^paginate:\s*['"]?(true|false)['"]?\s*$/m);
+    const hasMarpSize = yamlContent.match(/^size:\s*["']?(16:9|4:3|A4|letter|[0-9]+:[0-9]+)["']?\s*$/m);
+    return Boolean(hasHeader || hasFooter || hasPaginate || hasMarpSize);
 }
 
 export function injectCustomCSS(html: string, customCss: string, theme: Theme): string {

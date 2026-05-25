@@ -24,6 +24,7 @@
     "vitest": "^2.1.8"
   },
   "dependencies": {
+    "@marp-team/marp-core": "^4.3.0",
     "d3": "^7.9.0",
     "marked": "^9.1.6",
     "pdfjs-dist": "^3.11.174",

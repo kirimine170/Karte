@@ -182,6 +182,10 @@ func FormatFrontMatter(fm *FrontMatter) string {
 		lines = append(lines, fmt.Sprintf(`theme: "%s"`, escapeYAMLString(fm.Theme)))
 	}
 
+	if fm.Marp {
+		lines = append(lines, "marp: true")
+	}
+
 	// Format doc_id with quotes
 	if fm.DocID != "" {
 		lines = append(lines, fmt.Sprintf(`doc_id: "%s"`, escapeYAMLString(fm.DocID)))
@@ -194,7 +198,7 @@ func FormatFrontMatter(fm *FrontMatter) string {
 	if fm.Raw != nil {
 		for key, value := range fm.Raw {
 			// Skip already handled fields
-			if key == "title" || key == "tags" || key == "theme" || key == "doc_id" || key == "printout" {
+			if key == "title" || key == "tags" || key == "theme" || key == "marp" || key == "doc_id" || key == "printout" {
 				continue
 			}
 			// Format with quotes for string values
