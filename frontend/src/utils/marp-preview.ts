@@ -79,10 +79,26 @@ function rewriteMarpAssetPaths(html: string): string {
     return output;
 }
 
+function getSlideBackgroundColor(svgHtml: string): string {
+    if (/class="[^"]*\binvert\b[^"]*"/.test(svgHtml) || /data-class="[^"]*\binvert\b[^"]*"/.test(svgHtml)) {
+        return '#2a1835';
+    }
+    return '#ffffff';
+}
+
+function stabilizeMarpSvgBackgrounds(html: string): string {
+    return html.replace(/<svg\b([^>]*)data-marpit-svg=""([^>]*)>/g, (match, beforeAttrs, afterAttrs, offset, source) => {
+        const svgEnd = source.indexOf('</svg>', offset);
+        const svgHtml = svgEnd === -1 ? '' : source.slice(offset, svgEnd);
+        const fill = getSlideBackgroundColor(svgHtml);
+        return `<svg${beforeAttrs}data-marpit-svg=""${afterAttrs}><rect class="karte-marp-svg-background" x="0" y="0" width="1280" height="720" fill="${fill}"></rect>`;
+    });
+}
+
 export async function renderMarpPreview(content: string): Promise<string> {
     const marp = await getMarpRenderer();
     const result = marp.render(content);
-    const renderedHtml = rewriteMarpAssetPaths(result.html);
+    const renderedHtml = stabilizeMarpSvgBackgrounds(rewriteMarpAssetPaths(result.html));
     const title = escapeHtml(extractTitle(content));
 
     return `<!doctype html>
@@ -97,8 +113,8 @@ export async function renderMarpPreview(content: string): Promise<string> {
       width: 100%;
       height: 100%;
       margin: 0;
-      background: #111827;
-      color: #f9fafb;
+      background: #ffffff;
+      color: #111827;
       overflow: hidden;
     }
     body {
@@ -115,6 +131,7 @@ export async function renderMarpPreview(content: string): Promise<string> {
       align-items: center;
       justify-content: center;
       overflow: hidden;
+      background: #ffffff;
     }
     .marpit {
       width: 100%;

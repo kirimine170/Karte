@@ -16,6 +16,7 @@ describe('Marp preview rendering', () => {
         expect(html).toContain('data-marpit-svg');
         expect(html).toContain('karteMarpNext');
         expect(html).toContain('<title>Deck</title>');
+        expect(html).toContain('background: #ffffff');
     });
 
     it('rewrites local image paths for the app media handler', async () => {
@@ -23,6 +24,16 @@ describe('Marp preview rendering', () => {
 
         expect(html).toContain('src="/image/data/image/sample.png"');
         expect(html).toContain('url("bg.jpg")');
+    });
+
+    it('adds SVG background rects for WebKit foreignObject painting', async () => {
+        const html = await renderMarpPreview(
+            '---\nmarp: true\n---\n# Default\n\n---\n<!-- _class: invert -->\n# Invert'
+        );
+
+        expect(html).toContain('class="karte-marp-svg-background"');
+        expect(html).toContain('fill="#ffffff"');
+        expect(html).toContain('fill="#2a1835"');
     });
 
     it('injects Karte default and custom CSS into Marp preview HTML', async () => {
@@ -37,6 +48,8 @@ describe('Marp preview rendering', () => {
         expect(styled).toContain('id="karte-custom-css"');
         expect(styled).toContain('--color-highlight: #96368f');
         expect(styled).toContain('html[data-marp-preview="true"] div.marpit > svg > foreignObject > section');
+        expect(styled).toContain('width: 1280px !important');
+        expect(styled).toContain('[data-marpit-advanced-background-container="true"]');
         expect(styled).toContain('section h1 { text-decoration: underline; }');
     });
 });
