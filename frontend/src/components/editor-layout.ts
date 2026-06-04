@@ -2,9 +2,8 @@ import { BaseComponent } from './component-base';
 import { useUIStore, useDocStore, useASRStore, useOverlayStore, useCustomCssStore } from '../stores/index';
 import type { WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
-import { applyCustomCssToHtml, isMarpMarkdown } from '../utils/custom-css';
-import { prepareMarkdownForPreview } from '../utils/preview-content';
-import { renderMarpPreview } from '../utils/marp-preview';
+import { applyCustomCssToHtml } from '../utils/custom-css';
+import { renderMarkdownPreview } from '../utils/preview-renderer';
 import { writePreviewFrame, type PreviewFocusTarget } from '../utils/preview-frame';
 import { convertTimestampsToLinks, updateAudioPlayerFromContent } from '../utils/preview-audio';
 import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from 'pdfjs-dist';
@@ -508,10 +507,7 @@ export class EditorLayout extends BaseComponent {
             return;
         }
         try {
-            const prepared = await prepareMarkdownForPreview(content, this.api);
-            const html = isMarpMarkdown(prepared)
-                ? await renderMarpPreview(prepared)
-                : await this.api.PreviewMarkdown(prepared);
+            const { prepared, html } = await renderMarkdownPreview(content, this.api);
             const finalHtml = this.buildPreviewHtml(prepared, html);
             useDocStore.getState().setPreviewHtml(finalHtml);
         } catch (error) {

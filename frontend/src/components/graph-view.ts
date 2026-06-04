@@ -5,7 +5,7 @@ import type { WailsAppAPI } from '../types/wails-api';
 import type { GraphData } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
-import { prepareMarkdownForPreview } from '../utils/preview-content';
+import { renderMarkdownPreview } from '../utils/preview-renderer';
 import { writePreviewFrame } from '../utils/preview-frame';
 import { convertTimestampsToLinks } from '../utils/preview-audio';
 
@@ -162,8 +162,7 @@ export class GraphView extends BaseComponent {
             docStore.clearUnsavedChanges();
 
             // プレビューを更新
-            const prepared = await prepareMarkdownForPreview(content, this.api);
-            const html = await this.api.PreviewMarkdown(prepared);
+            const { prepared, html } = await renderMarkdownPreview(content, this.api);
             const finalHtml = this.buildPreviewHtml(prepared, html);
             docStore.setPreviewHtml(finalHtml);
 

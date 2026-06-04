@@ -4,7 +4,7 @@ import type { WailsAppAPI } from '../types/wails-api';
 import type { ConflictResolutionStrategy } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
-import { prepareMarkdownForPreview } from '../utils/preview-content';
+import { renderMarkdownPreview } from '../utils/preview-renderer';
 import { convertTimestampsToLinks } from '../utils/preview-audio';
 
 export class ModalHost extends BaseComponent {
@@ -558,8 +558,7 @@ export class ModalHost extends BaseComponent {
             return;
         }
         try {
-            const prepared = await prepareMarkdownForPreview(docStore.markdownContent, this.api);
-            const html = await this.api.PreviewMarkdown(prepared);
+            const { prepared, html } = await renderMarkdownPreview(docStore.markdownContent, this.api);
             const theme = useUIStore.getState().theme;
             const withCss = applyCustomCssToHtml(prepared, html, customCss, theme);
             const finalHtml = convertTimestampsToLinks(withCss);
