@@ -38,6 +38,54 @@ export function getBasePreviewCSS(): string {
     `;
 }
 
+export function getMarpPreviewCSS(): string {
+    return `
+      html[data-marp-preview="true"] {
+        --color-background: #ffffff;
+        --color-foreground: #363636;
+        --color-highlight: #96368f;
+        --color-sub-background: #e3cafa;
+      }
+      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section {
+        background: var(--color-background);
+        color: var(--color-foreground);
+        font-family: "メイリオ", "Hiragino Kaku Gothic ProN", system-ui, sans-serif;
+      }
+      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section :is(h1, h2, h3, h4, h5, h6) {
+        color: var(--color-highlight);
+      }
+      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section :is(a, strong) {
+        color: var(--color-highlight);
+      }
+      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section :is(code, pre) {
+        background: var(--color-sub-background);
+      }
+      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section blockquote {
+        border-left: 0.28em solid var(--color-highlight);
+        background: rgba(227, 202, 250, 0.32);
+      }
+      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section table :is(th, td) {
+        border-color: rgba(150, 54, 143, 0.45);
+      }
+      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section table th {
+        background: var(--color-sub-background);
+      }
+      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section.invert,
+      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section[data-marpit-advanced-background="background"] {
+        --color-background: #2a1835;
+        --color-foreground: #fbf7ff;
+        --color-highlight: #e3cafa;
+        --color-sub-background: #4b2a63;
+      }
+      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section.lead {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        text-align: center;
+      }
+    `;
+}
+
 export function isMarpMarkdown(content: string): boolean {
     if (!content.startsWith('---')) {
         return false;
@@ -60,7 +108,7 @@ export function isMarpMarkdown(content: string): boolean {
 
 export function injectCustomCSS(html: string, customCss: string, theme: Theme): string {
     const themeVars = getThemeVariablesCSS();
-    const baseCSS = getBasePreviewCSS();
+    const baseCSS = isRenderedMarpHtml(html) ? getMarpPreviewCSS() : getBasePreviewCSS();
     let cssToInject = themeVars + baseCSS;
     if (customCss) {
         cssToInject += `\n${customCss}`;
@@ -106,9 +154,10 @@ export function injectCustomCSS(html: string, customCss: string, theme: Theme): 
     return html;
 }
 
+function isRenderedMarpHtml(html: string): boolean {
+    return /data-marp-preview=["']true["']/.test(html) || /data-marpit-svg/.test(html);
+}
+
 export function applyCustomCssToHtml(content: string, html: string, customCss: string, theme: Theme): string {
-    if (isMarpMarkdown(content)) {
-        return html;
-    }
     return injectCustomCSS(html, customCss, theme);
 }

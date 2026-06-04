@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isMarpMarkdown } from '../custom-css';
+import { applyCustomCssToHtml, isMarpMarkdown } from '../custom-css';
 import { renderMarpPreview } from '../marp-preview';
 
 describe('Marp preview rendering', () => {
@@ -23,5 +23,20 @@ describe('Marp preview rendering', () => {
 
         expect(html).toContain('src="/image/data/image/sample.png"');
         expect(html).toContain('url("bg.jpg")');
+    });
+
+    it('injects Karte default and custom CSS into Marp preview HTML', async () => {
+        const html = await renderMarpPreview('---\nmarp: true\n---\n# Styled');
+        const styled = applyCustomCssToHtml(
+            '---\nmarp: true\n---\n# Styled',
+            html,
+            'section h1 { text-decoration: underline; }',
+            'light'
+        );
+
+        expect(styled).toContain('id="karte-custom-css"');
+        expect(styled).toContain('--color-highlight: #96368f');
+        expect(styled).toContain('html[data-marp-preview="true"] div.marpit > svg > foreignObject > section');
+        expect(styled).toContain('section h1 { text-decoration: underline; }');
     });
 });
