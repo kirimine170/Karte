@@ -46,10 +46,10 @@ export function getMarpPreviewCSS(): string {
         --color-highlight: #96368f;
         --color-sub-background: #e3cafa;
       }
-      html[data-marp-preview="true"] div.marpit > svg > .karte-marp-svg-background {
+      :where(html[data-marp-preview="true"] div.marpit > svg > .karte-marp-svg-background) {
         pointer-events: none;
       }
-      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section {
+      :where(html[data-marp-preview="true"] div.marpit > svg > foreignObject > section) {
         background: var(--color-background);
         color: var(--color-foreground);
         font-family: "メイリオ", "Hiragino Kaku Gothic ProN", system-ui, sans-serif;
@@ -58,45 +58,76 @@ export function getMarpPreviewCSS(): string {
         min-height: 720px !important;
         box-sizing: border-box;
       }
-      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section [data-marpit-advanced-background-container="true"],
-      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section [data-marpit-advanced-background-container="true"] > figure {
+      :where(html[data-marp-preview="true"] div.marpit > svg > foreignObject > section [data-marpit-advanced-background-container="true"]),
+      :where(html[data-marp-preview="true"] div.marpit > svg > foreignObject > section [data-marpit-advanced-background-container="true"] > figure) {
         width: 1280px !important;
         height: 720px !important;
         min-height: 720px !important;
       }
-      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section :is(h1, h2, h3, h4, h5, h6) {
+      :where(html[data-marp-preview="true"] div.marpit > svg > foreignObject > section :is(h1, h2, h3, h4, h5, h6)) {
         color: var(--color-highlight);
       }
-      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section :is(a, strong) {
+      :where(html[data-marp-preview="true"] div.marpit > svg > foreignObject > section :is(a, strong)) {
         color: var(--color-highlight);
       }
-      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section :is(code, pre) {
+      :where(html[data-marp-preview="true"] div.marpit > svg > foreignObject > section :is(code, pre)) {
         background: var(--color-sub-background);
       }
-      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section blockquote {
+      :where(html[data-marp-preview="true"] div.marpit > svg > foreignObject > section blockquote) {
         border-left: 0.28em solid var(--color-highlight);
         background: rgba(227, 202, 250, 0.32);
       }
-      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section table :is(th, td) {
+      :where(html[data-marp-preview="true"] div.marpit > svg > foreignObject > section table :is(th, td)) {
         border-color: rgba(150, 54, 143, 0.45);
       }
-      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section table th {
+      :where(html[data-marp-preview="true"] div.marpit > svg > foreignObject > section table th) {
         background: var(--color-sub-background);
       }
-      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section.invert,
-      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section[data-marpit-advanced-background="background"] {
+      :where(html[data-marp-preview="true"] div.marpit > svg > foreignObject > section.invert),
+      :where(html[data-marp-preview="true"] div.marpit > svg > foreignObject > section[data-marpit-advanced-background="background"]) {
         --color-background: #2a1835;
         --color-foreground: #fbf7ff;
         --color-highlight: #e3cafa;
         --color-sub-background: #4b2a63;
       }
-      html[data-marp-preview="true"] div.marpit > svg > foreignObject > section.lead {
+      :where(html[data-marp-preview="true"] div.marpit > svg > foreignObject > section.lead) {
         display: flex;
         flex-direction: column;
         justify-content: center;
         text-align: center;
       }
     `;
+}
+
+type PreparedCustomCss = {
+    imports: string;
+    body: string;
+};
+
+export function prepareCustomCssForInjection(customCss: string): PreparedCustomCss {
+    if (!customCss) {
+        return { imports: '', body: '' };
+    }
+
+    const imports: string[] = [];
+    const bodyLines: string[] = [];
+    const lines = customCss.split(/\r?\n/);
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (/^@import\s+url\(/i.test(trimmed) || /^@import\s+["']https?:\/\//i.test(trimmed)) {
+            imports.push(line);
+            continue;
+        }
+        if (/^@import(?:-theme)?\s+/i.test(trimmed) || /^@size\s+/i.test(trimmed)) {
+            continue;
+        }
+        bodyLines.push(line);
+    }
+
+    return {
+        imports: imports.length > 0 ? `${imports.join('\n')}\n` : '',
+        body: bodyLines.join('\n').trim(),
+    };
 }
 
 export function isMarpMarkdown(content: string): boolean {
@@ -122,9 +153,10 @@ export function isMarpMarkdown(content: string): boolean {
 export function injectCustomCSS(html: string, customCss: string, theme: Theme): string {
     const themeVars = getThemeVariablesCSS();
     const baseCSS = isRenderedMarpHtml(html) ? getMarpPreviewCSS() : getBasePreviewCSS();
-    let cssToInject = themeVars + baseCSS;
-    if (customCss) {
-        cssToInject += `\n${customCss}`;
+    const preparedCustomCss = prepareCustomCssForInjection(customCss);
+    let cssToInject = preparedCustomCss.imports + themeVars + baseCSS;
+    if (preparedCustomCss.body) {
+        cssToInject += `\n${preparedCustomCss.body}`;
     }
 
     const customStyleRegex = /<style[^>]*id="karte-custom-css"[^>]*>[\s\S]*?<\/style>/i;

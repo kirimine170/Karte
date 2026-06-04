@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyCustomCssToHtml, isMarpMarkdown } from '../custom-css';
+import { applyCustomCssToHtml, isMarpMarkdown, prepareCustomCssForInjection } from '../custom-css';
 import { renderMarpPreview } from '../marp-preview';
 
 describe('Marp preview rendering', () => {
@@ -47,9 +47,47 @@ describe('Marp preview rendering', () => {
 
         expect(styled).toContain('id="karte-custom-css"');
         expect(styled).toContain('--color-highlight: #96368f');
-        expect(styled).toContain('html[data-marp-preview="true"] div.marpit > svg > foreignObject > section');
+        expect(styled).toContain(':where(html[data-marp-preview="true"] div.marpit > svg > foreignObject > section)');
         expect(styled).toContain('width: 1280px !important');
         expect(styled).toContain('[data-marpit-advanced-background-container="true"]');
         expect(styled).toContain('section h1 { text-decoration: underline; }');
+    });
+
+    it('prepares Marp theme CSS for post-render preview injection', () => {
+        const css = [
+            '/* @theme hacksick */',
+            "@import 'gaia';",
+            "@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap');",
+            '@size 16:9 1280px 720px;',
+            'section h1 { color: #7c3aed; }',
+        ].join('\n');
+
+        const prepared = prepareCustomCssForInjection(css);
+
+        expect(prepared.imports).toContain('https://fonts.googleapis.com');
+        expect(prepared.body).toContain('section h1 { color: #7c3aed; }');
+        expect(prepared.body).not.toContain("@import 'gaia'");
+        expect(prepared.body).not.toContain('@size 16:9');
+    });
+
+    it('keeps Marp theme imports before preview defaults', async () => {
+        const html = await renderMarpPreview('---\nmarp: true\n---\n# Styled');
+        const styled = applyCustomCssToHtml(
+            '---\nmarp: true\n---\n# Styled',
+            html,
+            [
+                "@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap');",
+                'section h1 { color: #7c3aed; }',
+            ].join('\n'),
+            'light'
+        );
+
+        const importIndex = styled.indexOf('@import url(');
+        const defaultsIndex = styled.indexOf(':root{');
+        const themeRuleIndex = styled.indexOf('section h1 { color: #7c3aed; }');
+
+        expect(importIndex).toBeGreaterThanOrEqual(0);
+        expect(defaultsIndex).toBeGreaterThan(importIndex);
+        expect(themeRuleIndex).toBeGreaterThan(defaultsIndex);
     });
 });
