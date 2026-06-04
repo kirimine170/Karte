@@ -14,6 +14,8 @@ describe('Marp preview rendering', () => {
 
         expect(html).toContain('data-marp-preview="true"');
         expect(html).toContain('data-marpit-svg');
+        expect(html).toContain('viewBox="0 0 1920 1080"');
+        expect(html).toContain('foreignObject width="1920" height="1080"');
         expect(html).toContain('karteMarpNext');
         expect(html).toContain('<title>Deck</title>');
         expect(html).toContain('background: #ffffff');
@@ -32,6 +34,7 @@ describe('Marp preview rendering', () => {
         );
 
         expect(html).toContain('class="karte-marp-svg-background"');
+        expect(html).toContain('width="1920" height="1080"');
         expect(html).toContain('fill="#ffffff"');
         expect(html).toContain('fill="#2a1835"');
     });
@@ -48,7 +51,7 @@ describe('Marp preview rendering', () => {
         expect(styled).toContain('id="karte-custom-css"');
         expect(styled).toContain('--color-highlight: #96368f');
         expect(styled).toContain(':where(html[data-marp-preview="true"] div.marpit > svg > foreignObject > section)');
-        expect(styled).toContain('width: 1280px !important');
+        expect(styled).toContain('width: 1920px !important');
         expect(styled).toContain('[data-marpit-advanced-background-container="true"]');
         expect(styled).toContain('section h1 { text-decoration: underline; }');
     });

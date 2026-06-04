@@ -5,6 +5,9 @@ type MarpRenderer = {
     };
 };
 
+const MARP_WIDTH = 1920;
+const MARP_HEIGHT = 1080;
+
 let marpPromise: Promise<MarpRenderer> | null = null;
 
 async function getMarpRenderer(): Promise<MarpRenderer> {
@@ -79,6 +82,19 @@ function rewriteMarpAssetPaths(html: string): string {
     return output;
 }
 
+function normalizeMarpDimensionsCSS(css: string): string {
+    return css
+        .replace(/\b1280px\b/g, `${MARP_WIDTH}px`)
+        .replace(/\b720px\b/g, `${MARP_HEIGHT}px`)
+        .replace(/(@page\s*\{\s*size:\s*)1280px\s+720px/gi, `$1${MARP_WIDTH}px ${MARP_HEIGHT}px`);
+}
+
+function normalizeMarpDimensionsHTML(html: string): string {
+    return html
+        .replace(/viewBox="0 0 1280 720"/g, `viewBox="0 0 ${MARP_WIDTH} ${MARP_HEIGHT}"`)
+        .replace(/\bwidth="1280"\s+height="720"/g, `width="${MARP_WIDTH}" height="${MARP_HEIGHT}"`);
+}
+
 function getSlideBackgroundColor(svgHtml: string): string {
     if (/class="[^"]*\binvert\b[^"]*"/.test(svgHtml) || /data-class="[^"]*\binvert\b[^"]*"/.test(svgHtml)) {
         return '#2a1835';
@@ -91,14 +107,15 @@ function stabilizeMarpSvgBackgrounds(html: string): string {
         const svgEnd = source.indexOf('</svg>', offset);
         const svgHtml = svgEnd === -1 ? '' : source.slice(offset, svgEnd);
         const fill = getSlideBackgroundColor(svgHtml);
-        return `<svg${beforeAttrs}data-marpit-svg=""${afterAttrs}><rect class="karte-marp-svg-background" x="0" y="0" width="1280" height="720" fill="${fill}"></rect>`;
+        return `<svg${beforeAttrs}data-marpit-svg=""${afterAttrs}><rect class="karte-marp-svg-background" x="0" y="0" width="${MARP_WIDTH}" height="${MARP_HEIGHT}" fill="${fill}"></rect>`;
     });
 }
 
 export async function renderMarpPreview(content: string): Promise<string> {
     const marp = await getMarpRenderer();
     const result = marp.render(content);
-    const renderedHtml = stabilizeMarpSvgBackgrounds(rewriteMarpAssetPaths(result.html));
+    const renderedHtml = stabilizeMarpSvgBackgrounds(normalizeMarpDimensionsHTML(rewriteMarpAssetPaths(result.html)));
+    const renderedCss = normalizeMarpDimensionsCSS(result.css);
     const title = escapeHtml(extractTitle(content));
 
     return `<!doctype html>
@@ -107,7 +124,7 @@ export async function renderMarpPreview(content: string): Promise<string> {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title}</title>
-  <style>${result.css}</style>
+  <style>${renderedCss}</style>
   <style>
     html, body {
       width: 100%;

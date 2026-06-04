@@ -53,16 +53,16 @@ export function getMarpPreviewCSS(): string {
         background: var(--color-background);
         color: var(--color-foreground);
         font-family: "メイリオ", "Hiragino Kaku Gothic ProN", system-ui, sans-serif;
-        width: 1280px !important;
-        height: 720px !important;
-        min-height: 720px !important;
+        width: 1920px !important;
+        height: 1080px !important;
+        min-height: 1080px !important;
         box-sizing: border-box;
       }
       :where(html[data-marp-preview="true"] div.marpit > svg > foreignObject > section [data-marpit-advanced-background-container="true"]),
       :where(html[data-marp-preview="true"] div.marpit > svg > foreignObject > section [data-marpit-advanced-background-container="true"] > figure) {
-        width: 1280px !important;
-        height: 720px !important;
-        min-height: 720px !important;
+        width: 1920px !important;
+        height: 1080px !important;
+        min-height: 1080px !important;
       }
       :where(html[data-marp-preview="true"] div.marpit > svg > foreignObject > section :is(h1, h2, h3, h4, h5, h6)) {
         color: var(--color-highlight);
