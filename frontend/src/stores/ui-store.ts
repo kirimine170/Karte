@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { createStore } from 'zustand/vanilla';
 import type { UIState, Theme, ActiveTab } from '../types/ui-state';
 
 const THEME_STORAGE_KEY = 'karte-theme';
@@ -42,7 +42,7 @@ interface UIStore extends UIState {
 const initialTheme = getInitialTheme();
 applyThemeToDocument(initialTheme);
 
-export const useUIStore = create<UIStore>((set, get) => ({
+export const useUIStore = createStore<UIStore>((set, get) => ({
     // Initial state
     sidebarVisible: true,
     imageGalleryVisible: true,

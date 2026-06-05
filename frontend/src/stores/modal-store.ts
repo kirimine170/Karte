@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { createStore } from 'zustand/vanilla';
 import type { ModalState } from '../types/ui-state';
 import type { ConflictResolutionStrategy } from '../types/wails-api';
 
@@ -25,7 +25,7 @@ interface ModalStore extends ModalState {
     setImagePreviewModalMetadata: (metadata: string) => void;
 }
 
-export const useModalStore = create<ModalStore>((set) => ({
+export const useModalStore = createStore<ModalStore>((set) => ({
     // Initial state
     filenameModal: {
         visible: false,

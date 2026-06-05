@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { createStore } from 'zustand/vanilla';
 import type { DocumentState } from '../types/ui-state';
 import type { FileItem } from '../types/wails-api';
 
@@ -13,7 +13,7 @@ interface DocStore extends DocumentState {
     clearUnsavedChanges: () => void;
 }
 
-export const useDocStore = create<DocStore>((set) => ({
+export const useDocStore = createStore<DocStore>((set) => ({
     // Initial state
     currentPath: '',
     files: [],

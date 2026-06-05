@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { createStore } from 'zustand/vanilla';
 import type { ExportState } from '../types/ui-state';
 
 interface ExportStore extends ExportState {
@@ -8,7 +8,7 @@ interface ExportStore extends ExportState {
     hideAllProgress: () => void;
 }
 
-export const useExportStore = create<ExportStore>((set) => ({
+export const useExportStore = createStore<ExportStore>((set) => ({
     // Initial state
     pdfExportProgress: {
         visible: false,

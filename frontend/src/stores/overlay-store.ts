@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { createStore } from 'zustand/vanilla';
 import type { OverlayState } from '../types/ui-state';
 
 interface OverlayStore extends OverlayState {
@@ -7,7 +7,7 @@ interface OverlayStore extends OverlayState {
     hideDropOverlay: () => void;
 }
 
-export const useOverlayStore = create<OverlayStore>((set) => ({
+export const useOverlayStore = createStore<OverlayStore>((set) => ({
     // Initial state
     dropOverlay: {
         visible: false,

@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { createStore } from 'zustand/vanilla';
 import type { ASRState } from '../types/ui-state';
 import type { ASRStatus } from '../types/wails-api';
 
@@ -13,7 +13,7 @@ interface ASRStore extends ASRState {
     clearRealtimeTranscript: () => void;
 }
 
-export const useASRStore = create<ASRStore>((set, get) => ({
+export const useASRStore = createStore<ASRStore>((set, get) => ({
     // Initial state
     status: {
         initialized: false,
