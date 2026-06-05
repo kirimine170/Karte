@@ -4,7 +4,7 @@ import { filterFilesByQuery, buildFileDisplayLabel, type FileItem } from '../log
 import type { WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
-import { prepareMarkdownForPreview } from '../utils/preview-content';
+import { renderMarkdownPreview } from '../utils/preview-renderer';
 import { writePreviewFrame } from '../utils/preview-frame';
 import { convertTimestampsToLinks } from '../utils/preview-audio';
 
@@ -173,7 +173,7 @@ export class Sidebar extends BaseComponent {
                 eventLogger.log('Sidebar', 'file-load-success', { path, contentLength: content.length });
 
                 // プレビューを更新
-                await this.updatePreview(content);
+                await this.updatePreview(content, path);
             }
         } catch (error) {
             console.error('Failed to load file:', error);
@@ -182,10 +182,9 @@ export class Sidebar extends BaseComponent {
         }
     }
 
-    private async updatePreview(content: string): Promise<void> {
+    private async updatePreview(content: string, path: string): Promise<void> {
         try {
-            const prepared = await prepareMarkdownForPreview(content, this.api);
-            const html = await this.api.PreviewMarkdown(prepared);
+            const { prepared, html } = await renderMarkdownPreview(content, this.api, path);
             const finalHtml = this.buildPreviewHtml(prepared, html);
             useDocStore.getState().setPreviewHtml(finalHtml);
 

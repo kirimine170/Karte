@@ -10,29 +10,57 @@ import (
 
 const (
 	// ChunkID is the 4-byte identifier for our custom tag chunk
-	ChunkID = "KART"
+	ChunkID         = "KART"
+	MetadataChunkID = "KMTD"
 )
 
 // ReadTagsFromWebP reads tags from a WebP file's custom chunk
 func ReadTagsFromWebP(webpPath string) ([]string, error) {
+	chunkData, ok, err := ReadChunkFromWebP(webpPath, ChunkID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return []string{}, nil
+	}
+	return ExtractTagsFromChunk(chunkData)
+}
+
+// ReadMetadataFromWebP reads JSON metadata from a WebP file's custom chunk.
+func ReadMetadataFromWebP(webpPath string) ([]byte, error) {
+	chunkData, ok, err := ReadChunkFromWebP(webpPath, MetadataChunkID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return []byte{}, nil
+	}
+	return chunkData, nil
+}
+
+// ReadChunkFromWebP reads one custom chunk from a WebP RIFF container.
+func ReadChunkFromWebP(webpPath, targetChunkID string) ([]byte, bool, error) {
+	if len(targetChunkID) != 4 {
+		return nil, false, fmt.Errorf("chunk id must be 4 bytes")
+	}
 	file, err := os.Open(webpPath)
 	if err != nil {
-		return nil, fmt.Errorf("open webp file: %w", err)
+		return nil, false, fmt.Errorf("open webp file: %w", err)
 	}
 	defer file.Close()
 
 	// Read RIFF header
 	var riffHeader [12]byte
 	if _, err := io.ReadFull(file, riffHeader[:]); err != nil {
-		return nil, fmt.Errorf("read RIFF header: %w", err)
+		return nil, false, fmt.Errorf("read RIFF header: %w", err)
 	}
 
 	// Verify RIFF header
 	if string(riffHeader[0:4]) != "RIFF" {
-		return nil, fmt.Errorf("not a RIFF file")
+		return nil, false, fmt.Errorf("not a RIFF file")
 	}
 	if string(riffHeader[8:12]) != "WEBP" {
-		return nil, fmt.Errorf("not a WebP file")
+		return nil, false, fmt.Errorf("not a WebP file")
 	}
 
 	// Read chunks until we find our custom chunk
@@ -43,28 +71,27 @@ func ReadTagsFromWebP(webpPath string) ([]string, error) {
 		if _, err := io.ReadFull(file, chunkID[:]); err != nil {
 			if err == io.EOF {
 				// End of file, chunk not found
-				return []string{}, nil
+				return nil, false, nil
 			}
-			return nil, fmt.Errorf("read chunk id: %w", err)
+			return nil, false, fmt.Errorf("read chunk id: %w", err)
 		}
 
 		if err := binary.Read(file, binary.LittleEndian, &chunkSize); err != nil {
 			if err == io.EOF {
-				return []string{}, nil
+				return nil, false, nil
 			}
-			return nil, fmt.Errorf("read chunk size: %w", err)
+			return nil, false, fmt.Errorf("read chunk size: %w", err)
 		}
 
 		// Check if this is our custom chunk
-		if string(chunkID[:]) == ChunkID {
+		if string(chunkID[:]) == targetChunkID {
 			// Read chunk data
 			chunkData := make([]byte, chunkSize)
 			if _, err := io.ReadFull(file, chunkData); err != nil {
-				return nil, fmt.Errorf("read chunk data: %w", err)
+				return nil, false, fmt.Errorf("read chunk data: %w", err)
 			}
 
-			// Extract tags from chunk data
-			return ExtractTagsFromChunk(chunkData)
+			return chunkData, true, nil
 		}
 
 		// Skip this chunk (chunkSize may be odd, so we need to align to 2-byte boundary)
@@ -75,9 +102,9 @@ func ReadTagsFromWebP(webpPath string) ([]string, error) {
 		}
 		if _, err := file.Seek(chunkStart+int64(alignedSize), io.SeekStart); err != nil {
 			if err == io.EOF {
-				return []string{}, nil
+				return nil, false, nil
 			}
-			return nil, fmt.Errorf("seek next chunk: %w", err)
+			return nil, false, fmt.Errorf("seek next chunk: %w", err)
 		}
 	}
 }
@@ -85,6 +112,23 @@ func ReadTagsFromWebP(webpPath string) ([]string, error) {
 // WriteTagsToWebP writes tags to a WebP file's custom chunk
 // This function reads the entire file, inserts/updates the chunk, and writes it back
 func WriteTagsToWebP(webpPath string, tags []string) error {
+	tagChunkData, err := CreateTagChunk(tags)
+	if err != nil {
+		return fmt.Errorf("create tag chunk: %w", err)
+	}
+	return WriteChunkToWebP(webpPath, ChunkID, tagChunkData)
+}
+
+// WriteMetadataToWebP writes JSON metadata to a WebP file's custom chunk.
+func WriteMetadataToWebP(webpPath string, metadata []byte) error {
+	return WriteChunkToWebP(webpPath, MetadataChunkID, metadata)
+}
+
+// WriteChunkToWebP inserts or replaces one custom chunk in a WebP RIFF container.
+func WriteChunkToWebP(webpPath, targetChunkID string, chunkData []byte) error {
+	if len(targetChunkID) != 4 {
+		return fmt.Errorf("chunk id must be 4 bytes")
+	}
 	// Read existing file
 	file, err := os.Open(webpPath)
 	if err != nil {
@@ -152,7 +196,7 @@ func WriteTagsToWebP(webpPath string, tags []string) error {
 
 		chunkIDStr := string(chunkID[:])
 		// Skip our custom chunk if it exists (we'll add it later)
-		if chunkIDStr != ChunkID {
+		if chunkIDStr != targetChunkID {
 			chunks = append(chunks, chunkInfo{
 				id:     chunkIDStr,
 				size:   chunkSize,
@@ -167,12 +211,6 @@ func WriteTagsToWebP(webpPath string, tags []string) error {
 			alignedSize++
 		}
 		currentOffset += 8 + int64(alignedSize) // 8 = chunkID (4) + chunkSize (4)
-	}
-
-	// Create tag chunk
-	tagChunkData, err := CreateTagChunk(tags)
-	if err != nil {
-		return fmt.Errorf("create tag chunk: %w", err)
 	}
 
 	// Write new file
@@ -207,21 +245,21 @@ func WriteTagsToWebP(webpPath string, tags []string) error {
 		}
 	}
 
-	// Write our custom tag chunk
-	if _, err := outFile.WriteString(ChunkID); err != nil {
-		return fmt.Errorf("write tag chunk id: %w", err)
+	// Write our custom chunk
+	if _, err := outFile.WriteString(targetChunkID); err != nil {
+		return fmt.Errorf("write custom chunk id: %w", err)
 	}
-	tagChunkSize := uint32(len(tagChunkData))
-	if err := binary.Write(outFile, binary.LittleEndian, tagChunkSize); err != nil {
-		return fmt.Errorf("write tag chunk size: %w", err)
+	customChunkSize := uint32(len(chunkData))
+	if err := binary.Write(outFile, binary.LittleEndian, customChunkSize); err != nil {
+		return fmt.Errorf("write custom chunk size: %w", err)
 	}
-	if _, err := outFile.Write(tagChunkData); err != nil {
-		return fmt.Errorf("write tag chunk data: %w", err)
+	if _, err := outFile.Write(chunkData); err != nil {
+		return fmt.Errorf("write custom chunk data: %w", err)
 	}
 	// Align to 2-byte boundary if needed
-	if tagChunkSize%2 != 0 {
+	if customChunkSize%2 != 0 {
 		if _, err := outFile.Write([]byte{0}); err != nil {
-			return fmt.Errorf("write tag chunk padding: %w", err)
+			return fmt.Errorf("write custom chunk padding: %w", err)
 		}
 	}
 
@@ -288,4 +326,3 @@ func CreateTagChunk(tags []string) ([]byte, error) {
 	tagsStr := strings.Join(tags, ",")
 	return []byte(tagsStr), nil
 }
-

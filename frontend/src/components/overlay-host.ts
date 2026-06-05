@@ -3,7 +3,7 @@ import { useOverlayStore, useExportStore, useASRStore, useUIStore, useDocStore, 
 import type { WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
-import { prepareMarkdownForPreview } from '../utils/preview-content';
+import { renderMarkdownPreview } from '../utils/preview-renderer';
 import { convertTimestampsToLinks } from '../utils/preview-audio';
 
 export class OverlayHost extends BaseComponent {
@@ -412,8 +412,7 @@ export class OverlayHost extends BaseComponent {
             docStore.setMarkdownContent(content);
             docStore.clearUnsavedChanges();
 
-            const prepared = await prepareMarkdownForPreview(content, this.api);
-            const html = await this.api.PreviewMarkdown(prepared);
+            const { prepared, html } = await renderMarkdownPreview(content, this.api, path);
             const finalHtml = this.buildPreviewHtml(prepared, html);
             docStore.setPreviewHtml(finalHtml);
         } catch (error) {

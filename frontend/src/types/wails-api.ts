@@ -56,12 +56,30 @@ export interface CsvInfo {
 
 export type ConflictResolutionStrategy = 'local' | 'remote' | 'merge';
 
+export type ClipImageMode = 'download' | 'link' | 'none';
+
+export interface ClipRequest {
+    url: string;
+    mode: 'article';
+    imageMode: ClipImageMode;
+    outputDir?: string;
+}
+
+export interface ClipResult {
+    markdownPath: string;
+    assetDir: string;
+    title: string;
+    sourceUrl: string;
+    warnings: string[];
+}
+
 // Wails App API
 export interface WailsAppAPI {
     GetFileList(): Promise<FileItem[]>;
     LoadFile(path: string): Promise<string>;
     SaveFile(path: string, content: string): Promise<boolean>;
     PreviewMarkdown(content: string): Promise<string>;
+    PreviewMarkdownForPath?(path: string, content: string): Promise<string>;
     GetGraphData(): Promise<GraphData>;
     CreateNewFile(filename: string): Promise<boolean>;
     ExportPDF(html: string): Promise<string>;
@@ -83,6 +101,8 @@ export interface WailsAppAPI {
     GetImageList(): Promise<ImageInfo[]>;
     GetImageMetadata(path: string): Promise<string>;
     SaveImageMetadata(path: string, yaml: string): Promise<boolean>;
+    GetImageSystemMetadata(path: string): Promise<string>;
+    SaveImageSystemMetadata(path: string, yaml: string): Promise<boolean>;
     StartRecording(): Promise<boolean>;
     StopRecording(): Promise<string>;
     IsRecording(): Promise<boolean>;
@@ -98,6 +118,7 @@ export interface WailsAppAPI {
     ImportCsvFile(src: string): Promise<string>;
     ImportCsvBase64(filename: string, base64Data: string): Promise<string>;
     SaveEventLogs(logsJson: string): Promise<boolean>;
+    ClipURL(request: ClipRequest): Promise<ClipResult>;
 }
 
 // Wails Runtime API
@@ -105,4 +126,3 @@ export interface WailsRuntimeAPI {
     EventsOn(eventName: string, callback: (...args: unknown[]) => void): () => void;
     BrowserOpenURL(url: string): void;
 }
-

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Topbar } from '../topbar';
 import { useUIStore } from '../../stores/ui-store';
+import { useModalStore } from '../../stores/modal-store';
 import { eventLogger } from '../../utils/event-logger';
 import { clearLogs, expectLogSequence, expectLogContainsSequence } from '../../test-support/log-verifier';
 
@@ -31,6 +32,16 @@ describe('Topbar', () => {
             statusMessage: '',
             statusClearTimer: null,
         });
+        useModalStore.setState({
+            filenameModal: { visible: false, value: '' },
+            renameFileModal: { visible: false, value: '', currentPath: '' },
+            unsavedConfirmModal: { visible: false, onSave: () => {}, onDiscard: () => {} },
+            customCssModal: { visible: false, value: '' },
+            webClipModal: { visible: false, url: '', importing: false, warnings: [] },
+            csvEditModal: { visible: false, filePath: '', data: [] },
+            conflictModal: { visible: false, conflictInfo: null },
+            imagePreviewModal: { visible: false, imagePath: '', imageName: '', metadata: '', systemMetadata: '' },
+        });
 
         document.body.innerHTML = `
             <div class="bar">
@@ -43,6 +54,7 @@ describe('Topbar', () => {
                 </select>
                 <input id="hardwrap" type="checkbox" />
                 <button id="saveBtn">保存</button>
+                <button id="webClipBtn">Web Clip</button>
                 <div id="status"></div>
             </div>
         `;
@@ -92,6 +104,16 @@ describe('Topbar', () => {
         expect(useUIStore.getState().csvGalleryVisible).toBe(!initialState);
     });
 
+    it('should show web clip modal on button click', () => {
+        const topbar = new Topbar(mockApi);
+        topbar.init();
+
+        const webClipBtn = document.getElementById('webClipBtn') as HTMLButtonElement;
+        webClipBtn.click();
+
+        expect(useModalStore.getState().webClipModal.visible).toBe(true);
+    });
+
     it('should log events in correct order when initializing and clicking buttons', () => {
         const topbar = new Topbar(mockApi);
         clearLogs();
@@ -133,4 +155,3 @@ describe('Topbar', () => {
         ]);
     });
 });
-

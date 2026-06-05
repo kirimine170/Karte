@@ -26,6 +26,7 @@
         </label>
         <button class="btn" id="saveBtn">保存</button>
         <button class="btn" id="newBtn">新規</button>
+        <button class="btn" id="webClipBtn">Web Clip</button>
         <button class="btn" id="exportPdfBtn">PDFエクスポート</button>
         <button class="btn" id="customCssBtn">Custom CSS</button>
         <span id="customCssStatus" class="custom-css-status"></span>
@@ -168,18 +169,33 @@
     <div class="image-preview-overlay"></div>
     <div class="image-preview-content">
       <button class="image-preview-close" id="imagePreviewClose" title="閉じる">×</button>
-      <img id="imagePreviewImg" class="image-preview-img" alt="Preview" />
-      <div class="image-preview-info">
-        <div class="image-preview-name" id="imagePreviewName"></div>
-        <div class="image-preview-path" id="imagePreviewPath"></div>
-      </div>
-      <div class="image-metadata-section">
-        <div class="image-metadata-header">メタデータ (YAML)</div>
-        <textarea id="imageMetadataEditor" class="image-metadata-textarea" spellcheck="false"
-          placeholder="例:&#10;title: サンプル&#10;tags: [sample, demo]"></textarea>
-        <div class="image-metadata-actions">
-          <button class="btn" id="imageMetadataSaveBtn">保存</button>
-          <span class="image-metadata-status" id="imageMetadataStatus"></span>
+      <div class="image-preview-layout">
+        <div class="image-metadata-section image-system-metadata-section">
+          <div class="image-metadata-header">KMTD 権限メタデータ (YAML)</div>
+          <textarea id="imageSystemMetadataEditor" class="image-metadata-textarea" spellcheck="false"
+            placeholder="Web Clip由来情報などのシステムメタデータ"></textarea>
+          <div class="image-metadata-actions">
+            <button class="btn" id="imageSystemMetadataSaveBtn">保存</button>
+            <span class="image-metadata-status" id="imageSystemMetadataStatus"></span>
+          </div>
+        </div>
+        <div class="image-preview-main">
+          <div class="image-preview-stage">
+            <img id="imagePreviewImg" class="image-preview-img" alt="Preview" />
+          </div>
+          <div class="image-preview-info">
+            <div class="image-preview-name" id="imagePreviewName"></div>
+            <div class="image-preview-path" id="imagePreviewPath"></div>
+          </div>
+          <div class="image-metadata-section image-user-metadata-section">
+            <div class="image-metadata-header">KART ユーザーメタデータ (YAML)</div>
+            <textarea id="imageMetadataEditor" class="image-metadata-textarea" spellcheck="false"
+              placeholder="例:&#10;title: サンプル&#10;tags: [sample, demo]"></textarea>
+            <div class="image-metadata-actions">
+              <button class="btn" id="imageMetadataSaveBtn">保存</button>
+              <span class="image-metadata-status" id="imageMetadataStatus"></span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -255,7 +271,19 @@
     </div>
   </div>
 
-  
+  <!-- Web Clip modal -->
+  <div id="webClipModal" class="modal" style="display: none;">
+    <div class="modal-content" style="min-width:520px;">
+      <h3>URLから取り込む</h3>
+      <p>記事ページのURLを入力してください。画像は記事別assetsへ保存されます。</p>
+      <input type="url" id="webClipUrlInput" placeholder="https://example.com/article" />
+      <div id="webClipWarnings" class="web-clip-warnings" style="display: none;"></div>
+      <div class="modal-buttons">
+        <button id="importWebClipBtn" class="btn">取り込む</button>
+        <button id="cancelWebClipBtn" class="btn btn-secondary">キャンセル</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Custom CSS modal -->
   <div id="customCssModal" class="modal" style="display:none;">

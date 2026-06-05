@@ -90,6 +90,17 @@ export function createBrowserApi() {
             return true;
         },
 
+        async ClipURL(request) {
+            console.log('Mock ClipURL called:', request);
+            return {
+                markdownPath: `content/clips/mock-web-clip-${Date.now()}.md`,
+                assetDir: `content/clips/assets/mock-web-clip-${Date.now()}`,
+                title: 'Mock Web Clip',
+                sourceUrl: request.url,
+                warnings: [],
+            };
+        },
+
         async PreviewMarkdown(content) {
             const importRegex = /^@import\s+([^\s]+)\s*$/gm;
             const placeholders = [];
@@ -116,6 +127,11 @@ export function createBrowserApi() {
             }
 
             return html;
+        },
+
+        async PreviewMarkdownForPath(path, content) {
+            console.log('Mock PreviewMarkdownForPath called:', path);
+            return this.PreviewMarkdown(content);
         },
 
         async GetGraphData() {
@@ -250,8 +266,17 @@ export function createBrowserApi() {
             return 'title: mock image\nnotes: サンプルメタデータ';
         },
 
+        async GetImageSystemMetadata(path) {
+            console.log('Mock GetImageSystemMetadata called:', path);
+            return 'schema: karte.image.metadata.v1\nsource:\n  kind: web_clip';
+        },
         async SaveImageMetadata(path, yaml) {
             console.log('Mock SaveImageMetadata called:', path, yaml);
+            return true;
+        },
+
+        async SaveImageSystemMetadata(path, yaml) {
+            console.log('Mock SaveImageSystemMetadata called:', path, yaml);
             return true;
         },
 
