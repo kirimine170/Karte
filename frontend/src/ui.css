@@ -1545,19 +1545,19 @@
 
   .image-preview-content {
     position: relative;
-    max-width: 90vw;
-    max-height: 90vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
+    width: min(94vw, 1500px);
+    height: min(92vh, 980px);
+    min-width: min(94vw, 720px);
+    min-height: min(92vh, 520px);
+    display: block;
     overflow: hidden;
     z-index: 1001;
   }
 
   .image-preview-close {
     position: absolute;
-    top: -40px;
-    right: 0;
+    top: 10px;
+    right: 10px;
     background: var(--color-code-block-bg);
     border: none;
     border-radius: 50%;
@@ -1571,22 +1571,50 @@
     align-items: center;
     justify-content: center;
     transition: background 0.2s;
+    z-index: 2;
   }
 
   .image-preview-close:hover {
     background: var(--color-code-block-header-bg);
   }
 
+  .image-preview-layout {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: clamp(300px, 28vw, 430px) minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .image-preview-main {
+    min-width: 0;
+    min-height: 0;
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto clamp(190px, 24vh, 280px);
+    gap: 12px;
+  }
+
+  .image-preview-stage {
+    min-width: 0;
+    min-height: clamp(260px, calc(92vh - 390px), 560px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
   .image-preview-img {
+    width: 100%;
+    height: 100%;
     max-width: 100%;
-    max-height: 55vh;
+    max-height: 100%;
     object-fit: contain;
     border-radius: 8px;
     box-shadow: var(--shadow-modal);
   }
 
   .image-preview-info {
-    margin-top: 16px;
     padding: 12px;
     background: var(--color-dropdown-bg);
     border-radius: 8px;
@@ -1603,15 +1631,29 @@
   .image-preview-path {
     font-size: 12px;
     color: var(--mute);
+    overflow-wrap: anywhere;
   }
 
   .image-metadata-section {
-    margin-top: 16px;
     width: 100%;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: 8px;
     text-align: left;
+  }
+
+  .image-system-metadata-section {
+    height: 100%;
+    min-width: 0;
+    padding: 12px;
+    background: var(--color-dropdown-bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+
+  .image-user-metadata-section {
+    min-height: 0;
   }
 
   .image-metadata-header {
@@ -1622,9 +1664,10 @@
 
   .image-metadata-textarea {
     width: 100%;
-    min-height: 150px;
-    max-height: 22vh;
-    resize: vertical;
+    min-height: 0;
+    flex: 1 1 auto;
+    resize: none;
+    overflow: auto;
     font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
     font-size: 13px;
     padding: 8px;
@@ -1639,6 +1682,7 @@
   }
 
   .image-metadata-actions {
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
     gap: 12px;
@@ -1660,6 +1704,38 @@
 
   .image-metadata-status.warning {
     color: var(--color-status-warn);
+  }
+
+  @media (max-width: 900px) {
+    .image-preview-content {
+      width: 94vw;
+      height: 92vh;
+      min-width: 0;
+    }
+
+    .image-preview-layout {
+      grid-template-columns: 1fr;
+      grid-template-rows: minmax(160px, 32vh) minmax(0, 1fr);
+      gap: 12px;
+    }
+
+    .image-system-metadata-section {
+      height: auto;
+      min-height: 0;
+    }
+
+    .image-preview-main {
+      grid-template-rows: minmax(220px, 1fr) auto minmax(160px, 24vh);
+    }
+
+    .image-preview-stage {
+      min-height: 220px;
+    }
+
+    .image-preview-img {
+      width: 100%;
+      height: 100%;
+    }
   }
 
 
@@ -1831,6 +1907,18 @@
         background: var(--input-color-unhover);
         color: var(--text-color);
         padding: 10px;
+      }
+
+#webClipWarnings {
+        margin-top: 12px;
+        padding: 10px;
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        background: var(--backgroundcolor-unhover);
+        color: var(--text-color);
+        white-space: pre-wrap;
+        font-size: 13px;
+        line-height: 1.5;
       }
 
 .conflict-option {

@@ -15,14 +15,20 @@ interface ModalStore extends ModalState {
     showCustomCssModal: () => void;
     hideCustomCssModal: () => void;
     setCustomCssModalValue: (value: string) => void;
+    showWebClipModal: () => void;
+    hideWebClipModal: () => void;
+    setWebClipModalUrl: (url: string) => void;
+    setWebClipImporting: (importing: boolean) => void;
+    setWebClipWarnings: (warnings: string[]) => void;
     showCsvEditModal: (filePath: string, data: string[][]) => void;
     hideCsvEditModal: () => void;
     setCsvEditModalData: (data: string[][]) => void;
     showConflictModal: (conflictInfo: { path: string; localContent: string; remoteContent: string }) => void;
     hideConflictModal: () => void;
-    showImagePreviewModal: (imagePath: string, imageName: string, metadata: string) => void;
+    showImagePreviewModal: (imagePath: string, imageName: string, metadata: string, systemMetadata: string) => void;
     hideImagePreviewModal: () => void;
     setImagePreviewModalMetadata: (metadata: string) => void;
+    setImagePreviewModalSystemMetadata: (systemMetadata: string) => void;
 }
 
 export const useModalStore = createStore<ModalStore>((set) => ({
@@ -45,6 +51,12 @@ export const useModalStore = createStore<ModalStore>((set) => ({
         visible: false,
         value: '',
     },
+    webClipModal: {
+        visible: false,
+        url: '',
+        importing: false,
+        warnings: [],
+    },
     csvEditModal: {
         visible: false,
         filePath: '',
@@ -59,6 +71,7 @@ export const useModalStore = createStore<ModalStore>((set) => ({
         imagePath: '',
         imageName: '',
         metadata: '',
+        systemMetadata: '',
     },
 
     // Actions
@@ -89,6 +102,21 @@ export const useModalStore = createStore<ModalStore>((set) => ({
     setCustomCssModalValue: (value) => set((state) => ({
         customCssModal: { ...state.customCssModal, value },
     })),
+    showWebClipModal: () => set({
+        webClipModal: { visible: true, url: '', importing: false, warnings: [] },
+    }),
+    hideWebClipModal: () => set({
+        webClipModal: { visible: false, url: '', importing: false, warnings: [] },
+    }),
+    setWebClipModalUrl: (url) => set((state) => ({
+        webClipModal: { ...state.webClipModal, url },
+    })),
+    setWebClipImporting: (importing) => set((state) => ({
+        webClipModal: { ...state.webClipModal, importing },
+    })),
+    setWebClipWarnings: (warnings) => set((state) => ({
+        webClipModal: { ...state.webClipModal, warnings },
+    })),
     showCsvEditModal: (filePath, data) => set({
         csvEditModal: { visible: true, filePath, data },
     }),
@@ -104,13 +132,16 @@ export const useModalStore = createStore<ModalStore>((set) => ({
     hideConflictModal: () => set({
         conflictModal: { visible: false, conflictInfo: null },
     }),
-    showImagePreviewModal: (imagePath, imageName, metadata) => set({
-        imagePreviewModal: { visible: true, imagePath, imageName, metadata },
+    showImagePreviewModal: (imagePath, imageName, metadata, systemMetadata) => set({
+        imagePreviewModal: { visible: true, imagePath, imageName, metadata, systemMetadata },
     }),
     hideImagePreviewModal: () => set({
-        imagePreviewModal: { visible: false, imagePath: '', imageName: '', metadata: '' },
+        imagePreviewModal: { visible: false, imagePath: '', imageName: '', metadata: '', systemMetadata: '' },
     }),
     setImagePreviewModalMetadata: (metadata) => set((state) => ({
         imagePreviewModal: { ...state.imagePreviewModal, metadata },
+    })),
+    setImagePreviewModalSystemMetadata: (systemMetadata) => set((state) => ({
+        imagePreviewModal: { ...state.imagePreviewModal, systemMetadata },
     })),
 }));

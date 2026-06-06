@@ -15,6 +15,10 @@ export async function PreviewMarkdown(content) {
   return content;
 }
 
+export async function PreviewMarkdownForPath(_path, content) {
+  return content;
+}
+
 export async function GetGraphData() {
   return { nodes: [], edges: [], meta: {} };
 }
@@ -96,6 +100,14 @@ export async function GetImageMetadata() {
 }
 
 export async function SaveImageMetadata() {
+  return true;
+}
+
+export async function GetImageSystemMetadata() {
+  return '';
+}
+
+export async function SaveImageSystemMetadata() {
   return true;
 }
 

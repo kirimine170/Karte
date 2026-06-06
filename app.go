@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"image"
 	_ "image/gif"
+	_ "image/jpeg"
 	"image/png"
 	"io"
 	"io/fs"
@@ -28,6 +29,7 @@ import (
 
 	"karte/internal/asr"
 	"karte/internal/audio"
+	"karte/internal/clip"
 	"karte/internal/docid"
 	fm "karte/internal/frontmatter"
 	gitvcs "karte/internal/git"
@@ -96,6 +98,54 @@ type App struct {
 	// Window close control
 	allowCloseMu   sync.Mutex
 	allowCloseFlag bool
+
+	webClipConversionMu      sync.Mutex
+	webClipConversionQueue   []webClipConversionJob
+	webClipConversionRunning bool
+	webClipConversionClosing bool
+}
+
+type webClipConversionJob struct {
+	MarkdownPath string
+	AssetDir     string
+}
+
+type webClipImageMetadata struct {
+	Schema     string                    `json:"schema"`
+	Source     webClipMetadataSource     `json:"source"`
+	Capture    webClipMetadataCapture    `json:"capture"`
+	Relations  webClipMetadataRelations  `json:"relations"`
+	Processing webClipMetadataProcessing `json:"processing"`
+}
+
+type webClipMetadataSource struct {
+	Kind             string `json:"kind"`
+	PageURL          string `json:"page_url"`
+	ImageURL         string `json:"image_url"`
+	ResolvedImageURL string `json:"resolved_image_url"`
+	SiteName         string `json:"site_name"`
+	PageTitle        string `json:"page_title"`
+	HTMLAlt          string `json:"html_alt"`
+	HTMLCaption      string `json:"html_caption"`
+}
+
+type webClipMetadataCapture struct {
+	CapturedAt   string `json:"captured_at"`
+	Method       string `json:"method"`
+	HTTPStatus   int    `json:"http_status"`
+	ContentType  string `json:"content_type"`
+	ETag         string `json:"etag"`
+	LastModified string `json:"last_modified"`
+}
+
+type webClipMetadataRelations struct {
+	DocumentPath      string `json:"document_path"`
+	MarkdownReference string `json:"markdown_reference"`
+}
+
+type webClipMetadataProcessing struct {
+	OriginalFormat string `json:"original_format"`
+	ConvertedTo    string `json:"converted_to"`
 }
 
 // NOTE: Multi-window support requires Wails v3 (currently in development)
@@ -109,13 +159,17 @@ type App struct {
 
 // logInfo writes info logs to both Wails runtime and app log file
 func (a *App) logInfo(msg string) {
-	runtime.LogInfo(a.ctx, msg)
+	if a.ctx != nil {
+		runtime.LogInfo(a.ctx, msg)
+	}
 	a.appendLog("INFO", msg)
 }
 
 // logError writes error logs to both Wails runtime and app log file
 func (a *App) logError(msg string) {
-	runtime.LogError(a.ctx, msg)
+	if a.ctx != nil {
+		runtime.LogError(a.ctx, msg)
+	}
 	a.appendLog("ERROR", msg)
 }
 
@@ -344,6 +398,10 @@ func (a *App) startup(ctx context.Context) {
 
 // shutdown is invoked by Wails when the app is closing.
 func (a *App) shutdown(ctx context.Context) {
+	a.webClipConversionMu.Lock()
+	a.webClipConversionClosing = true
+	a.webClipConversionMu.Unlock()
+
 	if a.asrService != nil {
 		a.asrService.Close()
 		a.asrService = nil
@@ -632,7 +690,7 @@ func (a *App) GetFileList() []FileItem {
 	return files
 }
 
-// GetImageList returns a list of image files in the data/image directory
+// GetImageList returns image files from the shared image directory and Web Clip assets.
 func (a *App) GetImageList() []ImageItem {
 	var images []ImageItem
 	imageDir := filepath.Join(a.dataDir, "data", "image")
@@ -642,41 +700,42 @@ func (a *App) GetImageList() []ImageItem {
 	// Check if image directory exists
 	if _, err := os.Stat(imageDir); os.IsNotExist(err) {
 		a.logInfo(fmt.Sprintf("Image directory does not exist: %s", imageDir))
-		return []ImageItem{}
-	}
+	} else {
+		err := filepath.Walk(imageDir, func(p string, info os.FileInfo, err error) error {
+			if err != nil {
+				a.logError(fmt.Sprintf("Error walking path %s: %v", p, err))
+				return nil
+			}
+			if info.IsDir() {
+				return nil
+			}
+			if strings.ToLower(filepath.Ext(info.Name())) != ".webp" {
+				return nil
+			}
 
-	err := filepath.Walk(imageDir, func(p string, info os.FileInfo, err error) error {
+			rel, _ := filepath.Rel(a.dataDir, p)
+			rel = filepath.ToSlash(rel)
+			metadataPath := strings.TrimSuffix(rel, ".webp") + ".yaml"
+			imageItem := ImageItem{
+				Path:         rel,
+				Name:         info.Name(),
+				Size:         info.Size(),
+				ModTime:      info.ModTime(),
+				MetadataPath: metadataPath,
+				OriginalPath: a.findOriginalImagePath(rel),
+			}
+			images = append(images, imageItem)
+			a.logInfo(fmt.Sprintf("Found image: %s", imageItem.Path))
+			return nil
+		})
+
 		if err != nil {
-			a.logError(fmt.Sprintf("Error walking path %s: %v", p, err))
-			return nil
+			a.logError(fmt.Sprintf("Error walking image directory: %v", err))
 		}
-		if info.IsDir() {
-			return nil
-		}
-		if strings.ToLower(filepath.Ext(info.Name())) != ".webp" {
-			return nil
-		}
-
-		rel, _ := filepath.Rel(a.dataDir, p)
-		rel = filepath.ToSlash(rel)
-		metadataPath := strings.TrimSuffix(rel, ".webp") + ".yaml"
-		imageItem := ImageItem{
-			Path:         rel,
-			Name:         info.Name(),
-			Size:         info.Size(),
-			ModTime:      info.ModTime(),
-			MetadataPath: metadataPath,
-			OriginalPath: a.findOriginalImagePath(rel),
-		}
-		images = append(images, imageItem)
-		a.logInfo(fmt.Sprintf("Found image: %s", imageItem.Path))
-		return nil
-	})
-
-	if err != nil {
-		a.logError(fmt.Sprintf("Error walking image directory: %v", err))
-		return []ImageItem{}
 	}
+
+	clipImages := a.getWebClipAssetImageList()
+	images = append(images, clipImages...)
 
 	// Sort by modification time (newest first)
 	sort.Slice(images, func(i, j int) bool {
@@ -685,6 +744,69 @@ func (a *App) GetImageList() []ImageItem {
 
 	a.logInfo(fmt.Sprintf("Found %d image files", len(images)))
 	return images
+}
+
+func (a *App) getWebClipAssetImageList() []ImageItem {
+	assetRoot := filepath.Join(a.dataDir, "content", "clips", "assets")
+	if _, err := os.Stat(assetRoot); os.IsNotExist(err) {
+		return nil
+	}
+
+	type candidate struct {
+		path string
+		info os.FileInfo
+	}
+	candidates := map[string]candidate{}
+	err := filepath.Walk(assetRoot, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			a.logError(fmt.Sprintf("Error walking web clip asset path %s: %v", p, err))
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(info.Name()))
+		if !isGalleryImageExt(ext) {
+			return nil
+		}
+		baseKey := strings.TrimSuffix(filepath.ToSlash(p), ext)
+		existing, exists := candidates[baseKey]
+		if !exists || ext == ".webp" || strings.ToLower(filepath.Ext(existing.path)) != ".webp" {
+			candidates[baseKey] = candidate{path: p, info: info}
+		}
+		return nil
+	})
+	if err != nil {
+		a.logError(fmt.Sprintf("Error walking web clip asset directory: %v", err))
+		return nil
+	}
+
+	images := make([]ImageItem, 0, len(candidates))
+	for _, candidate := range candidates {
+		rel, err := filepath.Rel(a.dataDir, candidate.path)
+		if err != nil {
+			continue
+		}
+		rel = filepath.ToSlash(rel)
+		images = append(images, ImageItem{
+			Path:         rel,
+			Name:         candidate.info.Name(),
+			Size:         candidate.info.Size(),
+			ModTime:      candidate.info.ModTime(),
+			MetadataPath: metadataPathFromImage(rel),
+			OriginalPath: a.findOriginalImagePath(rel),
+		})
+	}
+	return images
+}
+
+func isGalleryImageExt(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp":
+		return true
+	default:
+		return false
+	}
 }
 
 // GetCsvList returns a list of CSV files in the data/csv directory
@@ -835,9 +957,39 @@ func (a *App) GetImageMetadata(imagePath string) (string, error) {
 				}
 			}
 		}
+
 	}
 
 	return metadataContent, nil
+}
+
+// GetImageSystemMetadata returns privileged image metadata stored in the KMTD WebP chunk.
+func (a *App) GetImageSystemMetadata(imagePath string) (string, error) {
+	relImagePath, _, err := a.resolveImagePath(imagePath)
+	if err != nil {
+		return "", err
+	}
+	imageAbsPath := filepath.Join(a.dataDir, filepath.FromSlash(relImagePath))
+
+	var metadata map[string]interface{}
+	if strings.ToLower(filepath.Ext(relImagePath)) == ".webp" {
+		if webClipMetadata, err := readWebClipMetadataChunk(imageAbsPath); err != nil {
+			a.logError(fmt.Sprintf("Failed to read Web Clip metadata from WebP chunk: %v", err))
+		} else if webClipMetadata != nil {
+			metadata = webClipMetadata
+		}
+	}
+	if metadata == nil {
+		metadata = a.webClipMetadataFromManifest(relImagePath)
+	}
+	if metadata == nil {
+		return "{}\n", nil
+	}
+	yamlBytes, err := yaml.Marshal(metadata)
+	if err != nil {
+		return "", fmt.Errorf("marshal system metadata: %w", err)
+	}
+	return string(yamlBytes), nil
 }
 
 // SaveImageMetadata writes YAML metadata for the image, validating the format beforehand.
@@ -908,6 +1060,80 @@ func (a *App) SaveImageMetadata(imagePath, yamlContent string) (bool, error) {
 	return true, nil
 }
 
+// SaveImageSystemMetadata writes privileged metadata to the KMTD WebP chunk.
+// Permission checks will be added here when the authorization model exists.
+func (a *App) SaveImageSystemMetadata(imagePath, metadataContent string) (bool, error) {
+	if imagePath == "" {
+		return false, fmt.Errorf("image path is required")
+	}
+
+	relImagePath, _, err := a.resolveImagePath(imagePath)
+	if err != nil {
+		return false, err
+	}
+	if strings.ToLower(filepath.Ext(relImagePath)) != ".webp" {
+		return false, fmt.Errorf("system metadata can only be saved to WebP images")
+	}
+	if strings.TrimSpace(metadataContent) == "" {
+		metadataContent = "{}\n"
+	}
+
+	metadataMap, err := parseImageMetadataMap([]byte(metadataContent))
+	if err != nil {
+		return false, err
+	}
+	if _, ok := metadataMap["schema"]; !ok && len(metadataMap) > 0 {
+		metadataMap["schema"] = "karte.image.metadata.v1"
+	}
+	jsonBytes, err := json.MarshalIndent(metadataMap, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("marshal system metadata: %w", err)
+	}
+
+	imageAbsPath := filepath.Join(a.dataDir, filepath.FromSlash(relImagePath))
+	if err := webpchunk.WriteMetadataToWebP(imageAbsPath, jsonBytes); err != nil {
+		return false, fmt.Errorf("write system metadata chunk: %w", err)
+	}
+	a.logInfo(fmt.Sprintf("Saved image system metadata to KMTD chunk: %s", relImagePath))
+	return true, nil
+}
+
+func parseImageMetadataMap(data []byte) (map[string]interface{}, error) {
+	var validation interface{}
+	if yamlErr := yaml.Unmarshal(data, &validation); yamlErr == nil {
+		if mapVal, ok := normalizeMetadataMap(validation); ok {
+			return mapVal, nil
+		}
+		return map[string]interface{}{}, nil
+	}
+	if jsonErr := json.Unmarshal(data, &validation); jsonErr == nil {
+		if mapVal, ok := normalizeMetadataMap(validation); ok {
+			return mapVal, nil
+		}
+		return map[string]interface{}{}, nil
+	}
+	return nil, fmt.Errorf("invalid YAML/JSON")
+}
+
+func normalizeMetadataMap(value interface{}) (map[string]interface{}, bool) {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return typed, true
+	case map[interface{}]interface{}:
+		result := make(map[string]interface{}, len(typed))
+		for key, val := range typed {
+			keyStr, ok := key.(string)
+			if !ok {
+				continue
+			}
+			result[keyStr] = val
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
 // CreateNewFile creates a new markdown file in the content directory
 func (a *App) CreateNewFile(filename string) (bool, error) {
 	if filename == "" {
@@ -944,6 +1170,478 @@ func (a *App) CreateNewFile(filename string) (bool, error) {
 
 	a.logInfo(fmt.Sprintf("Created new file: %s", filePath))
 	return true, nil
+}
+
+// ClipURL imports a web article URL as a Markdown document under content/clips.
+func (a *App) ClipURL(req clip.ClipRequest) (clip.ClipResult, error) {
+	if a == nil {
+		return clip.ClipResult{}, fmt.Errorf("app is not initialized")
+	}
+	if a.dataDir == "" {
+		return clip.ClipResult{}, fmt.Errorf("dataDir is not initialized")
+	}
+
+	service := clip.Service{DataDir: a.dataDir}
+	result, err := service.ClipURL(a.ctx, req)
+	if err != nil {
+		a.logError(fmt.Sprintf("ClipURL failed for %s: %v", req.URL, err))
+		return clip.ClipResult{}, err
+	}
+
+	a.logInfo(fmt.Sprintf("ClipURL: imported %s to %s", result.SourceURL, result.MarkdownPath))
+	if err := a.BuildSite(); err != nil {
+		runtime.LogError(a.ctx, fmt.Sprintf("Failed to build site after web clip: %v", err))
+	}
+	a.emitEvent("file-changed", result.MarkdownPath)
+	a.enqueueWebClipAssetConversion(result.MarkdownPath, result.AssetDir)
+	return result, nil
+}
+
+func (a *App) emitEvent(name string, data interface{}) {
+	if a != nil && a.ctx != nil {
+		runtime.EventsEmit(a.ctx, name, data)
+	}
+}
+
+func (a *App) enqueueWebClipAssetConversion(markdownPath, assetDir string) {
+	if a == nil || markdownPath == "" || assetDir == "" {
+		return
+	}
+	if !isWebClipMarkdownPath(markdownPath) || !isWebClipAssetDir(assetDir) {
+		return
+	}
+
+	a.webClipConversionMu.Lock()
+	defer a.webClipConversionMu.Unlock()
+	if a.webClipConversionClosing {
+		return
+	}
+	a.webClipConversionQueue = append(a.webClipConversionQueue, webClipConversionJob{
+		MarkdownPath: filepath.ToSlash(markdownPath),
+		AssetDir:     filepath.ToSlash(assetDir),
+	})
+	if a.webClipConversionRunning {
+		return
+	}
+	a.webClipConversionRunning = true
+	go a.runWebClipConversionQueue()
+}
+
+func (a *App) runWebClipConversionQueue() {
+	time.Sleep(3 * time.Second)
+	for {
+		a.webClipConversionMu.Lock()
+		if len(a.webClipConversionQueue) == 0 {
+			a.webClipConversionRunning = false
+			a.webClipConversionMu.Unlock()
+			return
+		}
+		job := a.webClipConversionQueue[0]
+		a.webClipConversionQueue = a.webClipConversionQueue[1:]
+		a.webClipConversionMu.Unlock()
+
+		if err := a.processWebClipConversionJob(job, 250*time.Millisecond); err != nil {
+			a.logError(fmt.Sprintf("Web Clip image conversion failed for %s: %v", job.AssetDir, err))
+		}
+	}
+}
+
+type imagePathReplacement struct {
+	OriginalRel string
+	WebPRel     string
+}
+
+func (a *App) processWebClipConversionJob(job webClipConversionJob, interImageDelay time.Duration) error {
+	if a == nil || a.dataDir == "" {
+		return fmt.Errorf("app dataDir is not initialized")
+	}
+	if !isWebClipMarkdownPath(job.MarkdownPath) || !isWebClipAssetDir(job.AssetDir) {
+		return fmt.Errorf("invalid web clip conversion job: markdown=%s assetDir=%s", job.MarkdownPath, job.AssetDir)
+	}
+
+	markdownAbs := filepath.Join(a.dataDir, filepath.FromSlash(job.MarkdownPath))
+	assetAbs := filepath.Join(a.dataDir, filepath.FromSlash(job.AssetDir))
+	if _, err := os.Stat(markdownAbs); err != nil {
+		return fmt.Errorf("stat clip markdown: %w", err)
+	}
+	if _, err := os.Stat(assetAbs); err != nil {
+		return fmt.Errorf("stat clip asset dir: %w", err)
+	}
+
+	replacements := []imagePathReplacement{}
+	imageManifest := a.loadWebClipImageManifest(assetAbs)
+	err := filepath.Walk(assetAbs, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			a.logError(fmt.Sprintf("Error walking web clip conversion path %s: %v", p, err))
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(info.Name()))
+		if ext == ".webp" {
+			webpRel, relErr := filepath.Rel(a.dataDir, p)
+			if relErr == nil {
+				webpRel = filepath.ToSlash(webpRel)
+				item := imageManifest[webClipImageManifestKey(webpRel)]
+				if err := a.writeWebClipMetadataToWebP(p, webpRel, webpRel, markdownAbs, item, ext); err != nil {
+					a.logError(fmt.Sprintf("Failed to write Web Clip metadata to WebP: %s: %v", p, err))
+				}
+			}
+			return nil
+		}
+		if !isConvertibleWebClipImageExt(ext) {
+			return nil
+		}
+		webpAbs := strings.TrimSuffix(p, ext) + ".webp"
+		if fileExists(webpAbs) {
+			originalRel, relErr := filepath.Rel(a.dataDir, p)
+			if relErr == nil {
+				webpRel, webpRelErr := filepath.Rel(a.dataDir, webpAbs)
+				if webpRelErr == nil {
+					originalRel = filepath.ToSlash(originalRel)
+					webpRel = filepath.ToSlash(webpRel)
+					item := imageManifest[webClipImageManifestKey(originalRel)]
+					if err := a.writeWebClipMetadataToWebP(webpAbs, originalRel, webpRel, markdownAbs, item, ext); err != nil {
+						a.logError(fmt.Sprintf("Failed to write Web Clip metadata to existing WebP: %s: %v", webpAbs, err))
+					}
+				}
+			}
+			return nil
+		}
+		if err := a.convertImageFileToWebP(p, webpAbs, ext); err != nil {
+			a.logError(fmt.Sprintf("Failed to convert Web Clip image to WebP: %s -> %s: %v", p, webpAbs, err))
+			return nil
+		}
+
+		originalRel, err := filepath.Rel(a.dataDir, p)
+		if err != nil {
+			return nil
+		}
+		webpRel, err := filepath.Rel(a.dataDir, webpAbs)
+		if err != nil {
+			return nil
+		}
+		replacements = append(replacements, imagePathReplacement{
+			OriginalRel: filepath.ToSlash(originalRel),
+			WebPRel:     filepath.ToSlash(webpRel),
+		})
+		item := imageManifest[webClipImageManifestKey(filepath.ToSlash(originalRel))]
+		if err := a.writeWebClipMetadataToWebP(webpAbs, filepath.ToSlash(originalRel), filepath.ToSlash(webpRel), markdownAbs, item, ext); err != nil {
+			a.logError(fmt.Sprintf("Failed to write Web Clip metadata to WebP: %s: %v", webpAbs, err))
+		}
+		a.emitEvent("image-imported", map[string]interface{}{
+			"path":          filepath.ToSlash(webpRel),
+			"webp_path":     filepath.ToSlash(webpRel),
+			"original_path": filepath.ToSlash(originalRel),
+			"source":        "web_clip",
+		})
+		if interImageDelay > 0 {
+			time.Sleep(interImageDelay)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("walk web clip assets: %w", err)
+	}
+	if len(replacements) == 0 {
+		return nil
+	}
+
+	if updated, err := a.updateWebClipMarkdownImageRefs(markdownAbs, replacements); err != nil {
+		return err
+	} else if updated {
+		a.emitEvent("file-changed", job.MarkdownPath)
+		if err := a.BuildSite(); err != nil {
+			a.logError(fmt.Sprintf("Failed to build site after Web Clip image conversion: %v", err))
+		}
+	}
+	return nil
+}
+
+func (a *App) convertImageFileToWebP(sourceAbs, webpAbs, sourceExt string) error {
+	sourceFile, err := os.Open(sourceAbs)
+	if err != nil {
+		return fmt.Errorf("open source image: %w", err)
+	}
+	defer sourceFile.Close()
+
+	img, _, err := image.Decode(sourceFile)
+	if err != nil {
+		return fmt.Errorf("decode source image: %w", err)
+	}
+
+	tmpAbs := webpAbs + ".tmp"
+	webpFile, err := os.OpenFile(tmpAbs, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("create webp temp file: %w", err)
+	}
+	lossless := sourceExt == ".png" || sourceExt == ".gif"
+	encodeErr := webputil.EncodeWebP(webpFile, img, lossless)
+	closeErr := webpFile.Close()
+	if encodeErr != nil {
+		_ = os.Remove(tmpAbs)
+		return fmt.Errorf("encode webp: %w", encodeErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpAbs)
+		return fmt.Errorf("close webp temp file: %w", closeErr)
+	}
+	if err := os.Rename(tmpAbs, webpAbs); err != nil {
+		_ = os.Remove(tmpAbs)
+		return fmt.Errorf("replace webp file: %w", err)
+	}
+	return nil
+}
+
+func (a *App) loadWebClipImageManifest(assetAbs string) map[string]clip.ImageManifestItem {
+	result := map[string]clip.ImageManifestItem{}
+	data, err := os.ReadFile(filepath.Join(assetAbs, clip.ImageManifestFile))
+	if err != nil {
+		if !os.IsNotExist(err) {
+			a.logError(fmt.Sprintf("Failed to read Web Clip image manifest: %v", err))
+		}
+		return result
+	}
+	var manifest clip.ImageManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		a.logError(fmt.Sprintf("Failed to parse Web Clip image manifest: %v", err))
+		return result
+	}
+	for _, item := range manifest.Images {
+		if item.LocalPath == "" {
+			continue
+		}
+		key := webClipImageManifestKey(item.LocalPath)
+		result[key] = item
+	}
+	return result
+}
+
+func webClipImageManifestKey(relPath string) string {
+	relPath = filepath.ToSlash(filepath.Clean(relPath))
+	return strings.TrimSuffix(relPath, strings.ToLower(filepath.Ext(relPath)))
+}
+
+func (a *App) writeWebClipMetadataToWebP(webpAbs, originalRel, webpRel, markdownAbs string, item clip.ImageManifestItem, sourceExt string) error {
+	markdownReference, ok := a.webClipMarkdownReference(markdownAbs, webpRel)
+	if !ok {
+		markdownReference = filepath.ToSlash(webpRel)
+	}
+	documentPath := filepath.ToSlash(markdownAbs)
+	if rel, err := filepath.Rel(a.dataDir, markdownAbs); err == nil {
+		documentPath = filepath.ToSlash(rel)
+	}
+	originalFormat := item.OriginalFormat
+	if originalFormat == "" {
+		originalFormat = imageContentTypeFromExt(sourceExt)
+	}
+	if originalFormat == "" {
+		originalFormat = "application/octet-stream"
+	}
+	metadata := webClipImageMetadata{
+		Schema: "karte.image.metadata.v1",
+		Source: webClipMetadataSource{
+			Kind:             "web_clip",
+			PageURL:          item.PageURL,
+			ImageURL:         item.ImageURL,
+			ResolvedImageURL: item.ResolvedImageURL,
+			SiteName:         item.SiteName,
+			PageTitle:        item.PageTitle,
+			HTMLAlt:          item.HTMLAlt,
+			HTMLCaption:      item.HTMLCaption,
+		},
+		Capture: webClipMetadataCapture{
+			CapturedAt:   item.CapturedAt,
+			Method:       "url_clip",
+			HTTPStatus:   item.HTTPStatus,
+			ContentType:  item.ContentType,
+			ETag:         item.ETag,
+			LastModified: item.LastModified,
+		},
+		Relations: webClipMetadataRelations{
+			DocumentPath:      documentPath,
+			MarkdownReference: markdownReference,
+		},
+		Processing: webClipMetadataProcessing{
+			OriginalFormat: originalFormat,
+			ConvertedTo:    "image/webp",
+		},
+	}
+	if metadata.Capture.ContentType == "" {
+		metadata.Capture.ContentType = originalFormat
+	}
+	if metadata.Source.ResolvedImageURL == "" {
+		metadata.Source.ResolvedImageURL = item.ImageURL
+	}
+	data, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal Web Clip image metadata: %w", err)
+	}
+	return webpchunk.WriteMetadataToWebP(webpAbs, data)
+}
+
+func (a *App) webClipMarkdownReference(markdownAbs, imageRel string) (string, bool) {
+	imageAbs := filepath.Join(a.dataDir, filepath.FromSlash(imageRel))
+	ref, err := filepath.Rel(filepath.Dir(markdownAbs), imageAbs)
+	if err != nil {
+		return "", false
+	}
+	return filepath.ToSlash(ref), true
+}
+
+func imageContentTypeFromExt(ext string) string {
+	switch strings.ToLower(ext) {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	default:
+		return ""
+	}
+}
+
+func readWebClipMetadataChunk(webpAbs string) (map[string]interface{}, error) {
+	data, err := webpchunk.ReadMetadataFromWebP(webpAbs)
+	if err != nil {
+		return nil, err
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, nil
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return nil, fmt.Errorf("parse Web Clip metadata chunk: %w", err)
+	}
+	return metadata, nil
+}
+
+func (a *App) webClipMetadataFromManifest(relImagePath string) map[string]interface{} {
+	if !strings.HasPrefix(filepath.ToSlash(relImagePath), "content/clips/assets/") {
+		return nil
+	}
+	assetDir := filepath.Dir(filepath.Join(a.dataDir, filepath.FromSlash(relImagePath)))
+	manifest := a.loadWebClipImageManifest(assetDir)
+	item, ok := manifest[webClipImageManifestKey(relImagePath)]
+	if !ok {
+		return nil
+	}
+	originalFormat := item.OriginalFormat
+	if originalFormat == "" {
+		originalFormat = imageContentTypeFromExt(filepath.Ext(relImagePath))
+	}
+	metadata := webClipImageMetadata{
+		Schema: "karte.image.metadata.v1",
+		Source: webClipMetadataSource{
+			Kind:             "web_clip",
+			PageURL:          item.PageURL,
+			ImageURL:         item.ImageURL,
+			ResolvedImageURL: item.ResolvedImageURL,
+			SiteName:         item.SiteName,
+			PageTitle:        item.PageTitle,
+			HTMLAlt:          item.HTMLAlt,
+			HTMLCaption:      item.HTMLCaption,
+		},
+		Capture: webClipMetadataCapture{
+			CapturedAt:   item.CapturedAt,
+			Method:       "url_clip",
+			HTTPStatus:   item.HTTPStatus,
+			ContentType:  item.ContentType,
+			ETag:         item.ETag,
+			LastModified: item.LastModified,
+		},
+		Relations: webClipMetadataRelations{
+			DocumentPath:      webClipDocumentPathFromAsset(relImagePath),
+			MarkdownReference: item.MarkdownReference,
+		},
+		Processing: webClipMetadataProcessing{
+			OriginalFormat: originalFormat,
+			ConvertedTo:    "",
+		},
+	}
+	if strings.ToLower(filepath.Ext(relImagePath)) == ".webp" {
+		metadata.Processing.ConvertedTo = "image/webp"
+		metadata.Relations.MarkdownReference = strings.TrimSuffix(item.MarkdownReference, filepath.Ext(item.MarkdownReference)) + ".webp"
+	}
+	var asMap map[string]interface{}
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		return nil
+	}
+	if err := json.Unmarshal(data, &asMap); err != nil {
+		return nil
+	}
+	return asMap
+}
+
+func webClipDocumentPathFromAsset(relImagePath string) string {
+	relImagePath = filepath.ToSlash(filepath.Clean(relImagePath))
+	const prefix = "content/clips/assets/"
+	if !strings.HasPrefix(relImagePath, prefix) {
+		return ""
+	}
+	rest := strings.TrimPrefix(relImagePath, prefix)
+	parts := strings.Split(rest, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		return ""
+	}
+	return "content/clips/" + parts[0] + ".md"
+}
+
+func (a *App) updateWebClipMarkdownImageRefs(markdownAbs string, replacements []imagePathReplacement) (bool, error) {
+	contentBytes, err := os.ReadFile(markdownAbs)
+	if err != nil {
+		return false, fmt.Errorf("read clip markdown: %w", err)
+	}
+	content := string(contentBytes)
+	updated := content
+	markdownDir := filepath.Dir(markdownAbs)
+	for _, replacement := range replacements {
+		originalAbs := filepath.Join(a.dataDir, filepath.FromSlash(replacement.OriginalRel))
+		webpAbs := filepath.Join(a.dataDir, filepath.FromSlash(replacement.WebPRel))
+		originalMarkdownRel, err := filepath.Rel(markdownDir, originalAbs)
+		if err != nil {
+			continue
+		}
+		webpMarkdownRel, err := filepath.Rel(markdownDir, webpAbs)
+		if err != nil {
+			continue
+		}
+		originalMarkdownRel = filepath.ToSlash(originalMarkdownRel)
+		webpMarkdownRel = filepath.ToSlash(webpMarkdownRel)
+		updated = strings.ReplaceAll(updated, originalMarkdownRel, webpMarkdownRel)
+		updated = strings.ReplaceAll(updated, "./"+originalMarkdownRel, "./"+webpMarkdownRel)
+	}
+	if updated == content {
+		return false, nil
+	}
+	if err := os.WriteFile(markdownAbs, []byte(updated), 0o644); err != nil {
+		return false, fmt.Errorf("write clip markdown: %w", err)
+	}
+	return true, nil
+}
+
+func isWebClipMarkdownPath(path string) bool {
+	path = filepath.ToSlash(filepath.Clean(path))
+	return strings.HasPrefix(path, "content/clips/") && strings.HasSuffix(strings.ToLower(path), ".md")
+}
+
+func isWebClipAssetDir(path string) bool {
+	path = filepath.ToSlash(filepath.Clean(path))
+	return strings.HasPrefix(path, "content/clips/assets/")
+}
+
+func isConvertibleWebClipImageExt(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".jpg", ".jpeg", ".png", ".gif":
+		return true
+	default:
+		return false
+	}
 }
 
 // LoadFile loads the content of a markdown file
@@ -1251,8 +1949,14 @@ func (a *App) ResolveConflict(path, strategy string) error {
 	return nil
 }
 
-// PreviewMarkdown renders markdown content to HTML
+// PreviewMarkdown renders markdown content to HTML.
 func (a *App) PreviewMarkdown(content string) (string, error) {
+	return a.PreviewMarkdownForPath("", content)
+}
+
+// PreviewMarkdownForPath renders markdown content to HTML using currentPath as
+// the base for document-relative assets such as Web Clip images.
+func (a *App) PreviewMarkdownForPath(currentPath, content string) (string, error) {
 	// Parse frontmatter to check if this is a Marp presentation
 	frontMatter, markdownBody := fm.ParseFrontMatter(content)
 
@@ -1316,30 +2020,7 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 			a.logInfo("PreviewMarkdown [Marp]: No img tags found in HTML")
 		}
 
-		// Convert image paths in HTML to URLs that can be served by the HTTP handler
-		// Match img src attributes that point to data/image/ files
-		imgPathRegex := regexp.MustCompile(`(<img[^>]+src=["'])([^"']+)(["'][^>]*>)`)
-		html = imgPathRegex.ReplaceAllStringFunc(html, func(match string) string {
-			parts := imgPathRegex.FindStringSubmatch(match)
-			if len(parts) < 4 {
-				return match
-			}
-			prefix := parts[1]
-			imgPath := parts[2]
-			suffix := parts[3]
-
-			a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: Processing image path: %s", imgPath))
-
-			// Check if this is a data/image/ path
-			if strings.HasPrefix(imgPath, "data/image/") {
-				// Convert to URL path that will be served by HTTP handler
-				urlPath := "/image/" + imgPath
-				a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: Converted image path: %s -> %s", imgPath, urlPath))
-				return prefix + urlPath + suffix
-			}
-			a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: Image path does not start with data/image/: %s", imgPath))
-			return match
-		})
+		html = a.rewritePreviewImageSources(html, currentPath)
 
 		// Check for pinned version references and add warnings (same logic as regular markdown)
 		sourceDocID := ""
@@ -1561,26 +2242,7 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 		return "", fmt.Errorf("failed to render markdown: %v", err)
 	}
 
-	// Convert image paths in HTML to URLs that can be served by the HTTP handler
-	// Match img src attributes that point to data/image/ files
-	imgPathRegex := regexp.MustCompile(`(<img[^>]+src=["'])([^"']+)(["'][^>]*>)`)
-	html = imgPathRegex.ReplaceAllStringFunc(html, func(match string) string {
-		parts := imgPathRegex.FindStringSubmatch(match)
-		if len(parts) < 4 {
-			return match
-		}
-		prefix := parts[1]
-		imgPath := parts[2]
-		suffix := parts[3]
-
-		// Check if this is a data/image/ path
-		if strings.HasPrefix(imgPath, "data/image/") {
-			// Convert to URL path that will be served by HTTP handler
-			urlPath := "/image/" + imgPath
-			return prefix + urlPath + suffix
-		}
-		return match
-	})
+	html = a.rewritePreviewImageSources(html, currentPath)
 
 	// Check for pinned version references and add warnings
 	// Extract doc_id from frontmatter
@@ -1813,6 +2475,68 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 	html = a.applyPrintoutConfigToPreviewHTML(html, frontMatter)
 
 	return html, nil
+}
+
+func (a *App) rewritePreviewImageSources(htmlContent, currentPath string) string {
+	imgPathRegex := regexp.MustCompile(`(<img[^>]+src=["'])([^"']+)(["'][^>]*>)`)
+	return imgPathRegex.ReplaceAllStringFunc(htmlContent, func(match string) string {
+		parts := imgPathRegex.FindStringSubmatch(match)
+		if len(parts) < 4 {
+			return match
+		}
+		urlPath, ok := a.resolvePreviewImageURL(parts[2], currentPath)
+		if !ok {
+			return match
+		}
+		return parts[1] + urlPath + parts[3]
+	})
+}
+
+func (a *App) resolvePreviewImageURL(imagePath, currentPath string) (string, bool) {
+	imagePath = strings.TrimSpace(strings.ReplaceAll(imagePath, "\\", "/"))
+	if imagePath == "" ||
+		strings.HasPrefix(imagePath, "#") ||
+		strings.HasPrefix(imagePath, "/image/") ||
+		strings.HasPrefix(imagePath, "data:") ||
+		strings.HasPrefix(imagePath, "blob:") ||
+		strings.HasPrefix(imagePath, "http://") ||
+		strings.HasPrefix(imagePath, "https://") ||
+		strings.HasPrefix(imagePath, "//") {
+		return "", false
+	}
+
+	parsed, err := url.Parse(imagePath)
+	if err != nil || parsed.Scheme != "" || parsed.Host != "" {
+		return "", false
+	}
+	pathPart := parsed.Path
+	if unescaped, err := url.PathUnescape(pathPart); err == nil {
+		pathPart = unescaped
+	}
+	pathPart = strings.TrimPrefix(strings.ReplaceAll(pathPart, "\\", "/"), "/")
+
+	relPath := ""
+	switch {
+	case strings.HasPrefix(pathPart, "data/image/"), strings.HasPrefix(pathPart, "content/"):
+		relPath = pathPart
+	case currentPath != "" && strings.HasPrefix(filepath.ToSlash(currentPath), "content/"):
+		baseDir := filepath.Dir(filepath.ToSlash(currentPath))
+		relPath = filepath.ToSlash(filepath.Clean(filepath.Join(baseDir, pathPart)))
+	default:
+		return "", false
+	}
+
+	if relPath == "." || strings.HasPrefix(relPath, "../") || strings.Contains(relPath, "/../") {
+		return "", false
+	}
+	absPath := filepath.Join(a.dataDir, filepath.FromSlash(relPath))
+	if info, err := os.Stat(absPath); err != nil || info.IsDir() {
+		return "", false
+	}
+
+	parsed.Path = "/image/" + relPath
+	parsed.RawPath = ""
+	return parsed.String(), true
 }
 
 // BuildSite builds the static site

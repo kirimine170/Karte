@@ -113,6 +113,14 @@ export interface ModalState {
         visible: boolean;
         value: string;
     };
+
+    // Web Clipモーダル
+    webClipModal: {
+        visible: boolean;
+        url: string;
+        importing: boolean;
+        warnings: string[];
+    };
     
     // CSV編集モーダル
     csvEditModal: {
@@ -137,6 +145,7 @@ export interface ModalState {
         imagePath: string;
         imageName: string;
         metadata: string;
+        systemMetadata: string;
     };
 }
 
@@ -146,4 +155,3 @@ export interface OverlayState {
         visible: boolean;
     };
 }
-

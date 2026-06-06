@@ -15,6 +15,7 @@ export class Topbar extends BaseComponent {
     private hardwrapCheckbox: HTMLInputElement | null = null;
     private saveBtn: HTMLButtonElement | null = null;
     private newBtn: HTMLButtonElement | null = null;
+    private webClipBtn: HTMLButtonElement | null = null;
     private exportPdfBtn: HTMLButtonElement | null = null;
     private customCssBtn: HTMLButtonElement | null = null;
     private customCssStatus: HTMLElement | null = null;
@@ -42,6 +43,7 @@ export class Topbar extends BaseComponent {
         this.hardwrapCheckbox = document.getElementById('hardwrap') as HTMLInputElement;
         this.saveBtn = document.getElementById('saveBtn') as HTMLButtonElement;
         this.newBtn = document.getElementById('newBtn') as HTMLButtonElement;
+        this.webClipBtn = document.getElementById('webClipBtn') as HTMLButtonElement;
         this.exportPdfBtn = document.getElementById('exportPdfBtn') as HTMLButtonElement;
         this.customCssBtn = document.getElementById('customCssBtn') as HTMLButtonElement;
         this.customCssStatus = document.getElementById('customCssStatus');
@@ -187,6 +189,31 @@ export class Topbar extends BaseComponent {
                         return;
                     }
                     modalStore.showFilenameModal();
+                })
+            );
+        }
+
+        if (this.webClipBtn) {
+            this.unsubscribe.push(
+                this.addEventListener(this.webClipBtn, 'click', async () => {
+                    eventLogger.log('Topbar', 'web-clip-click');
+                    const docStore = useDocStore.getState();
+                    if (docStore.hasUnsavedChanges) {
+                        modalStore.showUnsavedConfirmModal(
+                            async () => {
+                                const saved = await this.handleSave();
+                                if (saved) {
+                                    modalStore.showWebClipModal();
+                                }
+                            },
+                            () => {
+                                docStore.clearUnsavedChanges();
+                                modalStore.showWebClipModal();
+                            }
+                        );
+                        return;
+                    }
+                    modalStore.showWebClipModal();
                 })
             );
         }

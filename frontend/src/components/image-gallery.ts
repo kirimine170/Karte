@@ -314,10 +314,16 @@ export class ImageGallery extends BaseComponent {
                 console.error('Failed to load image metadata:', error);
                 // メタデータの読み込みに失敗してもプレビューは表示する
             }
+            let systemMetadata = '';
+            try {
+                systemMetadata = await this.api.GetImageSystemMetadata(imagePath);
+            } catch (error) {
+                console.error('Failed to load image system metadata:', error);
+            }
 
             // モーダルストアを使用してプレビューを表示
             const modalStore = useModalStore.getState();
-            modalStore.showImagePreviewModal(imagePath, imageName, metadata);
+            modalStore.showImagePreviewModal(imagePath, imageName, metadata, systemMetadata);
         } catch (error) {
             console.error('Error showing image preview:', error);
             useUIStore.getState().setStatusMessage('画像プレビューの表示に失敗しました', 3000);

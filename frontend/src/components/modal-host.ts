@@ -4,7 +4,7 @@ import type { WailsAppAPI } from '../types/wails-api';
 import type { ConflictResolutionStrategy } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
-import { prepareMarkdownForPreview } from '../utils/preview-content';
+import { renderMarkdownPreview } from '../utils/preview-renderer';
 import { convertTimestampsToLinks } from '../utils/preview-audio';
 
 export class ModalHost extends BaseComponent {
@@ -32,6 +32,12 @@ export class ModalHost extends BaseComponent {
     private saveCustomCssBtn: HTMLButtonElement | null = null;
     private clearCustomCssBtn: HTMLButtonElement | null = null;
     private cancelCustomCssBtn: HTMLButtonElement | null = null;
+
+    private webClipModal: HTMLElement | null = null;
+    private webClipUrlInput: HTMLInputElement | null = null;
+    private importWebClipBtn: HTMLButtonElement | null = null;
+    private cancelWebClipBtn: HTMLButtonElement | null = null;
+    private webClipWarnings: HTMLElement | null = null;
 
     private csvEditModal: HTMLElement | null = null;
     private csvEditFileName: HTMLElement | null = null;
@@ -62,6 +68,9 @@ export class ModalHost extends BaseComponent {
     private imageMetadataEditor: HTMLTextAreaElement | null = null;
     private imageMetadataSaveBtn: HTMLButtonElement | null = null;
     private imageMetadataStatus: HTMLElement | null = null;
+    private imageSystemMetadataEditor: HTMLTextAreaElement | null = null;
+    private imageSystemMetadataSaveBtn: HTMLButtonElement | null = null;
+    private imageSystemMetadataStatus: HTMLElement | null = null;
 
     constructor(api: WailsAppAPI, parent?: HTMLElement) {
         super(parent);
@@ -93,6 +102,12 @@ export class ModalHost extends BaseComponent {
         this.clearCustomCssBtn = document.getElementById('clearCustomCssBtn') as HTMLButtonElement;
         this.cancelCustomCssBtn = document.getElementById('cancelCustomCssBtn') as HTMLButtonElement;
 
+        this.webClipModal = document.getElementById('webClipModal');
+        this.webClipUrlInput = document.getElementById('webClipUrlInput') as HTMLInputElement;
+        this.importWebClipBtn = document.getElementById('importWebClipBtn') as HTMLButtonElement;
+        this.cancelWebClipBtn = document.getElementById('cancelWebClipBtn') as HTMLButtonElement;
+        this.webClipWarnings = document.getElementById('webClipWarnings');
+
         this.csvEditModal = document.getElementById('csvEditModal');
         this.csvEditFileName = document.getElementById('csvEditFileName');
         this.csvEditTableHead = document.getElementById('csvEditTableHead');
@@ -120,6 +135,9 @@ export class ModalHost extends BaseComponent {
         this.imageMetadataEditor = document.getElementById('imageMetadataEditor') as HTMLTextAreaElement;
         this.imageMetadataSaveBtn = document.getElementById('imageMetadataSaveBtn') as HTMLButtonElement;
         this.imageMetadataStatus = document.getElementById('imageMetadataStatus');
+        this.imageSystemMetadataEditor = document.getElementById('imageSystemMetadataEditor') as HTMLTextAreaElement;
+        this.imageSystemMetadataSaveBtn = document.getElementById('imageSystemMetadataSaveBtn') as HTMLButtonElement;
+        this.imageSystemMetadataStatus = document.getElementById('imageSystemMetadataStatus');
 
         // イベントリスナーの設定
         this.setupEventListeners();
@@ -241,6 +259,40 @@ export class ModalHost extends BaseComponent {
                 this.addEventListener(this.cancelCustomCssBtn, 'click', () => {
                     eventLogger.log('ModalHost', 'custom-css-cancel-click');
                     useModalStore.getState().hideCustomCssModal();
+                })
+            );
+        }
+
+        if (this.webClipUrlInput) {
+            this.unsubscribe.push(
+                this.addEventListener(this.webClipUrlInput, 'input', (e) => {
+                    const target = e.target as HTMLInputElement;
+                    useModalStore.getState().setWebClipModalUrl(target.value);
+                })
+            );
+            this.unsubscribe.push(
+                this.addEventListener(this.webClipUrlInput, 'keydown', async (e) => {
+                    const keyboardEvent = e as KeyboardEvent;
+                    if (keyboardEvent.key === 'Enter') {
+                        keyboardEvent.preventDefault();
+                        await this.handleWebClipImport();
+                    }
+                })
+            );
+        }
+        if (this.importWebClipBtn) {
+            this.unsubscribe.push(
+                this.addEventListener(this.importWebClipBtn, 'click', async () => {
+                    eventLogger.log('ModalHost', 'web-clip-import-click');
+                    await this.handleWebClipImport();
+                })
+            );
+        }
+        if (this.cancelWebClipBtn) {
+            this.unsubscribe.push(
+                this.addEventListener(this.cancelWebClipBtn, 'click', () => {
+                    eventLogger.log('ModalHost', 'web-clip-cancel-click');
+                    useModalStore.getState().hideWebClipModal();
                 })
             );
         }
@@ -369,6 +421,27 @@ export class ModalHost extends BaseComponent {
                 })
             );
         }
+        if (this.imageMetadataEditor) {
+            this.unsubscribe.push(
+                this.addEventListener(this.imageMetadataEditor, 'input', () => {
+                    useModalStore.getState().setImagePreviewModalMetadata(this.imageMetadataEditor?.value || '');
+                })
+            );
+        }
+        if (this.imageSystemMetadataSaveBtn) {
+            this.unsubscribe.push(
+                this.addEventListener(this.imageSystemMetadataSaveBtn, 'click', async () => {
+                    await this.handleSaveImageSystemMetadata();
+                })
+            );
+        }
+        if (this.imageSystemMetadataEditor) {
+            this.unsubscribe.push(
+                this.addEventListener(this.imageSystemMetadataEditor, 'input', () => {
+                    useModalStore.getState().setImagePreviewModalSystemMetadata(this.imageSystemMetadataEditor?.value || '');
+                })
+            );
+        }
     }
 
     private subscribeToStores(): void {
@@ -409,6 +482,30 @@ export class ModalHost extends BaseComponent {
                     this.customCssModal.style.display = state.customCssModal.visible ? 'flex' : 'none';
                     if (state.customCssModal.visible && this.customCssTextarea) {
                         this.customCssTextarea.value = state.customCssModal.value;
+                    }
+                }
+
+                if (this.webClipModal) {
+                    this.webClipModal.style.display = state.webClipModal.visible ? 'flex' : 'none';
+                    if (state.webClipModal.visible && this.webClipUrlInput) {
+                        this.webClipUrlInput.value = state.webClipModal.url;
+                        this.webClipUrlInput.focus();
+                    }
+                    if (this.importWebClipBtn) {
+                        this.importWebClipBtn.disabled = state.webClipModal.importing;
+                        this.importWebClipBtn.textContent = state.webClipModal.importing ? '取り込み中...' : '取り込む';
+                    }
+                    if (this.cancelWebClipBtn) {
+                        this.cancelWebClipBtn.disabled = state.webClipModal.importing;
+                    }
+                    if (this.webClipWarnings) {
+                        if (state.webClipModal.warnings.length > 0) {
+                            this.webClipWarnings.style.display = 'block';
+                            this.webClipWarnings.textContent = state.webClipModal.warnings.join('\n');
+                        } else {
+                            this.webClipWarnings.style.display = 'none';
+                            this.webClipWarnings.textContent = '';
+                        }
                     }
                 }
 
@@ -552,14 +649,72 @@ export class ModalHost extends BaseComponent {
         }
     }
 
+    private async handleWebClipImport(): Promise<void> {
+        const modalStore = useModalStore.getState();
+        const url = modalStore.webClipModal.url.trim();
+
+        if (!url) {
+            modalStore.setWebClipWarnings(['URLを入力してください']);
+            return;
+        }
+
+        try {
+            new URL(url);
+        } catch {
+            modalStore.setWebClipWarnings(['有効なURLを入力してください']);
+            return;
+        }
+
+        modalStore.setWebClipImporting(true);
+        modalStore.setWebClipWarnings([]);
+        useUIStore.getState().setStatusMessage('Web Clipを取り込んでいます...', 10000);
+
+        try {
+            const result = await this.api.ClipURL({
+                url,
+                mode: 'article',
+                imageMode: 'download',
+                outputDir: '',
+            });
+
+            const files = await this.api.GetFileList();
+            useDocStore.getState().setFiles(files);
+
+            const content = await this.api.LoadFile(result.markdownPath);
+            useDocStore.getState().setCurrentPath(result.markdownPath);
+            useDocStore.getState().setMarkdownContent(content);
+            useDocStore.getState().clearUnsavedChanges();
+            const { prepared, html } = await renderMarkdownPreview(content, this.api, result.markdownPath);
+            const theme = useUIStore.getState().theme;
+            const customCss = useCustomCssStore.getState().customCss;
+            const withCss = applyCustomCssToHtml(prepared, html, customCss, theme);
+            useDocStore.getState().setPreviewHtml(convertTimestampsToLinks(withCss));
+
+            modalStore.hideWebClipModal();
+            const warningSuffix = result.warnings.length > 0 ? `（警告 ${result.warnings.length} 件）` : '';
+            useUIStore.getState().setStatusMessage(`Web Clipを取り込みました${warningSuffix}`, 3000);
+            eventLogger.log('ModalHost', 'web-clip-import-success', {
+                path: result.markdownPath,
+                warnings: result.warnings.length,
+            });
+        } catch (error) {
+            console.error('Failed to import web clip:', error);
+            const message = error instanceof Error ? error.message : 'Web Clipの取り込みに失敗しました';
+            modalStore.setWebClipWarnings([message]);
+            useUIStore.getState().setStatusMessage('Web Clipの取り込みに失敗しました', 3000);
+            eventLogger.log('ModalHost', 'web-clip-import-error', { error: message });
+        } finally {
+            useModalStore.getState().setWebClipImporting(false);
+        }
+    }
+
     private async refreshPreviewWithCustomCss(customCss: string): Promise<void> {
         const docStore = useDocStore.getState();
         if (!docStore.currentPath || docStore.currentPath.toLowerCase().endsWith('.pdf')) {
             return;
         }
         try {
-            const prepared = await prepareMarkdownForPreview(docStore.markdownContent, this.api);
-            const html = await this.api.PreviewMarkdown(prepared);
+            const { prepared, html } = await renderMarkdownPreview(docStore.markdownContent, this.api, docStore.currentPath);
             const theme = useUIStore.getState().theme;
             const withCss = applyCustomCssToHtml(prepared, html, customCss, theme);
             const finalHtml = convertTimestampsToLinks(withCss);
@@ -788,7 +943,7 @@ export class ModalHost extends BaseComponent {
         }
     }
 
-    private updateImagePreview(state: { imagePath: string; imageName: string; metadata: string }): void {
+    private updateImagePreview(state: { imagePath: string; imageName: string; metadata: string; systemMetadata: string }): void {
         if (this.imagePreviewImg) {
             this.api.GetImageFileURL(state.imagePath).then((url) => {
                 if (this.imagePreviewImg) {
@@ -804,6 +959,9 @@ export class ModalHost extends BaseComponent {
         }
         if (this.imageMetadataEditor) {
             this.imageMetadataEditor.value = state.metadata;
+        }
+        if (this.imageSystemMetadataEditor) {
+            this.imageSystemMetadataEditor.value = state.systemMetadata;
         }
     }
 
@@ -824,6 +982,27 @@ export class ModalHost extends BaseComponent {
             if (this.imageMetadataStatus) {
                 this.imageMetadataStatus.textContent = '保存に失敗しました';
                 this.imageMetadataStatus.className = 'image-metadata-status error';
+            }
+        }
+    }
+
+    private async handleSaveImageSystemMetadata(): Promise<void> {
+        const modalStore = useModalStore.getState();
+        const imagePath = modalStore.imagePreviewModal.imagePath;
+        const systemMetadata = modalStore.imagePreviewModal.systemMetadata;
+
+        try {
+            await this.api.SaveImageSystemMetadata(imagePath, systemMetadata);
+            if (this.imageSystemMetadataStatus) {
+                this.imageSystemMetadataStatus.textContent = '保存しました';
+                this.imageSystemMetadataStatus.className = 'image-metadata-status success';
+            }
+            useUIStore.getState().setStatusMessage('画像KMTDメタデータを保存しました', 2000);
+        } catch (error) {
+            console.error('Failed to save image system metadata:', error);
+            if (this.imageSystemMetadataStatus) {
+                this.imageSystemMetadataStatus.textContent = '保存に失敗しました';
+                this.imageSystemMetadataStatus.className = 'image-metadata-status error';
             }
         }
     }
