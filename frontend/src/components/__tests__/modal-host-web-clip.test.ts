@@ -17,6 +17,7 @@ describe('ModalHost Web Clip', () => {
             sidebarVisible: true,
             imageGalleryVisible: true,
             csvGalleryVisible: true,
+            workspaceMode: false,
             activeTab: 'editor',
             theme: 'light',
             hardWrap: false,

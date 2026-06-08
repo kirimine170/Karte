@@ -8,6 +8,7 @@ describe('UIStore', () => {
             sidebarVisible: true,
             imageGalleryVisible: true,
             csvGalleryVisible: true,
+            workspaceMode: false,
             activeTab: 'editor',
             theme: 'light',
             hardWrap: false,
@@ -80,4 +81,3 @@ describe('UIStore', () => {
         });
     });
 });
-

@@ -95,6 +95,22 @@ export async function GetImageList() {
   return [];
 }
 
+export async function LoadBoard() {
+  return null;
+}
+
+export async function SaveBoard(_path, board) {
+  return board;
+}
+
+export async function CreateBoardForResource() {
+  return null;
+}
+
+export async function GetBoardResourceCandidates() {
+  return [];
+}
+
 export async function GetImageMetadata() {
   return '';
 }
@@ -136,5 +152,21 @@ export async function CaptureScreenInteractive() {
 }
 
 export async function AllowClose() {
+  return true;
+}
+
+export async function GetCsvList() {
+  return [];
+}
+
+export async function GetCsvFile() {
+  return [];
+}
+
+export async function SaveCsvFile() {
+  return true;
+}
+
+export async function SaveEventLogs() {
   return true;
 }

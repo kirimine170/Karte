@@ -26,6 +26,7 @@ describe('Topbar', () => {
             sidebarVisible: true,
             imageGalleryVisible: true,
             csvGalleryVisible: true,
+            workspaceMode: false,
             activeTab: 'editor',
             theme: 'light',
             hardWrap: false,
@@ -48,6 +49,7 @@ describe('Topbar', () => {
                 <button id="sidebarToggle">📁</button>
                 <button id="galleryToggle">🖼️</button>
                 <button id="csvToggle">📊</button>
+                <button id="workspaceToggle">🖥️</button>
                 <select id="theme">
                     <option value="light">Light</option>
                     <option value="dark">Dark</option>
