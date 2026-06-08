@@ -3,7 +3,7 @@ module karte
 go 1.25.0
 
 require (
-	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.1
+	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 	github.com/chai2010/webp v1.4.0
 	github.com/go-git/go-git/v5 v5.19.1
 	github.com/go-shiori/go-readability v0.0.0-20251205110129-5db1dc9836f0
@@ -13,17 +13,17 @@ require (
 	github.com/wailsapp/wails/v2 v2.12.0
 	github.com/yuin/goldmark v1.8.2
 	golang.org/x/image v0.41.0
-	golang.org/x/net v0.53.0
+	golang.org/x/net v0.55.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
 	dario.cat/mergo v1.0.0 // indirect
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
-	github.com/JohannesKaufmann/dom v0.2.0 // indirect
+	github.com/JohannesKaufmann/dom v0.3.1 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.1.6 // indirect
-	github.com/andybalholm/cascadia v1.3.3 // indirect
+	github.com/andybalholm/cascadia v1.3.4 // indirect
 	github.com/araddon/dateparse v0.0.0-20210429162001-6b43995a97de // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
@@ -63,8 +63,8 @@ require (
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
-	golang.org/x/crypto v0.50.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/crypto v0.51.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 )
