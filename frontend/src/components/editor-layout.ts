@@ -377,6 +377,7 @@ export class EditorLayout extends BaseComponent {
                     this.lastPath = state.currentPath;
                     const isPdf = state.currentPath.toLowerCase().endsWith('.pdf');
                     this.setPdfMode(isPdf);
+                    this.setBoardReadOnly(state.currentPath.toLowerCase().endsWith('.board.md'));
                     if (isPdf) {
                         this.updatePdfPreview(state.currentPath);
                     }
@@ -384,7 +385,7 @@ export class EditorLayout extends BaseComponent {
                 if (this.editor && this.editor.value !== state.markdownContent) {
                     this.editor.value = state.markdownContent;
                 }
-                if (state.previewHtml && !state.currentPath.toLowerCase().endsWith('.pdf')) {
+                if (state.previewHtml && !state.currentPath.toLowerCase().endsWith('.pdf') && !state.currentPath.toLowerCase().endsWith('.board.md')) {
                     this.updatePreviewFrame(state.previewHtml);
                     this.updateAudioPlayer(state.markdownContent);
                 }
@@ -406,6 +407,7 @@ export class EditorLayout extends BaseComponent {
         this.lastPath = docStore.currentPath;
         const isPdf = docStore.currentPath.toLowerCase().endsWith('.pdf');
         this.setPdfMode(isPdf);
+        this.setBoardReadOnly(docStore.currentPath.toLowerCase().endsWith('.board.md'));
         if (isPdf && docStore.currentPath) {
             this.updatePdfPreview(docStore.currentPath);
         }
@@ -424,9 +426,15 @@ export class EditorLayout extends BaseComponent {
         if (!this.element) return;
 
         const contentArea = this.element as HTMLElement;
+        const mainContainer = document.getElementById('mainContainer');
         const galleryArea = document.getElementById('galleryArea');
         const imageGallery = document.getElementById('imageGalleryContainer');
         const csvGallery = document.getElementById('csvGalleryContainer');
+
+        if (mainContainer) {
+            this.toggleClass(mainContainer, 'workspace-mode', uiState.workspaceMode);
+        }
+        this.toggleClass(contentArea, 'workspace-mode', uiState.workspaceMode);
 
         // まず、galleryAreaの表示/非表示を決定
         const shouldShowGalleryArea = uiState.imageGalleryVisible || uiState.csvGalleryVisible;
@@ -501,7 +509,8 @@ export class EditorLayout extends BaseComponent {
     }
 
     private async updatePreview(content: string): Promise<void> {
-        if (useDocStore.getState().currentPath.toLowerCase().endsWith('.pdf')) {
+        const currentPath = useDocStore.getState().currentPath.toLowerCase();
+        if (currentPath.endsWith('.pdf') || currentPath.endsWith('.board.md')) {
             return;
         }
         try {
@@ -566,6 +575,14 @@ export class EditorLayout extends BaseComponent {
         const theme = useUIStore.getState().theme;
         const withCss = applyCustomCssToHtml(content, html, customCss, theme);
         return convertTimestampsToLinks(withCss);
+    }
+
+    private setBoardReadOnly(isBoard: boolean): void {
+        if (!this.editor) {
+            return;
+        }
+        this.editor.readOnly = isBoard;
+        this.editor.classList.toggle('board-source-readonly', isBoard);
     }
 
     private updateAudioPlayer(content: string): void {

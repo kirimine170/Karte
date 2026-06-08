@@ -1,7 +1,7 @@
 import { BaseComponent } from './component-base';
-import { useUIStore, useDocStore, useCustomCssStore } from '../stores/index';
+import { useUIStore, useDocStore, useCustomCssStore, useBoardStore } from '../stores/index';
 import GraphModule from '../graph-d3';
-import type { WailsAppAPI } from '../types/wails-api';
+import type { BoardDocument, WailsAppAPI } from '../types/wails-api';
 import type { GraphData } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
@@ -14,6 +14,7 @@ export class GraphView extends BaseComponent {
     private api: WailsAppAPI;
     private graphModule: GraphModule | null = null;
     private toggleTagNodesBtn: HTMLButtonElement | null = null;
+    private openBoardBtn: HTMLButtonElement | null = null;
 
     constructor(api: WailsAppAPI, parent?: HTMLElement) {
         super(parent);
@@ -51,7 +52,7 @@ export class GraphView extends BaseComponent {
             this.graphModule.on('node:click', (data: { id?: string; ID?: string }) => {
                 const nodeId = data.id || data.ID;
                 if (nodeId && nodeId.startsWith('doc:/')) {
-                    this.handleNodeClick(nodeId);
+                    void this.handleNodeClick(nodeId);
                 }
             });
         } catch (error) {
@@ -72,6 +73,27 @@ export class GraphView extends BaseComponent {
                         if (this.toggleTagNodesBtn) {
                             this.toggleTagNodesBtn.textContent = `タグノード表示: ${showTagNodes ? 'ON' : 'OFF'}`;
                         }
+                    }
+                })
+            );
+        }
+
+        this.openBoardBtn = document.getElementById('openBoardBtn') as HTMLButtonElement;
+        if (this.openBoardBtn) {
+            this.unsubscribe.push(
+                this.addEventListener(this.openBoardBtn, 'click', async () => {
+                    const currentPath = useDocStore.getState().currentPath;
+                    if (!currentPath) {
+                        useUIStore.getState().setStatusMessage('先に対象ファイルを選択してください', 2000);
+                        return;
+                    }
+                    try {
+                        const board = await this.api.CreateBoardForResource(currentPath);
+                        this.applyBoardDocument(board);
+                        eventLogger.log('GraphView', 'open-board', { currentPath, boardPath: board.path });
+                    } catch (error) {
+                        console.error('Failed to open board:', error);
+                        useUIStore.getState().setStatusMessage('コルクボードを開けませんでした', 2500);
                     }
                 })
             );
@@ -125,16 +147,16 @@ export class GraphView extends BaseComponent {
         }
     }
 
-    private handleNodeClick(nodeId: string): void {
+    private async handleNodeClick(nodeId: string): Promise<void> {
         // ドキュメントIDからファイルパスに変換
         const filePath = nodeId.replace('doc:/', 'content/');
         eventLogger.log('GraphView', 'node-click', { nodeId, filePath });
         
         // ファイルを読み込む
-        this.loadFile(filePath);
-        
-        // エディタタブに切り替え
-        useUIStore.getState().setActiveTab('editor');
+        await this.loadFile(filePath);
+        if (!filePath.toLowerCase().endsWith('.board.md')) {
+            useUIStore.getState().setActiveTab('editor');
+        }
     }
 
     private async loadFile(path: string): Promise<void> {
@@ -149,6 +171,11 @@ export class GraphView extends BaseComponent {
         }
 
         try {
+            if (path.toLowerCase().endsWith('.board.md')) {
+                const board = await this.api.LoadBoard(path);
+                this.applyBoardDocument(board);
+                return;
+            }
             const content = await this.api.LoadFile(path);
             docStore.setCurrentPath(path);
             if (path.toLowerCase().endsWith('.pdf')) {
@@ -182,6 +209,15 @@ export class GraphView extends BaseComponent {
         const theme = useUIStore.getState().theme;
         const withCss = applyCustomCssToHtml(content, html, customCss, theme);
         return convertTimestampsToLinks(withCss);
+    }
+
+    private applyBoardDocument(board: BoardDocument): void {
+        useBoardStore.getState().setBoard(board);
+        useDocStore.getState().setCurrentPath(board.path);
+        useDocStore.getState().setMarkdownContent(board.rawContent);
+        useDocStore.getState().setPreviewHtml('');
+        useDocStore.getState().clearUnsavedChanges();
+        useUIStore.getState().setActiveTab('board');
     }
 
     async refresh(): Promise<void> {

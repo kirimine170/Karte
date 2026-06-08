@@ -41,7 +41,7 @@ export class MainTabs extends BaseComponent {
                 this.unsubscribe.push(
                     this.addEventListener(button, 'click', () => {
                         eventLogger.log('MainTabs', 'tab-switch', { tab: tabName });
-                        uiStore.setActiveTab(tabName as 'editor' | 'graph');
+                        uiStore.setActiveTab(tabName as 'editor' | 'graph' | 'board');
                     })
                 );
             }
@@ -62,7 +62,7 @@ export class MainTabs extends BaseComponent {
         this.switchTab(uiStore.activeTab);
     }
 
-    private switchTab(activeTab: 'editor' | 'graph'): void {
+    private switchTab(activeTab: 'editor' | 'graph' | 'board'): void {
         // タブボタンの更新
         this.tabButtons.forEach((button) => {
             const tabName = button.dataset.tab;
@@ -89,4 +89,3 @@ export class MainTabs extends BaseComponent {
         this.unsubscribe = [];
     }
 }
-

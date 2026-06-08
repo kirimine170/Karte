@@ -4,13 +4,14 @@ import { Sidebar } from './components/sidebar';
 import { MainTabs } from './components/main-tabs';
 import { EditorLayout } from './components/editor-layout';
 import { GraphView } from './components/graph-view';
+import { BoardView } from './components/board-view';
 import { ModalHost } from './components/modal-host';
 import { OverlayHost } from './components/overlay-host';
 import { ImageGallery } from './components/image-gallery';
 import { CsvGallery } from './components/csv-gallery';
 import { getWailsAppAPI, getWailsRuntimeAPI } from './api/wails-api';
-import { useUIStore, useDocStore, useASRStore, useExportStore, useModalStore, useCustomCssStore } from './stores/index';
-import type { WailsAppAPI, WailsRuntimeAPI } from './types/wails-api';
+import { useUIStore, useDocStore, useASRStore, useExportStore, useModalStore, useCustomCssStore, useBoardStore } from './stores/index';
+import type { BoardDocument, WailsAppAPI, WailsRuntimeAPI } from './types/wails-api';
 import type { Theme } from './types/ui-state';
 import { eventLogger } from './utils/event-logger';
 import { applyCustomCssToHtml } from './utils/custom-css';
@@ -26,6 +27,7 @@ export class App {
         mainTabs: MainTabs | null;
         editorLayout: EditorLayout | null;
         graphView: GraphView | null;
+        boardView: BoardView | null;
         modalHost: ModalHost | null;
         overlayHost: OverlayHost | null;
         imageGallery: ImageGallery | null;
@@ -36,6 +38,7 @@ export class App {
             mainTabs: null,
             editorLayout: null,
             graphView: null,
+            boardView: null,
             modalHost: null,
             overlayHost: null,
             imageGallery: null,
@@ -105,6 +108,9 @@ export class App {
         this.components.graphView = new GraphView(this.api);
         this.components.graphView.init();
 
+        this.components.boardView = new BoardView(this.api);
+        this.components.boardView.init();
+
         this.components.modalHost = new ModalHost(this.api);
         this.components.modalHost.init();
 
@@ -171,6 +177,11 @@ export class App {
         if (!this.api) {
             return;
         }
+        if (path.toLowerCase().endsWith('.board.md')) {
+            const board = await this.api.LoadBoard(path);
+            this.applyBoardDocument(board);
+            return;
+        }
         const content = await this.api.LoadFile(path);
         useDocStore.getState().setCurrentPath(path);
         if (path.toLowerCase().endsWith('.pdf')) {
@@ -182,6 +193,15 @@ export class App {
             useDocStore.getState().setPreviewHtml(this.buildPreviewHtml(prepared, html));
         }
         useDocStore.getState().clearUnsavedChanges();
+    }
+
+    private applyBoardDocument(board: BoardDocument): void {
+        useBoardStore.getState().setBoard(board);
+        useDocStore.getState().setCurrentPath(board.path);
+        useDocStore.getState().setMarkdownContent(board.rawContent);
+        useDocStore.getState().setPreviewHtml('');
+        useDocStore.getState().clearUnsavedChanges();
+        useUIStore.getState().setActiveTab('board');
     }
 
     private setupWailsEvents(): void {
@@ -443,7 +463,7 @@ export class App {
         if (!docStore.currentPath || !this.api) {
             return;
         }
-        if (docStore.currentPath.toLowerCase().endsWith('.pdf')) {
+        if (docStore.currentPath.toLowerCase().endsWith('.pdf') || docStore.currentPath.toLowerCase().endsWith('.board.md')) {
             return;
         }
 

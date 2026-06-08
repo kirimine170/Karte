@@ -29,6 +29,7 @@ import (
 
 	"karte/internal/asr"
 	"karte/internal/audio"
+	boardpkg "karte/internal/board"
 	"karte/internal/clip"
 	"karte/internal/docid"
 	fm "karte/internal/frontmatter"
@@ -217,8 +218,10 @@ func (a *App) appendLog(level, msg string) {
 
 // FileItem represents a markdown file in the content directory
 type FileItem struct {
-	Path  string `json:"path"`
-	Title string `json:"title"`
+	Path       string    `json:"path"`
+	Title      string    `json:"title"`
+	ModTime    time.Time `json:"modTime"`
+	SearchText string    `json:"searchText,omitempty"`
 }
 
 // ImageItem represents an image file in the gallery
@@ -237,6 +240,109 @@ type CSVItem struct {
 	Name    string    `json:"name"`
 	Size    int64     `json:"size"`
 	ModTime time.Time `json:"modTime"`
+}
+
+func (a *App) LoadBoard(path string) (*boardpkg.Document, error) {
+	absPath, ok := a.resolveContentPath(path)
+	if !ok {
+		return nil, fmt.Errorf("invalid path: %s", path)
+	}
+
+	content, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read board file: %w", err)
+	}
+
+	doc, err := boardpkg.Parse(path, string(content))
+	if err != nil {
+		return nil, err
+	}
+
+	if doc.DocID == "" {
+		contentWithDocID, docID, ensureErr := a.ensureDocID(string(content))
+		if ensureErr == nil && docID != "" {
+			doc.DocID = docID
+			doc.RawContent = contentWithDocID
+			_ = os.WriteFile(absPath, []byte(contentWithDocID), 0o644)
+		}
+	}
+
+	return doc, nil
+}
+
+func (a *App) SaveBoard(path string, doc boardpkg.Document) (*boardpkg.Document, error) {
+	doc.Path = path
+	return a.saveBoardDocument(&doc)
+}
+
+func (a *App) CreateBoardForResource(path string) (*boardpkg.Document, error) {
+	resourcePath := filepath.ToSlash(strings.TrimSpace(path))
+	if resourcePath == "" {
+		return nil, fmt.Errorf("resource path is required")
+	}
+
+	boardPath := boardPathForResource(resourcePath)
+	if strings.HasSuffix(strings.ToLower(resourcePath), ".board.md") {
+		boardPath = resourcePath
+	}
+
+	if absPath, ok := a.resolveContentPath(boardPath); ok {
+		if _, err := os.Stat(absPath); err == nil {
+			return a.LoadBoard(boardPath)
+		}
+	}
+
+	now := time.Now().Format("2006-01-02")
+	doc := &boardpkg.Document{
+		Path:    boardPath,
+		Title:   strings.TrimSuffix(filepath.Base(boardPath), ".board.md"),
+		Type:    boardpkg.BoardType,
+		Version: 1,
+		Created: now,
+		Updated: now,
+		Tags:    []string{"corkboard"},
+		Cards:   []boardpkg.Card{},
+		Edges:   []boardpkg.Edge{},
+		Layout: boardpkg.Layout{
+			Cards: map[string]boardpkg.CardLayout{},
+			Viewport: boardpkg.Viewport{
+				X:    0,
+				Y:    0,
+				Zoom: 1,
+			},
+		},
+	}
+
+	if !strings.HasSuffix(strings.ToLower(resourcePath), ".board.md") {
+		doc.Cards = append(doc.Cards, boardpkg.Card{
+			ID:        "card:resource-001",
+			Type:      "resource",
+			Title:     resourceCardTitle(resourcePath),
+			Source:    resourcePath,
+			CreatedBy: "user",
+			Body:      fmt.Sprintf("Linked resource: %s", resourcePath),
+		})
+		doc.Layout.Cards["card:resource-001"] = boardpkg.CardLayout{
+			X:      120,
+			Y:      80,
+			Width:  320,
+			Height: 180,
+		}
+	}
+
+	return a.saveBoardDocument(doc)
+}
+
+func (a *App) GetBoardResourceCandidates(boardPath string) []FileItem {
+	files := a.GetFileList()
+	result := make([]FileItem, 0, len(files))
+	for _, file := range files {
+		if file.Path == boardPath {
+			continue
+		}
+		result = append(result, file)
+	}
+	return result
 }
 
 // CaptureScreenInteractive captures a screenshot using the platform-specific
@@ -301,6 +407,22 @@ type GraphData struct {
 // GraphMeta contains metadata about the graph
 type GraphMeta struct {
 	Directed bool `json:"directed"`
+}
+
+func graphNodeKindForPath(path string) string {
+	if strings.HasSuffix(strings.ToLower(filepath.ToSlash(path)), ".board.md") {
+		return "board"
+	}
+	return "note"
+}
+
+func graphNodeDefaultTitleForPath(path string) string {
+	base := filepath.Base(path)
+	lower := strings.ToLower(base)
+	if strings.HasSuffix(lower, ".board.md") {
+		return strings.TrimSuffix(base, ".board.md")
+	}
+	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 
 // FileSystem abstracts file operations for easier testing.
@@ -370,8 +492,35 @@ func (a *App) startup(ctx context.Context) {
 
 	a.root = appPlacedDir
 
-	// Initialize karte_data directory next to the application
-	a.dataDir = filepath.Join(a.root, "karte_data")
+	// Allow explicitly overriding the runtime data directory for local development.
+	if override := strings.TrimSpace(os.Getenv("KARTE_DATA_DIR")); override != "" {
+		if absOverride, err := filepath.Abs(override); err == nil {
+			a.root = filepath.Dir(absOverride)
+			a.dataDir = absOverride
+			a.logInfo(fmt.Sprintf("Using KARTE_DATA_DIR override: %s", a.dataDir))
+		} else {
+			a.logError(fmt.Sprintf("Invalid KARTE_DATA_DIR %q: %v", override, err))
+			return
+		}
+	} else {
+		// When running `wails dev`, the generated app lives under build/bin.
+		// In that case prefer the repo-local karte_data so development uses real project data.
+		if cwd, err := os.Getwd(); err == nil {
+			devDataDir := filepath.Join(cwd, "karte_data")
+			if strings.HasSuffix(filepath.ToSlash(appPlacedDir), "/build/bin") {
+				if info, statErr := os.Stat(devDataDir); statErr == nil && info.IsDir() {
+					a.root = cwd
+					a.dataDir = devDataDir
+					a.logInfo(fmt.Sprintf("Using development karte_data: %s", a.dataDir))
+				}
+			}
+		}
+	}
+
+	// Initialize karte_data directory next to the application unless overridden above.
+	if a.dataDir == "" {
+		a.dataDir = filepath.Join(a.root, "karte_data")
+	}
 	if err := a.initializeDataDirectory(); err != nil {
 		runtime.LogError(ctx, fmt.Sprintf("Failed to initialize data directory: %v", err))
 		return
@@ -654,11 +803,14 @@ func (a *App) GetFileList() []FileItem {
 				return nil
 			}
 			title := info.Name()
+			searchText := title
 
 			// Try to extract title from frontmatter for markdown files
 			if isMarkdown {
 				if b, err := os.ReadFile(p); err == nil {
-					title = fm.ExtractTitle(string(b), title)
+					content := string(b)
+					title = fm.ExtractTitle(content, title)
+					searchText = content
 				} else {
 					a.logError(fmt.Sprintf("Failed to read file %s: %v", p, err))
 					// Continue with filename as title if read fails
@@ -668,8 +820,10 @@ func (a *App) GetFileList() []FileItem {
 				title = strings.TrimSuffix(title, filepath.Ext(title))
 			}
 			fileItem := FileItem{
-				Path:  filepath.ToSlash(rel),
-				Title: title,
+				Path:       filepath.ToSlash(rel),
+				Title:      title,
+				ModTime:    info.ModTime(),
+				SearchText: searchText,
 			}
 			files = append(files, fileItem)
 			a.logInfo(fmt.Sprintf("Found file: %s -> %s", fileItem.Path, fileItem.Title))
@@ -1644,6 +1798,91 @@ func isConvertibleWebClipImageExt(ext string) bool {
 	}
 }
 
+func (a *App) saveBoardDocument(doc *boardpkg.Document) (*boardpkg.Document, error) {
+	if doc == nil {
+		return nil, fmt.Errorf("board document is nil")
+	}
+
+	if doc.Path == "" {
+		return nil, fmt.Errorf("board path is required")
+	}
+
+	absPath, ok := a.resolveContentPath(doc.Path)
+	if !ok {
+		return nil, fmt.Errorf("invalid board path: %s", doc.Path)
+	}
+
+	now := time.Now().Format("2006-01-02")
+	if doc.Type == "" {
+		doc.Type = boardpkg.BoardType
+	}
+	if doc.Title == "" {
+		doc.Title = strings.TrimSuffix(filepath.Base(doc.Path), ".board.md")
+	}
+	if doc.Version == 0 {
+		doc.Version = 1
+	}
+	if doc.Created == "" {
+		doc.Created = now
+	}
+	doc.Updated = now
+	if doc.DocID == "" {
+		generated, err := docid.GenerateDocID(filepath.Join(a.dataDir, ".mdsys", "doc_seq.json"))
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate board doc_id: %w", err)
+		}
+		doc.DocID = "board:" + generated[:12]
+	}
+	if doc.Layout.Cards == nil {
+		doc.Layout.Cards = map[string]boardpkg.CardLayout{}
+	}
+	if doc.Layout.Viewport.Zoom == 0 {
+		doc.Layout.Viewport.Zoom = 1
+	}
+	if doc.Tags == nil {
+		doc.Tags = []string{}
+	}
+
+	content, err := boardpkg.Serialize(doc)
+	if err != nil {
+		return nil, err
+	}
+
+	var oldHash string
+	if existing, err := os.ReadFile(absPath); err == nil {
+		oldHash = gitvcs.CalculateHash(string(existing))
+	}
+
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create board directory: %w", err)
+	}
+	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
+		return nil, fmt.Errorf("failed to save board file: %w", err)
+	}
+
+	newHash := gitvcs.CalculateHash(content)
+	if a.vcs != nil && oldHash != newHash {
+		relPath, err := filepath.Rel(a.dataDir, absPath)
+		if err == nil {
+			commitMessage := fmt.Sprintf("Update board: %s", doc.Path)
+			if err := a.vcs.CommitFile(relPath, commitMessage); err != nil {
+				a.logError(fmt.Sprintf("Failed to commit board file to git: %v", err))
+			}
+		}
+	}
+
+	if err := a.BuildSite(); err != nil {
+		runtime.LogError(a.ctx, fmt.Sprintf("Failed to build site after board save: %v", err))
+	}
+	runtime.EventsEmit(a.ctx, "file-changed", doc.Path)
+
+	saved, err := boardpkg.Parse(doc.Path, content)
+	if err != nil {
+		return nil, err
+	}
+	return saved, nil
+}
+
 // LoadFile loads the content of a markdown file
 // For PDF files, returns an empty string since PDFs are not editable
 func (a *App) LoadFile(path string) (string, error) {
@@ -2574,6 +2813,28 @@ func (a *App) resolveContentPath(rel string) (string, bool) {
 		return "", false
 	}
 	return canonical, true
+}
+
+func boardPathForResource(path string) string {
+	normalized := filepath.ToSlash(strings.TrimSpace(path))
+	if strings.HasSuffix(strings.ToLower(normalized), ".board.md") {
+		return normalized
+	}
+	ext := filepath.Ext(normalized)
+	if ext == "" {
+		return normalized + ".board.md"
+	}
+	base := strings.TrimSuffix(normalized, ext)
+	return base + ".board.md"
+}
+
+func resourceCardTitle(path string) string {
+	base := filepath.Base(path)
+	ext := filepath.Ext(base)
+	if ext == "" {
+		return base
+	}
+	return strings.TrimSuffix(base, ext)
 }
 
 // build implements the Build function from runner package
@@ -3683,8 +3944,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 	// 各ファイルを処理
 	for _, filePath := range files {
 		nodeID := "doc:/" + strings.TrimPrefix(filePath, "content/")
-		title := filepath.Base(filePath)
-		title = strings.TrimSuffix(title, ".md")
+		title := graphNodeDefaultTitleForPath(filePath)
 
 		var fileHash string
 		var fileContent string
@@ -3749,7 +4009,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 			ID:     nodeID,
 			DocID:  docID,
 			Label:  title,
-			Kind:   "note",
+			Kind:   graphNodeKindForPath(filePath),
 			Exists: true,
 			DegIn:  0,
 			DegOut: 0,
@@ -3867,8 +4127,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 		if _, exists := nodes[edge.Target]; !exists {
 			if strings.HasPrefix(edge.Target, "doc:/") {
 				path := strings.TrimPrefix(edge.Target, "doc:/")
-				title := filepath.Base(path)
-				title = strings.TrimSuffix(title, ".md")
+				title := graphNodeDefaultTitleForPath(path)
 
 				// ファイルが存在する場合はフロントマターからタイトルとタグを取得
 				var tags []string
@@ -3880,7 +4139,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 					nodes[edge.Target] = &GraphNode{
 						ID:     edge.Target,
 						Label:  title,
-						Kind:   "note",
+						Kind:   graphNodeKindForPath(filepath.Join("content", path)),
 						Exists: true, // ファイルが存在する
 						DegIn:  0,
 						DegOut: 0,
@@ -3890,7 +4149,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 					nodes[edge.Target] = &GraphNode{
 						ID:     edge.Target,
 						Label:  title,
-						Kind:   "note",
+						Kind:   graphNodeKindForPath(filepath.Join("content", path)),
 						Exists: false,
 						DegIn:  0,
 						DegOut: 0,
@@ -3930,8 +4189,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 		// ソースノードが存在しない場合（念のため）
 		if _, exists := nodes[edge.Source]; !exists && strings.HasPrefix(edge.Source, "doc:/") {
 			path := strings.TrimPrefix(edge.Source, "doc:/")
-			title := filepath.Base(path)
-			title = strings.TrimSuffix(title, ".md")
+			title := graphNodeDefaultTitleForPath(path)
 
 			// ファイルが存在する場合はフロントマターからタイトルとタグを取得
 			var tags []string
@@ -3943,7 +4201,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 				nodes[edge.Source] = &GraphNode{
 					ID:     edge.Source,
 					Label:  title,
-					Kind:   "note",
+					Kind:   graphNodeKindForPath(filepath.Join("content", path)),
 					Exists: true, // ファイルが存在する
 					DegIn:  0,
 					DegOut: 0,
@@ -3953,7 +4211,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 				nodes[edge.Source] = &GraphNode{
 					ID:     edge.Source,
 					Label:  title,
-					Kind:   "note",
+					Kind:   graphNodeKindForPath(filepath.Join("content", path)),
 					Exists: false,
 					DegIn:  0,
 					DegOut: 0,

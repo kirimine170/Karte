@@ -14,6 +14,7 @@ class GraphD3Module {
             edgeWidth: { min: 1, max: 6 },
             palette: {
                 note: '#3498db',
+                board: '#b7791f',
                 'asset:image': '#e74c3c',
                 missing: '#95a5a6',
                 wikilink: '#2c3e50',
@@ -28,10 +29,13 @@ class GraphD3Module {
         this.eventHandlers = {};
 
         this.svg = null;
+        this.scene = null;
         this.simulation = null;
         this.nodeElements = null;
         this.edgeElements = null;
         this.labelElements = null;
+        this.zoomBehavior = null;
+        this.zoomTransform = d3.zoomIdentity;
 
         this.tooltip = null;
         this.resizeObserver = null;
@@ -60,6 +64,8 @@ class GraphD3Module {
             .attr('width', '100%')
             .attr('height', '100%')
             .style('display', 'block');
+
+        this.scene = this.svg.append('g').attr('class', 'graph-scene');
 
         console.log('SVG created successfully:', !!this.svg);
 
@@ -259,6 +265,7 @@ class GraphD3Module {
 
         // 既存の要素を削除
         this.svg.selectAll('*').remove();
+        this.scene = this.svg.append('g').attr('class', 'graph-scene');
 
         if (!this.data.nodes || !this.data.nodes.length) {
             console.warn('No nodes to render');
@@ -338,7 +345,7 @@ class GraphD3Module {
             return true;
         });
 
-        this.edgeElements = this.svg.append('g')
+        this.edgeElements = this.scene.append('g')
             .selectAll('line')
             .data(visibleEdges)
             .enter()
@@ -365,7 +372,7 @@ class GraphD3Module {
             return true;
         });
 
-        this.nodeElements = this.svg.append('g')
+        this.nodeElements = this.scene.append('g')
             .selectAll('circle')
             .data(visibleNodes)
             .enter()
@@ -377,7 +384,7 @@ class GraphD3Module {
             .call(this.drag());
 
         // ラベルを描画
-        this.labelElements = this.svg.append('g')
+        this.labelElements = this.scene.append('g')
             .selectAll('text')
             .data(visibleNodes)
             .enter()
@@ -404,6 +411,8 @@ class GraphD3Module {
         marker.append('path')
             .attr('d', 'M0,-5L10,0L0,5')
             .attr('fill', '#999');
+
+        this.setupZoomBehavior();
 
         // イベントリスナー
         this.nodeElements
@@ -513,15 +522,9 @@ class GraphD3Module {
         const width = this.container.clientWidth;
         const height = this.container.clientHeight;
 
-        const offsetX = width / 2 - centerX;
-        const offsetY = height / 2 - centerY;
-
-        this.data.nodes.forEach(d => {
-            d.x += offsetX;
-            d.y += offsetY;
-        });
-
-        this.simulation.restart();
+        const scale = this.zoomTransform?.k || 1;
+        this.zoomTransform = d3.zoomIdentity.translate(width / 2 - centerX * scale, height / 2 - centerY * scale).scale(scale);
+        this.applyZoomTransform();
     }
 
     applyFocus() {
@@ -548,7 +551,7 @@ class GraphD3Module {
         const id = data.id || data.ID;
 
         // ノードの場合
-        if (kind && (kind === 'note' || kind === 'asset:image' || kind === 'tag')) {
+        if (kind && (kind === 'note' || kind === 'board' || kind === 'asset:image' || kind === 'tag')) {
             const tags = data.tags || data.Tags || [];
             content = `
                 <div style="font-weight: bold; margin-bottom: 4px;">${label || 'Unknown'}</div>
@@ -659,6 +662,45 @@ class GraphD3Module {
             this.resizeObserver.disconnect();
             this.resizeObserver = null;
         }
+    }
+
+    setupZoomBehavior() {
+        if (!this.svg || !this.scene) {
+            return;
+        }
+
+        this.zoomBehavior = d3.zoom()
+            .scaleExtent([0.25, 4])
+            .filter((event) => {
+                const target = event.target;
+                if (event.type === 'dblclick') {
+                    return false;
+                }
+                if (target && target.closest && target.closest('circle')) {
+                    return false;
+                }
+                return true;
+            })
+            .on('zoom', (event) => {
+                this.zoomTransform = event.transform;
+                this.applyZoomTransform();
+            });
+
+        this.svg.call(this.zoomBehavior);
+        this.svg.on('wheel.zoom', null);
+        this.svg.call(this.zoomBehavior).on('wheel.zoom', (event) => {
+            event.preventDefault();
+            this.zoomBehavior.wheelDelta(() => -event.deltaY * (event.ctrlKey ? 0.004 : 0.0025));
+            this.zoomBehavior.scaleBy(this.svg, Math.pow(2, -event.deltaY * (event.ctrlKey ? 0.004 : 0.0025)), d3.pointer(event));
+        });
+        this.applyZoomTransform();
+    }
+
+    applyZoomTransform() {
+        if (!this.scene) {
+            return;
+        }
+        this.scene.attr('transform', this.zoomTransform.toString());
     }
 }
 

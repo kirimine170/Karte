@@ -3,6 +3,8 @@
 export interface FileItem {
     path: string;
     title?: string;
+    modTime?: string;
+    searchText?: string;
     [key: string]: unknown;
 }
 
@@ -54,6 +56,62 @@ export interface CsvInfo {
     modTime: string;
 }
 
+export interface BoardCardLayout {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+export interface BoardViewport {
+    x: number;
+    y: number;
+    zoom: number;
+}
+
+export interface BoardCard {
+    id: string;
+    type: string;
+    title: string;
+    source?: string;
+    tags?: string[];
+    createdBy?: string;
+    updatedBy?: string;
+    reviewed?: boolean;
+    reviewedBy?: string;
+    model?: string;
+    body: string;
+    meta?: Record<string, unknown>;
+}
+
+export interface BoardEdgeRecord {
+    id: string;
+    from: string;
+    to: string;
+    relation: string;
+    label?: string;
+    description?: string;
+}
+
+export interface BoardDocument {
+    path: string;
+    title: string;
+    docId: string;
+    type: string;
+    version: number;
+    created: string;
+    updated: string;
+    tags: string[];
+    cards: BoardCard[];
+    edges: BoardEdgeRecord[];
+    layout: {
+        cards: Record<string, BoardCardLayout>;
+        viewport: BoardViewport;
+    };
+    notes: string;
+    rawContent: string;
+}
+
 export type ConflictResolutionStrategy = 'local' | 'remote' | 'merge';
 
 export type ClipImageMode = 'download' | 'link' | 'none';
@@ -77,6 +135,10 @@ export interface ClipResult {
 export interface WailsAppAPI {
     GetFileList(): Promise<FileItem[]>;
     LoadFile(path: string): Promise<string>;
+    LoadBoard(path: string): Promise<BoardDocument>;
+    SaveBoard(path: string, board: BoardDocument): Promise<BoardDocument>;
+    CreateBoardForResource(path: string): Promise<BoardDocument>;
+    GetBoardResourceCandidates(boardPath: string): Promise<FileItem[]>;
     SaveFile(path: string, content: string): Promise<boolean>;
     PreviewMarkdown(content: string): Promise<string>;
     PreviewMarkdownForPath?(path: string, content: string): Promise<string>;

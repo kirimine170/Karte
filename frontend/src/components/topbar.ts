@@ -11,6 +11,7 @@ export class Topbar extends BaseComponent {
     private sidebarToggleBtn: HTMLButtonElement | null = null;
     private galleryToggleBtn: HTMLButtonElement | null = null;
     private csvToggleBtn: HTMLButtonElement | null = null;
+    private workspaceToggleBtn: HTMLButtonElement | null = null;
     private themeSelect: HTMLSelectElement | null = null;
     private hardwrapCheckbox: HTMLInputElement | null = null;
     private saveBtn: HTMLButtonElement | null = null;
@@ -39,6 +40,7 @@ export class Topbar extends BaseComponent {
         this.sidebarToggleBtn = document.getElementById('sidebarToggle') as HTMLButtonElement;
         this.galleryToggleBtn = document.getElementById('galleryToggle') as HTMLButtonElement;
         this.csvToggleBtn = document.getElementById('csvToggle') as HTMLButtonElement;
+        this.workspaceToggleBtn = document.getElementById('workspaceToggle') as HTMLButtonElement;
         this.themeSelect = document.getElementById('theme') as HTMLSelectElement;
         this.hardwrapCheckbox = document.getElementById('hardwrap') as HTMLInputElement;
         this.saveBtn = document.getElementById('saveBtn') as HTMLButtonElement;
@@ -52,7 +54,8 @@ export class Topbar extends BaseComponent {
         console.log('Topbar buttons:', {
             sidebarToggle: !!this.sidebarToggleBtn,
             galleryToggle: !!this.galleryToggleBtn,
-            csvToggle: !!this.csvToggleBtn
+            csvToggle: !!this.csvToggleBtn,
+            workspaceToggle: !!this.workspaceToggleBtn
         });
 
         // イベントリスナーの設定
@@ -68,6 +71,7 @@ export class Topbar extends BaseComponent {
     private setupEventListeners(): void {
         const docStore = useDocStore.getState();
         const modalStore = useModalStore.getState();
+        const uiStore = useUIStore.getState();
 
         // サイドバートグル
         if (this.sidebarToggleBtn) {
@@ -124,6 +128,27 @@ export class Topbar extends BaseComponent {
             );
         } else {
             console.error('Topbar: csvToggleBtn not found');
+        }
+
+        if (this.workspaceToggleBtn) {
+            this.unsubscribe.push(
+                this.addEventListener(this.workspaceToggleBtn, 'click', () => {
+                    const current = useUIStore.getState();
+                    const canUseWorkspace = current.activeTab === 'graph' || current.activeTab === 'board';
+                    if (!canUseWorkspace) {
+                        current.setStatusMessage('グラフまたはコルクボード表示中に切り替えてください', 2000);
+                        return;
+                    }
+                    const next = !current.workspaceMode;
+                    eventLogger.log('Topbar', 'workspace-toggle', {
+                        activeTab: current.activeTab,
+                        workspaceMode: next
+                    });
+                    current.setWorkspaceMode(next);
+                })
+            );
+        } else {
+            console.error('Topbar: workspaceToggleBtn not found');
         }
 
         // テーマ変更
@@ -274,6 +299,15 @@ export class Topbar extends BaseComponent {
                         this.csvToggleBtn.style.backgroundColor = '';
                     }
                 }
+
+                if (this.workspaceToggleBtn) {
+                    const enabled = state.activeTab === 'graph' || state.activeTab === 'board';
+                    this.workspaceToggleBtn.disabled = !enabled;
+                    this.workspaceToggleBtn.style.opacity = enabled ? '1' : '0.45';
+                    this.workspaceToggleBtn.style.backgroundColor = enabled && state.workspaceMode
+                        ? 'var(--color-lavender-100)'
+                        : '';
+                }
             })
         );
 
@@ -325,6 +359,14 @@ export class Topbar extends BaseComponent {
                 this.csvToggleBtn.style.backgroundColor = 'var(--color-lavender-100)';
             }
         }
+        if (this.workspaceToggleBtn) {
+            const enabled = uiStore.activeTab === 'graph' || uiStore.activeTab === 'board';
+            this.workspaceToggleBtn.disabled = !enabled;
+            this.workspaceToggleBtn.style.opacity = enabled ? '1' : '0.45';
+            if (enabled && uiStore.workspaceMode) {
+                this.workspaceToggleBtn.style.backgroundColor = 'var(--color-lavender-100)';
+            }
+        }
     }
 
     private updateCustomCssStatus(css: string): void {
@@ -347,6 +389,12 @@ export class Topbar extends BaseComponent {
             eventLogger.log('Topbar', 'save-error', { error: 'pdf-readonly' });
             useUIStore.getState().setStatusMessage('PDF閲覧中は保存できません', 2000);
             return false;
+        }
+
+        if (docStore.currentPath.toLowerCase().endsWith('.board.md')) {
+            eventLogger.log('Topbar', 'save-skip', { path: docStore.currentPath, reason: 'board-autosave' });
+            useUIStore.getState().setStatusMessage('コルクボードは GUI 変更時に自動保存されます', 2000);
+            return true;
         }
 
         try {
