@@ -1,7 +1,7 @@
 import { BaseComponent } from './component-base';
-import { useUIStore, useDocStore, useCustomCssStore } from '../stores/index';
+import { useUIStore, useDocStore, useCustomCssStore, useBoardStore } from '../stores/index';
 import { filterFilesByQuery, buildFileDisplayLabel, type FileItem } from '../logic';
-import type { WailsAppAPI } from '../types/wails-api';
+import type { BoardDocument, WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
 import { renderMarkdownPreview } from '../utils/preview-renderer';
@@ -160,6 +160,12 @@ export class Sidebar extends BaseComponent {
 
         try {
             eventLogger.log('Sidebar', 'file-load-start', { path });
+            if (path.toLowerCase().endsWith('.board.md')) {
+                const board = await this.api.LoadBoard(path);
+                this.applyBoardDocument(board);
+                eventLogger.log('Sidebar', 'board-load-success', { path });
+                return;
+            }
             // ファイルを読み込む
             const content = await this.api.LoadFile(path);
             docStore.setCurrentPath(path);
@@ -203,6 +209,15 @@ export class Sidebar extends BaseComponent {
         const theme = useUIStore.getState().theme;
         const withCss = applyCustomCssToHtml(content, html, customCss, theme);
         return convertTimestampsToLinks(withCss);
+    }
+
+    private applyBoardDocument(board: BoardDocument): void {
+        useBoardStore.getState().setBoard(board);
+        useDocStore.getState().setCurrentPath(board.path);
+        useDocStore.getState().setMarkdownContent(board.rawContent);
+        useDocStore.getState().setPreviewHtml('');
+        useDocStore.getState().clearUnsavedChanges();
+        useUIStore.getState().setActiveTab('board');
     }
 
     destroy(): void {

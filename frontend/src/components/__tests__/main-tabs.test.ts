@@ -11,6 +11,7 @@ describe('MainTabs', () => {
             sidebarVisible: true,
             imageGalleryVisible: true,
             csvGalleryVisible: true,
+            workspaceMode: false,
             activeTab: 'editor',
             theme: 'light',
             hardWrap: false,
@@ -19,13 +20,19 @@ describe('MainTabs', () => {
         });
 
         document.body.innerHTML = `
-            <div class="editor-pane-wrapper">
-                <div class="tabs">
-                    <button class="tab active" data-tab="editor">エディター</button>
-                    <button class="tab" data-tab="graph">グラフ</button>
+            <div class="main-container" id="mainContainer">
+                <div class="content-area" id="contentArea">
+                    <div class="editor-pane-wrapper">
+                        <div class="tabs">
+                            <button class="tab active" data-tab="editor">エディター</button>
+                            <button class="tab" data-tab="graph">グラフ</button>
+                            <button class="tab" data-tab="board">コルクボード</button>
+                        </div>
+                        <div class="tab-content active" id="editor-tab"></div>
+                        <div class="tab-content" id="graph-tab"></div>
+                        <div class="tab-content" id="board-tab"></div>
+                    </div>
                 </div>
-                <div class="tab-content active" id="editor-tab"></div>
-                <div class="tab-content" id="graph-tab"></div>
             </div>
         `;
     });
@@ -53,4 +60,3 @@ describe('MainTabs', () => {
         ]);
     });
 });
-

@@ -13,6 +13,7 @@
       <button class="btn" id="sidebarToggle" title="ファイルリストを表示/非表示">📁</button>
       <button class="btn" id="galleryToggle" title="画像ギャラリーを表示/非表示">🖼️</button>
       <button class="btn" id="csvToggle" title="CSV管理を表示/非表示">📊</button>
+      <button class="btn" id="workspaceToggle" title="グラフ/コルクボードを広く表示">🖥️</button>
       <div class="toolbar-divider" aria-hidden="true"></div>
       <div class="toolbar">
         <label class="hint" for="theme">Theme</label>
@@ -45,6 +46,7 @@
           <div class="tabs">
             <button class="tab active" data-tab="editor">エディター</button>
             <button class="tab" data-tab="graph">グラフ</button>
+            <button class="tab" data-tab="board">コルクボード</button>
           </div>
           <div class="tab-content active" id="editor-tab">
             <div class="editor-pane">
@@ -72,11 +74,13 @@
             <div class="graph-container graph-panel">
               <div class="graph-toolbar">
                 <button id="toggleTagNodesBtn" class="btn graph-toolbar-button">タグノード表示: ON</button>
+                <button id="openBoardBtn" class="btn graph-toolbar-button">コルクボードを開く</button>
                 <span class="graph-toolbar-hint">同じタグを持つドキュメントをタグノードで接続します</span>
               </div>
               <div id="graph-container" class="graph-canvas"></div>
             </div>
           </div>
+          <div class="tab-content" id="board-tab"></div>
         </div>
         <div class="preview-pane">
           <div class="preview-pane-header">

@@ -76,13 +76,64 @@ export function createBrowserApi() {
     return {
         async GetFileList() {
             return [
-                { path: 'content/README.md', title: 'README' },
-                { path: 'content/Test.md', title: 'Test Document' }
+                { path: 'content/README.md', title: 'README', modTime: '2026-06-06T08:00:00.000Z' },
+                { path: 'content/Test.md', title: 'Test Document', modTime: '2026-06-07T08:00:00.000Z' },
+                { path: 'content/Test.board.md', title: 'Test Board', modTime: '2026-06-05T08:00:00.000Z' }
             ];
         },
 
         async LoadFile(path) {
             return `# ${path.split('/').pop()}\n\nThis is a mock file content for testing in browser.\n\n## Features\n- Mock content\n- Browser testing\n- No backend required`;
+        },
+
+        async LoadBoard(path) {
+            return {
+                path,
+                title: 'Mock Board',
+                docId: 'board:mock',
+                type: 'karte-board',
+                version: 1,
+                created: '2026-06-06',
+                updated: '2026-06-06',
+                tags: ['mock'],
+                cards: [
+                    {
+                        id: 'card:resource-001',
+                        type: 'resource',
+                        title: 'README',
+                        source: 'content/README.md',
+                        tags: [],
+                        createdBy: 'user',
+                        body: 'Mock board card',
+                        meta: {},
+                    },
+                ],
+                edges: [],
+                layout: {
+                    cards: {
+                        'card:resource-001': { x: 120, y: 80, width: 300, height: 180 },
+                    },
+                    viewport: { x: 0, y: 0, zoom: 1 },
+                },
+                notes: '',
+                rawContent: '# Mock board source',
+            };
+        },
+
+        async SaveBoard(_path, board) {
+            return {
+                ...board,
+                updated: '2026-06-06',
+                rawContent: board.rawContent || '# Mock board source',
+            };
+        },
+
+        async CreateBoardForResource(path) {
+            return this.LoadBoard(path.replace(/\.(md|pdf)$/i, '.board.md'));
+        },
+
+        async GetBoardResourceCandidates() {
+            return this.GetFileList();
         },
 
         async SaveFile(path, content) {
@@ -161,6 +212,17 @@ export function createBrowserApi() {
                 return [];
             }
             return [parsed.headers, ...parsed.rows];
+        },
+
+        async GetCsvList() {
+            return [
+                { path: 'data/csv/mock-1.csv', name: 'mock-1.csv', size: 512, modTime: '2026-06-07T10:00:00.000Z' },
+                { path: 'data/csv/mock-2.csv', name: 'mock-2.csv', size: 768, modTime: '2026-06-06T10:00:00.000Z' }
+            ];
+        },
+
+        async SaveCsvFile() {
+            return true;
         },
 
         async CreateNewFile(filename) {
@@ -256,8 +318,8 @@ export function createBrowserApi() {
         async GetImageList() {
             console.log('Mock GetImageList called');
             return [
-                { path: 'data/image/mock-1.png', name: 'mock-1.png', size: 1024, modTime: new Date().toISOString() },
-                { path: 'data/image/mock-2.jpg', name: 'mock-2.jpg', size: 2048, modTime: new Date().toISOString() }
+                { path: 'data/image/mock-1.png', name: 'mock-1.png', size: 1024, modTime: '2026-06-07T09:00:00.000Z' },
+                { path: 'data/image/mock-2.jpg', name: 'mock-2.jpg', size: 2048, modTime: '2026-06-05T09:00:00.000Z' }
             ];
         },
 
@@ -306,6 +368,10 @@ export function createBrowserApi() {
 
         async UpdateLinkToLatest(sourceDocID, targetDocID) {
             console.log('Mock UpdateLinkToLatest called:', sourceDocID, targetDocID);
+            return true;
+        },
+
+        async SaveEventLogs() {
             return true;
         }
     };

@@ -2,13 +2,14 @@
 
 export type Theme = 'light' | 'dark' | 'hc';
 
-export type ActiveTab = 'editor' | 'graph';
+export type ActiveTab = 'editor' | 'graph' | 'board';
 
 export interface UIState {
     // レイアウト
     sidebarVisible: boolean;
     imageGalleryVisible: boolean;
     csvGalleryVisible: boolean;
+    workspaceMode: boolean;
     
     // タブ
     activeTab: ActiveTab;
@@ -46,6 +47,61 @@ export interface DocumentState {
     
     // プレビューHTML
     previewHtml: string;
+}
+
+export interface BoardCardLayout {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+export interface BoardViewport {
+    x: number;
+    y: number;
+    zoom: number;
+}
+
+export interface BoardCard {
+    id: string;
+    type: string;
+    title: string;
+    source?: string;
+    tags?: string[];
+    createdBy?: string;
+    updatedBy?: string;
+    reviewed?: boolean;
+    reviewedBy?: string;
+    model?: string;
+    body: string;
+    meta?: Record<string, unknown>;
+}
+
+export interface BoardEdge {
+    id: string;
+    from: string;
+    to: string;
+    relation: string;
+    label?: string;
+}
+
+export interface BoardDocumentState {
+    path: string;
+    title: string;
+    docId: string;
+    type: string;
+    version: number;
+    created: string;
+    updated: string;
+    tags: string[];
+    cards: BoardCard[];
+    edges: BoardEdge[];
+    layout: {
+        cards: Record<string, BoardCardLayout>;
+        viewport: BoardViewport;
+    };
+    notes: string;
+    rawContent: string;
 }
 
 export interface ASRState {

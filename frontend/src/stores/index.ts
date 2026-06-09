@@ -6,3 +6,4 @@ export { useExportStore } from './export-store';
 export { useModalStore } from './modal-store';
 export { useOverlayStore } from './overlay-store';
 export { useCustomCssStore } from './custom-css-store';
+export { useBoardStore } from './board-store';

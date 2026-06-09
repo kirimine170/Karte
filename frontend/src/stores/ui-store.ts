@@ -32,6 +32,7 @@ interface UIStore extends UIState {
     setSidebarVisible: (visible: boolean) => void;
     setImageGalleryVisible: (visible: boolean) => void;
     setCsvGalleryVisible: (visible: boolean) => void;
+    setWorkspaceMode: (enabled: boolean) => void;
     setActiveTab: (tab: ActiveTab) => void;
     setTheme: (theme: Theme) => void;
     setHardWrap: (hardWrap: boolean) => void;
@@ -47,6 +48,7 @@ export const useUIStore = createStore<UIStore>((set, get) => ({
     sidebarVisible: true,
     imageGalleryVisible: true,
     csvGalleryVisible: true,
+    workspaceMode: false,
     activeTab: 'editor',
     theme: initialTheme,
     hardWrap: false,
@@ -57,7 +59,11 @@ export const useUIStore = createStore<UIStore>((set, get) => ({
     setSidebarVisible: (visible) => set({ sidebarVisible: visible }),
     setImageGalleryVisible: (visible) => set({ imageGalleryVisible: visible }),
     setCsvGalleryVisible: (visible) => set({ csvGalleryVisible: visible }),
-    setActiveTab: (tab) => set({ activeTab: tab }),
+    setWorkspaceMode: (workspaceMode) => set({ workspaceMode }),
+    setActiveTab: (tab) => set((state) => ({
+        activeTab: tab,
+        workspaceMode: tab === 'editor' ? false : state.workspaceMode,
+    })),
     setTheme: (theme) => {
         set({ theme });
         applyThemeToDocument(theme);
