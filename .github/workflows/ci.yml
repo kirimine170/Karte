@@ -103,12 +103,6 @@ jobs:
             libgirepository1.0-dev \
             pkg-config
 
-      - name: Install PortAudio (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew update
-          brew install portaudio
-
       - name: Install PortAudio (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -148,7 +142,7 @@ jobs:
           echo "" > internal/pdf/fonts/NotoSansJP-Regular.ttf || touch internal/pdf/fonts/NotoSansJP-Regular.ttf
 
       - name: Generate Wails JS bindings
-        run: wails generate module
+        run: wails generate module -tags universal
 
       - name: Build frontend assets
         working-directory: frontend

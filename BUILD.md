@@ -61,6 +61,12 @@ Apple Silicon Macでビルドする場合、以下のいずれかを使用でき
 
 Universal Binaryはファイルサイズが大きくなりますが、Intel MacとApple Siliconの両方で動作します。Apple Silicon 上で `darwin-arm64` のみを配布すると Intel Mac（例: MacBook Pro/Intel Mac）では起動できないため、Mac向けに配布する成果物は `darwin` を使用してください。
 
+#### macOS のアーキテクチャ依存について
+
+現状の macOS 実装には Apple Silicon 専用の音声入力 / ASR 依存があります。`internal/audio/recorder.go` と `internal/asr/*` の実装は `darwin && arm64 && !universal` のときだけ `github.com/gordonklaus/portaudio` と `github.com/k2-fsa/sherpa-onnx-go-macos` を使い、`universal` または `amd64` ではスタブ実装に切り替わります。
+
+そのため Mac 向け配布の `darwin` ターゲットは `wails build -platform darwin/universal -tags universal` でビルドし、Universal Binary に Apple Silicon 専用の PortAudio / sherpa-onnx 依存を混ぜない構成にしています。このターゲットでは PDF 出力など macOS 標準フレームワークにリンクする機能は残りますが、録音 / ASR は無効化されます。録音 / ASR を有効にした Apple Silicon 専用版が必要な場合は、配布物として `darwin-arm64` を別途用意する必要があります。
+
 
 ## CI と配布用成果物
 
