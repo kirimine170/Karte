@@ -1,4 +1,4 @@
-//go:build darwin && (universal || amd64)
+//go:build darwin && universal
 
 package asr
 
@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 )
 
-// Universal Binary / Intel Mac 向けの簡易 Config 定義（sherpa-onnx には依存しない）
+// Universal Binary 向けの簡易 Config 定義（sherpa-onnx には依存しない）
 
 type Config struct {
 	Enabled    bool        `json:"enabled"`
@@ -148,4 +148,3 @@ func (s *RealtimeService) Flush() string {
 }
 
 func (s *RealtimeService) Reset() {}
-

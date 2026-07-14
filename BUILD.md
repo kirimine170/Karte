@@ -63,9 +63,9 @@ Universal Binaryはファイルサイズが大きくなりますが、Intel Mac�
 
 #### macOS のアーキテクチャ依存について
 
-現状の macOS 実装には Apple Silicon 専用の音声入力 / ASR 依存があります。`internal/audio/recorder.go` と `internal/asr/*` の実装は `darwin && arm64 && !universal` のときだけ `github.com/gordonklaus/portaudio` と `github.com/k2-fsa/sherpa-onnx-go-macos` を使い、`universal` または `amd64` ではスタブ実装に切り替わります。
+macOS の音声入力 / ASR 実装は `github.com/gordonklaus/portaudio` と `github.com/k2-fsa/sherpa-onnx-go-macos` に依存します。`sherpa-onnx-go-macos` は macOS arm64 / amd64 の両方の dylib を含むため、薄い `darwin-arm64` と `darwin-amd64` ビルドでは同じ録音 / ASR 実装を使います。
 
-そのため、録音 / ASR まで含めて正常に動作させる Apple Silicon 版と、Intel Mac で起動できる Intel 版は分けてビルド・配布します。`darwin-arm64` は Apple Silicon 専用の PortAudio / sherpa-onnx 依存を含むビルド、`darwin-amd64` は Intel Mac 用のスタブ実装ビルドです。`darwin` Universal Binary は互換性確認用ターゲットとして残していますが、`-tags universal` により録音 / ASR は無効化されるため、CI の配布成果物はアーキテクチャ別の `darwin-arm64` / `darwin-amd64` を優先します。
+一方、`darwin` Universal Binary は 1 つの `.app` に両アーキテクチャをまとめるため、外部ネイティブ依存の同梱・検証が複雑になります。そのため Universal Binary は互換性確認用ターゲットとして残しつつ、`-tags universal` により録音 / ASR をスタブ化します。CI の配布成果物は、機能を揃えたアーキテクチャ別の `darwin-arm64` / `darwin-amd64` を優先します。
 
 
 ## CI と配布用成果物
@@ -73,7 +73,7 @@ Universal Binaryはファイルサイズが大きくなりますが、Intel Mac�
 `.github/workflows/ci.yml` の `Desktop Build` は、PRでは Apple Silicon macOS / Intel macOS / Linux amd64 / Windows amd64 のビルド確認を行います。`main` への push で同じビルドがすべて成功すると、成果物を ZIP 化して GitHub Releases の `latest-main-successful-build` にアップロードします。
 
 - `Karte-macOS-apple-silicon.zip` - Apple Silicon macOS 版（録音 / ASR 依存を含む）
-- `Karte-macOS-intel.zip` - Intel macOS 版（録音 / ASR はスタブ）
+- `Karte-macOS-intel.zip` - Intel macOS 版（録音 / ASR 依存を含む）
 - `Karte-linux-amd64.zip` - Linux amd64 版
 - `Karte-windows-amd64.zip` - Windows amd64 版
 
