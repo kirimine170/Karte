@@ -41,7 +41,7 @@ go build -o buildmatrix ./cmd/buildmatrix
 
 `build/targets.json` で定義されています：
 
-- `darwin` - macOS (Universal Binary) - すべてのMacで動作
+- `darwin` - macOS (Universal Binary) - Intel Mac / Apple Silicon の両方で動作（Mac向け配布の標準）
 - `darwin-arm64` - macOS (Apple Silicon専用) - M1/M2/M3など
 - `darwin-amd64` - macOS (Intel Mac専用)
 - `windows` - Windows
@@ -59,7 +59,18 @@ Apple Silicon Macでビルドする場合、以下のいずれかを使用でき
 ./buildmatrix --targets darwin-arm64
 ```
 
-Universal Binaryはファイルサイズが大きくなりますが、Intel MacとApple Siliconの両方で動作します。
+Universal Binaryはファイルサイズが大きくなりますが、Intel MacとApple Siliconの両方で動作します。Apple Silicon 上で `darwin-arm64` のみを配布すると Intel Mac（例: MacBook Pro/Intel Mac）では起動できないため、Mac向けに配布する成果物は `darwin` を使用してください。
+
+
+## CI と配布用成果物
+
+`.github/workflows/ci.yml` の `Desktop Build` は、PRでは macOS Universal Binary / Linux amd64 / Windows amd64 のビルド確認を行います。`main` への push で同じビルドがすべて成功すると、成果物を ZIP 化して GitHub Releases の `latest-main-successful-build` にアップロードします。
+
+- `Karte-macOS-universal.zip` - Intel Mac / Apple Silicon の両方で動作する macOS 版
+- `Karte-linux-amd64.zip` - Linux amd64 版
+- `Karte-windows-amd64.zip` - Windows amd64 版
+
+このリリースは「最後に成功した main ブランチのビルド」を指すローリングリリースです。新しい main ビルドが成功するたびに同じタグと添付ファイルが更新されます。
 
 ## ビルド成果物
 
