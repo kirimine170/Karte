@@ -1,4 +1,4 @@
-//go:build darwin && arm64 && !universal
+//go:build darwin && !universal
 
 package asr
 

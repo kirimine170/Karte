@@ -15,10 +15,12 @@
     "platform": "darwin/universal",
     "artifactDir": "dist/darwin",
     "env": {
-      "GOOS": "darwin",
-      "GOARCH": "amd64"
+      "GOOS": "darwin"
     },
-    "flags": ["-tags", "universal"]
+    "flags": [
+      "-tags",
+      "universal"
+    ]
   },
   {
     "name": "darwin-arm64",
@@ -51,4 +53,3 @@
     "flags": []
   }
 ]
-

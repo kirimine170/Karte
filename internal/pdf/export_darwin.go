@@ -3,8 +3,8 @@
 package pdf
 
 /*
-#cgo darwin CFLAGS: -x objective-c -fobjc-arc -fmodules
-#cgo darwin LDFLAGS: -framework Cocoa -framework WebKit
+#cgo darwin CFLAGS: -x objective-c -fobjc-arc -fmodules -mmacosx-version-min=11.0
+#cgo darwin LDFLAGS: -framework Cocoa -framework WebKit -mmacosx-version-min=11.0
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 #include <time.h>

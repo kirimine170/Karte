@@ -41,7 +41,7 @@ go build -o buildmatrix ./cmd/buildmatrix
 
 `build/targets.json` で定義されています：
 
-- `darwin` - macOS (Universal Binary) - すべてのMacで動作
+- `darwin` - macOS (Universal Binary) - Intel Mac / Apple Silicon の両方で動作（Mac向け配布の標準）
 - `darwin-arm64` - macOS (Apple Silicon専用) - M1/M2/M3など
 - `darwin-amd64` - macOS (Intel Mac専用)
 - `windows` - Windows
@@ -59,7 +59,27 @@ Apple Silicon Macでビルドする場合、以下のいずれかを使用でき
 ./buildmatrix --targets darwin-arm64
 ```
 
-Universal Binaryはファイルサイズが大きくなりますが、Intel MacとApple Siliconの両方で動作します。
+Universal Binaryはファイルサイズが大きくなりますが、Intel MacとApple Siliconの両方で動作します。Apple Silicon 上で `darwin-arm64` のみを配布すると Intel Mac（例: MacBook Pro/Intel Mac）では起動できないため、Mac向けに配布する成果物は `darwin` を使用してください。
+
+#### macOS のアーキテクチャ依存について
+
+macOS の音声入力 / ASR 実装は `github.com/gordonklaus/portaudio` と `github.com/k2-fsa/sherpa-onnx-go-macos` に依存します。`sherpa-onnx-go-macos` は macOS arm64 / amd64 の両方の dylib を含むため、薄い `darwin-arm64` と `darwin-amd64` ビルドでは同じ録音 / ASR 実装を使います。
+
+一方、`darwin` Universal Binary は 1 つの `.app` に両アーキテクチャをまとめるため、外部ネイティブ依存の同梱・検証が複雑になります。そのため Universal Binary は互換性確認用ターゲットとして残しつつ、`-tags universal` により録音 / ASR をスタブ化します。CI の配布成果物は、機能を揃えたアーキテクチャ別の `darwin-arm64` / `darwin-amd64` を優先します。
+
+PDF 出力では WebKit の `createPDFWithConfiguration:` を使うため、macOS ビルドの deployment target は 11.0 以上に揃えています。
+
+
+## CI と配布用成果物
+
+`.github/workflows/ci.yml` の `Desktop Build` は、PRでは Apple Silicon macOS / Intel macOS / Linux amd64 / Windows amd64 のビルド確認を行います。`main` への push で同じビルドがすべて成功すると、成果物を ZIP 化して GitHub Releases の `latest-main-successful-build` にアップロードします。
+
+- `Karte-macOS-apple-silicon.zip` - Apple Silicon macOS 版（録音 / ASR 依存を含む）
+- `Karte-macOS-intel.zip` - Intel macOS 版（録音 / ASR 依存を含む）
+- `Karte-linux-amd64.zip` - Linux amd64 版
+- `Karte-windows-amd64.zip` - Windows amd64 版
+
+このリリースは「最後に成功した main ブランチのビルド」を指すローリングリリースです。新しい main ビルドが成功するたびに同じタグと添付ファイルが更新されます。
 
 ## ビルド成果物
 

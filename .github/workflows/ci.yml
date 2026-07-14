@@ -3,7 +3,6 @@ name: Desktop Build
 on:
   push:
     branches: [main]
-    tags: ['v*']
     paths:
       - '.github/workflows/ci.yml'
       - '**/*.go'
@@ -28,90 +27,44 @@ on:
       - 'go.sum'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  pr-build:
-    name: PR build check
-    if: github.event_name == 'pull_request'
-    runs-on: macos-15
-    env:
-      GOFLAGS: -buildvcs=false
-    defaults:
-      run:
-        shell: bash
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-          cache: true
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Download Go dependencies
-        run: go mod download
-
-      - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
-
-      - name: Install PortAudio
-        run: |
-          brew update
-          brew install portaudio
-
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci --no-audit
-
-      - name: Prepare placeholder dist
-        run: |
-          mkdir -p frontend/dist
-          touch frontend/dist/.placeholder
-
-      - name: Generate Wails JS bindings
-        run: wails generate module
-
-      - name: Build frontend assets
-        working-directory: frontend
-        run: npm run build
-
-      - name: Build application
-        run: wails build -platform darwin/arm64
-
-  release-build:
-    name: Build (${{ matrix.os }} - ${{ matrix.arch }})
-    if: github.event_name != 'pull_request'
+  build:
+    name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     env:
       GOFLAGS: -buildvcs=false
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
-            arch: amd64
-            platform: linux/amd64
           - os: macos-15
-            arch: arm64
-            platform: darwin/arm64
+            target: darwin-arm64
+            artifact_name: Karte-macOS-apple-silicon
+            artifact_path: dist/darwin-arm64
+            generate_tags: ""
           - os: macos-15-intel
-            arch: amd64
-            platform: darwin/amd64
+            target: darwin-amd64
+            artifact_name: Karte-macOS-intel
+            artifact_path: dist/darwin-amd64
+            generate_tags: ""
+          - os: ubuntu-22.04
+            target: linux
+            artifact_name: Karte-linux-amd64
+            artifact_path: dist/linux
+            generate_tags: universal
           - os: windows-latest
-            arch: amd64
-            platform: windows/amd64
+            target: windows
+            artifact_name: Karte-windows-amd64
+            artifact_path: dist/windows
+            generate_tags: universal
 
     defaults:
       run:
@@ -177,7 +130,7 @@ jobs:
           "PKG_CONFIG_PATH=C:\msys64\mingw64\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "CGO_ENABLED=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Add sherpa-onnx runtime DLLs to PATH (Windows)
+      - name: Add runtime DLLs to PATH (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -204,7 +157,12 @@ jobs:
           echo "" > internal/pdf/fonts/NotoSansJP-Regular.ttf || touch internal/pdf/fonts/NotoSansJP-Regular.ttf
 
       - name: Generate Wails JS bindings
-        run: wails generate module
+        run: |
+          if [ -n "${{ matrix.generate_tags }}" ]; then
+            wails generate module -tags "${{ matrix.generate_tags }}"
+          else
+            wails generate module
+          fi
 
       - name: Build frontend assets
         working-directory: frontend
@@ -212,15 +170,75 @@ jobs:
 
       - name: Verify frontend/dist exists
         run: |
-          if [ ! -d "frontend/dist" ] || [ -z "$(ls -A frontend/dist 2>/dev/null)" ]; then
+          if [ ! -d "frontend/dist" ] || [ -z "$(find frontend/dist -mindepth 1 -maxdepth 1 -print -quit)" ]; then
             echo "Error: frontend/dist is missing or empty"
             exit 1
           fi
 
-      - name: Build application (Windows)
-        if: runner.os == 'Windows'
-        run: go run ./cmd/buildmatrix --targets windows
-
       - name: Build application
-        if: runner.os != 'Windows'
-        run: wails build -platform ${{ matrix.platform }}
+        run: go run ./cmd/buildmatrix --targets ${{ matrix.target }} --clean
+
+      - name: Archive artifact (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd "${{ matrix.artifact_path }}"
+          ditto -c -k --sequesterRsrc --keepParent . "../../${{ matrix.artifact_name }}.zip"
+
+      - name: Archive artifact (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cd "${{ matrix.artifact_path }}"
+          zip -qry "../../${{ matrix.artifact_name }}.zip" .
+
+      - name: Archive artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "${{ matrix.artifact_path }}\*" -DestinationPath "${{ matrix.artifact_name }}.zip" -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.zip
+          if-no-files-found: error
+
+  publish-main-release:
+    name: Publish latest successful main build
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Move rolling release tag
+        run: |
+          git tag -f latest-main-successful-build "$GITHUB_SHA"
+          git push origin latest-main-successful-build --force
+
+      - name: Publish rolling main release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: latest-main-successful-build
+          name: Latest successful main build
+          body: |
+            This release is automatically updated after the Desktop Build workflow succeeds on main.
+
+            Source commit: ${{ github.sha }}
+          artifacts: release-assets/*.zip
+          allowUpdates: true
+          replacesArtifacts: true
+          removeArtifacts: true
+          artifactErrorsFailBuild: true
+          makeLatest: false
