@@ -67,6 +67,8 @@ macOS の音声入力 / ASR 実装は `github.com/gordonklaus/portaudio` と `gi
 
 一方、`darwin` Universal Binary は 1 つの `.app` に両アーキテクチャをまとめるため、外部ネイティブ依存の同梱・検証が複雑になります。そのため Universal Binary は互換性確認用ターゲットとして残しつつ、`-tags universal` により録音 / ASR をスタブ化します。CI の配布成果物は、機能を揃えたアーキテクチャ別の `darwin-arm64` / `darwin-amd64` を優先します。
 
+PDF 出力では WebKit の `createPDFWithConfiguration:` を使うため、macOS ビルドの deployment target は 11.0 以上に揃えています。
+
 
 ## CI と配布用成果物
 

@@ -40,6 +40,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       GOFLAGS: -buildvcs=false
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
     strategy:
       fail-fast: false
       matrix:
