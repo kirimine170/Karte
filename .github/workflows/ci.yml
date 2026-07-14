@@ -45,17 +45,25 @@ jobs:
       matrix:
         include:
           - os: macos-15
-            target: darwin
-            artifact_name: Karte-macOS-universal
-            artifact_path: dist/darwin
+            target: darwin-arm64
+            artifact_name: Karte-macOS-apple-silicon
+            artifact_path: dist/darwin-arm64
+            generate_tags: ""
+          - os: macos-15-intel
+            target: darwin-amd64
+            artifact_name: Karte-macOS-intel
+            artifact_path: dist/darwin-amd64
+            generate_tags: universal
           - os: ubuntu-22.04
             target: linux
             artifact_name: Karte-linux-amd64
             artifact_path: dist/linux
+            generate_tags: universal
           - os: windows-latest
             target: windows
             artifact_name: Karte-windows-amd64
             artifact_path: dist/windows
+            generate_tags: universal
 
     defaults:
       run:
@@ -103,6 +111,12 @@ jobs:
             libgirepository1.0-dev \
             pkg-config
 
+      - name: Install PortAudio (Apple Silicon macOS)
+        if: matrix.target == 'darwin-arm64'
+        run: |
+          brew update
+          brew install portaudio
+
       - name: Install PortAudio (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -142,7 +156,12 @@ jobs:
           echo "" > internal/pdf/fonts/NotoSansJP-Regular.ttf || touch internal/pdf/fonts/NotoSansJP-Regular.ttf
 
       - name: Generate Wails JS bindings
-        run: wails generate module -tags universal
+        run: |
+          if [ -n "${{ matrix.generate_tags }}" ]; then
+            wails generate module -tags "${{ matrix.generate_tags }}"
+          else
+            wails generate module
+          fi
 
       - name: Build frontend assets
         working-directory: frontend
@@ -161,7 +180,8 @@ jobs:
       - name: Archive artifact (macOS)
         if: runner.os == 'macOS'
         run: |
-          ditto -c -k --sequesterRsrc --keepParent "${{ matrix.artifact_path }}" "${{ matrix.artifact_name }}.zip"
+          cd "${{ matrix.artifact_path }}"
+          ditto -c -k --sequesterRsrc --keepParent . "../../${{ matrix.artifact_name }}.zip"
 
       - name: Archive artifact (Linux)
         if: runner.os == 'Linux'

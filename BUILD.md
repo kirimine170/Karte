@@ -65,14 +65,15 @@ Universal Binaryはファイルサイズが大きくなりますが、Intel Mac�
 
 現状の macOS 実装には Apple Silicon 専用の音声入力 / ASR 依存があります。`internal/audio/recorder.go` と `internal/asr/*` の実装は `darwin && arm64 && !universal` のときだけ `github.com/gordonklaus/portaudio` と `github.com/k2-fsa/sherpa-onnx-go-macos` を使い、`universal` または `amd64` ではスタブ実装に切り替わります。
 
-そのため Mac 向け配布の `darwin` ターゲットは `wails build -platform darwin/universal -tags universal` でビルドし、Universal Binary に Apple Silicon 専用の PortAudio / sherpa-onnx 依存を混ぜない構成にしています。このターゲットでは PDF 出力など macOS 標準フレームワークにリンクする機能は残りますが、録音 / ASR は無効化されます。録音 / ASR を有効にした Apple Silicon 専用版が必要な場合は、配布物として `darwin-arm64` を別途用意する必要があります。
+そのため、録音 / ASR まで含めて正常に動作させる Apple Silicon 版と、Intel Mac で起動できる Intel 版は分けてビルド・配布します。`darwin-arm64` は Apple Silicon 専用の PortAudio / sherpa-onnx 依存を含むビルド、`darwin-amd64` は Intel Mac 用のスタブ実装ビルドです。`darwin` Universal Binary は互換性確認用ターゲットとして残していますが、`-tags universal` により録音 / ASR は無効化されるため、CI の配布成果物はアーキテクチャ別の `darwin-arm64` / `darwin-amd64` を優先します。
 
 
 ## CI と配布用成果物
 
-`.github/workflows/ci.yml` の `Desktop Build` は、PRでは macOS Universal Binary / Linux amd64 / Windows amd64 のビルド確認を行います。`main` への push で同じビルドがすべて成功すると、成果物を ZIP 化して GitHub Releases の `latest-main-successful-build` にアップロードします。
+`.github/workflows/ci.yml` の `Desktop Build` は、PRでは Apple Silicon macOS / Intel macOS / Linux amd64 / Windows amd64 のビルド確認を行います。`main` への push で同じビルドがすべて成功すると、成果物を ZIP 化して GitHub Releases の `latest-main-successful-build` にアップロードします。
 
-- `Karte-macOS-universal.zip` - Intel Mac / Apple Silicon の両方で動作する macOS 版
+- `Karte-macOS-apple-silicon.zip` - Apple Silicon macOS 版（録音 / ASR 依存を含む）
+- `Karte-macOS-intel.zip` - Intel macOS 版（録音 / ASR はスタブ）
 - `Karte-linux-amd64.zip` - Linux amd64 版
 - `Karte-windows-amd64.zip` - Windows amd64 版
 
