@@ -8,6 +8,7 @@ on:
       - '**/*.go'
       - 'frontend/**'
       - 'build/**'
+      - 'scripts/package-macos-runtime.sh'
       - 'templates/**'
       - 'themes/**'
       - 'wails.json'
@@ -20,6 +21,7 @@ on:
       - '**/*.go'
       - 'frontend/**'
       - 'build/**'
+      - 'scripts/package-macos-runtime.sh'
       - 'templates/**'
       - 'themes/**'
       - 'wails.json'
@@ -73,6 +75,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          lfs: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -91,7 +95,10 @@ jobs:
         run: go mod download
 
       - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+        run: |
+          wails_version="$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v2)"
+          test -n "$wails_version"
+          go install "github.com/wailsapp/wails/v2/cmd/wails@${wails_version}"
 
       - name: Install PortAudio (Linux)
         if: runner.os == 'Linux'
@@ -177,6 +184,10 @@ jobs:
 
       - name: Build application
         run: go run ./cmd/buildmatrix --targets ${{ matrix.target }} --clean
+
+      - name: Bundle and verify macOS runtime dependencies
+        if: runner.os == 'macOS'
+        run: ./scripts/package-macos-runtime.sh "${{ matrix.artifact_path }}/Karte.app" "${{ matrix.target }}"
 
       - name: Archive artifact (macOS)
         if: runner.os == 'macOS'
