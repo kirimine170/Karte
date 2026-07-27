@@ -50,5 +50,16 @@ jobs:
       - name: Download Go dependencies
         run: go mod download
 
+      - name: Test Karte Renderer dependency
+        run: go test github.com/kirimine170/KarteRenderer/...
+
+      - name: Prepare placeholder frontend assets
+        run: |
+          mkdir -p frontend/dist
+          touch frontend/dist/.placeholder
+
+      - name: Run application package tests
+        run: go test .
+
       - name: Run backend tests
         run: go test $(go list ./cmd/... ./internal/... | grep -v internal/asr | grep -v internal/audio)

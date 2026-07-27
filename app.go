@@ -35,17 +35,15 @@ import (
 	fm "karte/internal/frontmatter"
 	gitvcs "karte/internal/git"
 	"karte/internal/markdown"
-	"karte/internal/marp"
-	pdfexport "karte/internal/pdf"
 	"karte/internal/printout"
 	"karte/internal/screenshot"
-	"karte/internal/site"
 	syncpkg "karte/internal/sync"
 	"karte/internal/webpchunk"
 	"karte/internal/webputil"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	karterenderer "github.com/kirimine170/KarteRenderer"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/image/draw"
 	"gopkg.in/yaml.v3"
@@ -64,6 +62,8 @@ var (
 
 //go:embed frontend/src/printout/generated/pagination-runtime.js
 var kartePrintoutPaginationRuntime string
+
+var exportRendererHTMLPDF = karterenderer.ExportHTMLPDF
 
 const maxImageSizeForPDF = 10 * 1024 * 1024 // 10MB
 const maxImageWidthForPDF = 800             // PDF表示用に最大横幅800px（Previewで開く速度を改善）
@@ -2204,11 +2204,6 @@ func (a *App) PreviewMarkdownForPath(currentPath, content string) (string, error
 	// 1. marp: true is explicitly set
 	// 2. or Marp-specific fields (header, footer, paginate) are present
 	isMarpMode := false
-	header := ""
-	footer := ""
-	paginate := false
-	aspectRatio := ""      // Default will be 16:9
-	marpTheme := "default" // Default Marp theme
 
 	if frontMatter != nil {
 		if frontMatter.Marp {
@@ -2217,36 +2212,40 @@ func (a *App) PreviewMarkdownForPath(currentPath, content string) (string, error
 
 		// Extract header, footer, paginate, aspectRatio, and marpTheme from Raw
 		if frontMatter.Raw != nil {
-			if h, ok := frontMatter.Raw["header"].(string); ok {
-				header = h
+			if _, ok := frontMatter.Raw["header"].(string); ok {
 				isMarpMode = true // Header presence indicates Marp mode
 			}
-			if f, ok := frontMatter.Raw["footer"].(string); ok {
-				footer = f
+			if _, ok := frontMatter.Raw["footer"].(string); ok {
 				isMarpMode = true // Footer presence indicates Marp mode
 			}
-			if p, ok := frontMatter.Raw["paginate"].(bool); ok {
-				paginate = p
+			if _, ok := frontMatter.Raw["paginate"].(bool); ok {
 				isMarpMode = true // Paginate presence indicates Marp mode
-			}
-			if ar, ok := frontMatter.Raw["aspectRatio"].(string); ok {
-				aspectRatio = ar
-			}
-			if mt, ok := frontMatter.Raw["marpTheme"].(string); ok {
-				marpTheme = mt
 			}
 		}
 	}
 
 	if isMarpMode {
-		// Render as Marp presentation
-		slides := marp.ParseSlides(markdownBody)
+		// Render as a Marp presentation through the extracted renderer module.
 		title := frontMatter.Title
 		if title == "" {
 			title = "Presentation"
 		}
-
-		html := marp.RenderMarpHTML(slides, title, header, footer, paginate, aspectRatio, marpTheme)
+		rendererSource := content
+		if frontMatter == nil || !frontMatter.Marp {
+			// Preserve Karte's legacy Marp detection for documents that use only
+			// header/footer/paginate fields. KarteRenderer selects Marp from the
+			// explicit flag, so synthesize the minimal metadata it needs.
+			titleYAML, marshalErr := yaml.Marshal(title)
+			if marshalErr != nil {
+				return "", fmt.Errorf("failed to encode Marp title: %w", marshalErr)
+			}
+			rendererSource = fmt.Sprintf("---\nmarp: true\ntitle: %s---\n%s", titleYAML, markdownBody)
+		}
+		html, _, err := karterenderer.RenderString(a.dataDir, rendererSource)
+		if err != nil {
+			a.logError(fmt.Sprintf("PreviewMarkdown [Marp]: renderer failed: %v", err))
+			return "", fmt.Errorf("failed to render Marp markdown: %w", err)
+		}
 
 		// Log HTML sample to debug image rendering
 		if strings.Contains(html, "<img") {
@@ -2445,40 +2444,12 @@ func (a *App) PreviewMarkdownForPath(currentPath, content string) (string, error
 		return html, nil
 	}
 
-	// Regular markdown rendering
-	// Ensure markdownBody doesn't start with frontmatter markers
-	markdownBody = strings.TrimSpace(markdownBody)
-	if strings.HasPrefix(markdownBody, "---") {
-		// If body still starts with ---, try to find the end of frontmatter
-		if idx := strings.Index(markdownBody[3:], "\n---"); idx >= 0 {
-			markdownBody = strings.TrimSpace(markdownBody[idx+7:])
-		}
-	}
-
-	// Create a temporary file for rendering
-	tmpFile := filepath.Join(a.dataDir, ".mdsys", "temp_preview.md")
-	err := os.MkdirAll(filepath.Dir(tmpFile), 0o755)
+	// Render unsaved editor content directly through KarteRenderer. The data
+	// directory remains the trusted root for layouts and imports.
+	html, _, err := karterenderer.RenderString(a.dataDir, content)
 	if err != nil {
-		a.logError(fmt.Sprintf("PreviewMarkdown: failed to create temp directory: %v", err))
-		return "", fmt.Errorf("failed to create temp directory: %v", err)
-	}
-
-	err = os.WriteFile(tmpFile, []byte(markdownBody), 0o644)
-	if err != nil {
-		a.logError(fmt.Sprintf("PreviewMarkdown: failed to write temp file: %v", err))
-		return "", fmt.Errorf("failed to write temp file: %v", err)
-	}
-	defer func() {
-		if removeErr := os.Remove(tmpFile); removeErr != nil {
-			a.logError(fmt.Sprintf("PreviewMarkdown: failed to remove temp file: %v", removeErr))
-		}
-	}()
-
-	// Use dataDir as root so that site.RenderMarkdown can find themes directory
-	html, _, err := site.RenderMarkdown(a.dataDir, tmpFile)
-	if err != nil {
-		a.logError(fmt.Sprintf("PreviewMarkdown: failed to render markdown: %v (root: %s, tmpFile: %s)", err, a.dataDir, tmpFile))
-		return "", fmt.Errorf("failed to render markdown: %v", err)
+		a.logError(fmt.Sprintf("PreviewMarkdown: renderer failed: %v (root: %s)", err, a.dataDir))
+		return "", fmt.Errorf("failed to render markdown: %w", err)
 	}
 
 	html = a.rewritePreviewImageSources(html, currentPath)
@@ -2878,7 +2849,7 @@ func (a *App) build(root string) error {
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
-		html, _, err := site.RenderMarkdown(root, src)
+		html, _, err := karterenderer.RenderMarkdown(root, src)
 		if err != nil {
 			return err
 		}
@@ -4697,12 +4668,12 @@ func (a *App) exportPDFInternal(html string) (string, error) {
 		"stage":        "loading-webview",
 	})
 
-	a.logInfo("ExportPDF: Calling pdfexport.ExportHTMLToPDF...")
-	if err := pdfexport.ExportHTMLToPDF(html, pdfPath, a.logFilePath, printoutSpec.Name, printoutSpec.WidthPT(), printoutSpec.HeightPT()); err != nil {
+	a.logInfo("ExportPDF: Calling KarteRenderer.ExportHTMLPDF...")
+	if err := exportHTMLToPDFWithRenderer(a.ctx, html, pdfPath); err != nil {
 		a.logError(fmt.Sprintf("ExportPDF failed: %v", err))
 		return "", fmt.Errorf("PDF export failed: %w", err)
 	}
-	a.logInfo("ExportPDF: pdfexport.ExportHTMLToPDF returned successfully")
+	a.logInfo("ExportPDF: KarteRenderer.ExportHTMLPDF returned successfully")
 
 	// PDF生成完了イベント
 	runtime.EventsEmit(a.ctx, "pdf-export-progress", map[string]interface{}{
@@ -4730,6 +4701,28 @@ func (a *App) exportPDFInternal(html string) (string, error) {
 	}
 
 	return pdfPath, nil
+}
+
+func exportHTMLToPDFWithRenderer(ctx context.Context, html, pdfPath string) error {
+	tmp, err := os.CreateTemp("", "karte-renderer-*.html")
+	if err != nil {
+		return fmt.Errorf("create renderer HTML input: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmp.WriteString(html); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write renderer HTML input: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close renderer HTML input: %w", err)
+	}
+
+	return exportRendererHTMLPDF(ctx, tmpPath, pdfPath, karterenderer.PDFOptions{
+		Engine:          "auto",
+		AllowLocalFiles: true,
+	})
 }
 
 func (a *App) injectPDFRenderHelpers(html string) string {

@@ -10,6 +10,7 @@ require (
 	github.com/gordonklaus/portaudio v0.0.0-20250206071425-98a94950218b
 	github.com/k2-fsa/sherpa-onnx-go-macos v1.13.4
 	github.com/k2-fsa/sherpa-onnx-go-windows v1.13.4
+	github.com/kirimine170/KarteRenderer v0.0.0
 	github.com/wailsapp/wails/v2 v2.13.0
 	github.com/yuin/goldmark v1.8.4
 	golang.org/x/image v0.44.0
@@ -68,5 +69,7 @@ require (
 	golang.org/x/text v0.40.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 )
+
+replace github.com/kirimine170/KarteRenderer => github.com/kirimine170/Karte_renderer v0.0.0-20260724121858-4c60c64ca5c9
 
 // replace github.com/wailsapp/wails/v2 v2.10.2 => /Users/kirimine170/Desktop/Kiri_Lab/Karte

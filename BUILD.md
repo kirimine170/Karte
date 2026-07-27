@@ -2,6 +2,24 @@
 
 このプロジェクトは、Goで実装されたビルドマトリックスタイツール（`cmd/buildmatrix/main.go`）を使用してビルドします。
 
+## Karte Renderer依存関係
+
+Markdown・Marp・PDFのレンダリングは、別リポジトリの
+[`kirimine170/Karte_renderer`](https://github.com/kirimine170/Karte_renderer)を使用します。
+`go.mod`では検証済みコミットのpseudo-versionを固定しているため、通常の
+`go mod download`とビルド時に自動取得されます。兄弟ディレクトリへのcloneは不要です。
+
+Karte Rendererの`main`が更新されたら、次のコマンドで依存の更新、依存モジュール自身の
+テスト、Karte全体のテストを続けて実行できます。
+
+```bash
+./scripts/update-karte-renderer.sh
+```
+
+リポジトリ名（`Karte_renderer`）と現在のGo module宣言（`KarteRenderer`）が異なるため、
+公開リポジトリの固定バージョンを`replace`で参照しています。将来module pathを統一して
+タグを公開した後は、通常のタグ付き`require`へ移行できます。
+
 ## ビルドマトリックスタイツール
 
 `buildmatrix` は、`build/targets.json` に定義された複数のプラットフォームを一度にビルドできるGoプログラムです。
