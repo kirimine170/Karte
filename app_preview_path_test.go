@@ -48,6 +48,15 @@ func TestPreviewMarkdownForPathKeepsMissingRelativeImagesUnchanged(t *testing.T)
 	}
 }
 
+func TestEnableMarpInFrontMatterPreservesPresentationFields(t *testing.T) {
+	content := "---\ntitle: Quarterly Review\nheader: Team update\nfooter: Confidential\npaginate: true\naspectRatio: 16:9\nmarpTheme: uncover\ncustom: retained\n---\n# Results\n"
+	want := "---\nmarp: true\ntitle: Quarterly Review\nheader: Team update\nfooter: Confidential\npaginate: true\naspectRatio: 16:9\nmarpTheme: uncover\ncustom: retained\n---\n# Results\n"
+
+	if got := enableMarpInFrontMatter(content); got != want {
+		t.Fatalf("front matter was not preserved when enabling Marp:\nwant:\n%s\ngot:\n%s", want, got)
+	}
+}
+
 func TestGetImageListIncludesWebClipAssets(t *testing.T) {
 	dataDir := t.TempDir()
 	assetPath := filepath.Join(dataDir, "content", "clips", "assets", "example", "image-001.png")

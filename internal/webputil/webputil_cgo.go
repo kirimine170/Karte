@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build cgo
 
 package webputil
 
@@ -9,7 +9,8 @@ import (
 	"github.com/chai2010/webp"
 )
 
-// EncodeWebP は macOS では chai2010/webp を使って本物の WebP を生成する。
+// EncodeWebP uses the bundled libwebp encoder to produce a real RIFF/WebP
+// container on every platform where cgo is enabled.
 func EncodeWebP(w io.Writer, img image.Image, lossless bool) error {
 	opts := &webp.Options{Lossless: lossless}
 	if !lossless {
@@ -17,5 +18,3 @@ func EncodeWebP(w io.Writer, img image.Image, lossless bool) error {
 	}
 	return webp.Encode(w, img, opts)
 }
-
-
