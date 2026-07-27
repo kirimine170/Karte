@@ -2193,6 +2193,24 @@ func (a *App) PreviewMarkdown(content string) (string, error) {
 	return a.PreviewMarkdownForPath("", content)
 }
 
+// enableMarpInFrontMatter adds the explicit flag required by KarteRenderer to
+// front matter that Karte recognized as Marp through legacy presentation
+// fields. Keeping the original front matter intact ensures renderer options
+// such as header, footer, pagination, aspect ratio, and theme are forwarded.
+func enableMarpInFrontMatter(content string) string {
+	openingEnd := strings.IndexByte(content, '\n')
+	if openingEnd == -1 {
+		return content
+	}
+
+	lineEnding := "\n"
+	if openingEnd > 0 && content[openingEnd-1] == '\r' {
+		lineEnding = "\r\n"
+	}
+	openingEnd++
+	return content[:openingEnd] + "marp: true" + lineEnding + content[openingEnd:]
+}
+
 // PreviewMarkdownForPath renders markdown content to HTML using currentPath as
 // the base for document-relative assets such as Web Clip images.
 func (a *App) PreviewMarkdownForPath(currentPath, content string) (string, error) {
@@ -2226,20 +2244,12 @@ func (a *App) PreviewMarkdownForPath(currentPath, content string) (string, error
 
 	if isMarpMode {
 		// Render as a Marp presentation through the extracted renderer module.
-		title := frontMatter.Title
-		if title == "" {
-			title = "Presentation"
-		}
 		rendererSource := content
-		if frontMatter == nil || !frontMatter.Marp {
+		if !frontMatter.Marp {
 			// Preserve Karte's legacy Marp detection for documents that use only
 			// header/footer/paginate fields. KarteRenderer selects Marp from the
-			// explicit flag, so synthesize the minimal metadata it needs.
-			titleYAML, marshalErr := yaml.Marshal(title)
-			if marshalErr != nil {
-				return "", fmt.Errorf("failed to encode Marp title: %w", marshalErr)
-			}
-			rendererSource = fmt.Sprintf("---\nmarp: true\ntitle: %s---\n%s", titleYAML, markdownBody)
+			// explicit flag, so add it without discarding the other metadata.
+			rendererSource = enableMarpInFrontMatter(content)
 		}
 		html, _, err := karterenderer.RenderString(a.dataDir, rendererSource)
 		if err != nil {
