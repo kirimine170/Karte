@@ -57,8 +57,6 @@ func TestKarteRendererDependencyContractFixtures(t *testing.T) {
 			"<h1>Karte Renderer Contract</h1>",
 			"<h2>Imported summary</h2>",
 			"<h3>Nested contract detail</h3>",
-			"<th>Metric</th>",
-			"<td>rendered</td>",
 			`class="katex-display"`,
 			`data-katex="score = 42"`,
 		} {
@@ -73,6 +71,22 @@ func TestKarteRendererDependencyContractFixtures(t *testing.T) {
 			if strings.Contains(html, excluded) {
 				t.Fatalf("renderer ignored the CSV column selection and emitted %q:\n%s", excluded, html)
 			}
+		}
+		lastCSVIndex := -1
+		for _, want := range []string{
+			"<th>Metric</th>",
+			"<th>Value</th>",
+			"<td>status</td>",
+			"<td>rendered</td>",
+		} {
+			index := strings.Index(html, want)
+			if index < 0 {
+				t.Fatalf("renderer contract output is missing selected CSV content %q:\n%s", want, html)
+			}
+			if index <= lastCSVIndex {
+				t.Fatalf("renderer emitted selected CSV content out of order at %q:\n%s", want, html)
+			}
+			lastCSVIndex = index
 		}
 	})
 
