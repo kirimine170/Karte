@@ -90,6 +90,27 @@ func TestKarteRendererDependencyContractFixtures(t *testing.T) {
 		}
 	})
 
+	t.Run("document imports with CRLF", func(t *testing.T) {
+		source, err := os.ReadFile(filepath.Join(root, "document.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		markdown := strings.ReplaceAll(string(source), "\r\n", "\n")
+		markdown = strings.ReplaceAll(markdown, "\n", "\r\n")
+		html, _, err := karterenderer.RenderString(root, markdown)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"<h2>Imported summary</h2>", "<h3>Nested contract detail</h3>"} {
+			if !strings.Contains(html, want) {
+				t.Fatalf("renderer CRLF contract output is missing %q:\n%s", want, html)
+			}
+		}
+		if strings.Contains(html, "@import(") {
+			t.Fatalf("renderer left an unresolved CRLF import:\n%s", html)
+		}
+	})
+
 	t.Run("marp slides", func(t *testing.T) {
 		html, frontMatter, err := karterenderer.RenderMarkdown(root, "slides.md")
 		if err != nil {
@@ -98,12 +119,28 @@ func TestKarteRendererDependencyContractFixtures(t *testing.T) {
 		if !frontMatter.Marp {
 			t.Fatal("renderer did not preserve the Marp front matter contract")
 		}
-		if got := strings.Count(html, `class="marp-slide"`); got != 2 {
-			t.Fatalf("renderer returned %d Marp slides, want 2:\n%s", got, html)
+		const slideMarker = `<section class="marp-slide">`
+		remaining := html
+		var slides []string
+		for {
+			start := strings.Index(remaining, slideMarker)
+			if start < 0 {
+				break
+			}
+			end := strings.Index(remaining[start:], "</section>")
+			if end < 0 {
+				t.Fatalf("renderer returned an unterminated Marp slide:\n%s", html)
+			}
+			end += start + len("</section>")
+			slides = append(slides, remaining[start:end])
+			remaining = remaining[end:]
 		}
-		for _, want := range []string{"<h1>First slide</h1>", "<h1>Second slide</h1>"} {
-			if !strings.Contains(html, want) {
-				t.Fatalf("renderer contract output is missing %q:\n%s", want, html)
+		if len(slides) != 2 {
+			t.Fatalf("renderer returned %d Marp slides, want 2:\n%s", len(slides), html)
+		}
+		for index, want := range []string{"<h1>First slide</h1>", "<h1>Second slide</h1>"} {
+			if !strings.Contains(slides[index], want) {
+				t.Fatalf("renderer contract slide %d is missing %q:\n%s", index+1, want, slides[index])
 			}
 		}
 	})

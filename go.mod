@@ -70,6 +70,6 @@ require (
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 )
 
-replace github.com/kirimine170/KarteRenderer => github.com/kirimine170/Karte_renderer v0.0.0-20260724121858-4c60c64ca5c9
+replace github.com/kirimine170/KarteRenderer => github.com/kirimine170/Karte_renderer v0.0.0-20260731152516-2ab1a7c523de
 
 // replace github.com/wailsapp/wails/v2 v2.10.2 => /Users/kirimine170/Desktop/Kiri_Lab/Karte
