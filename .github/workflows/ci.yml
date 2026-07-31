@@ -9,6 +9,7 @@ on:
       - 'frontend/**'
       - 'build/**'
       - 'scripts/package-macos-runtime.sh'
+      - 'testdata/renderer-contract/**'
       - 'templates/**'
       - 'themes/**'
       - 'wails.json'
@@ -22,6 +23,7 @@ on:
       - 'frontend/**'
       - 'build/**'
       - 'scripts/package-macos-runtime.sh'
+      - 'testdata/renderer-contract/**'
       - 'templates/**'
       - 'themes/**'
       - 'wails.json'
@@ -156,6 +158,11 @@ jobs:
         run: |
           mkdir -p frontend/dist
           touch frontend/dist/.placeholder
+
+      - name: Run Renderer dependency and contract tests
+        run: |
+          go test github.com/kirimine170/KarteRenderer/...
+          go test . -run 'Test(KarteRendererDependencyContractFixtures|ExportHTMLToPDFWithRendererUsesTemporaryHTMLInput)$'
 
       - name: Prepare font file for Windows build
         if: runner.os == 'Windows'
