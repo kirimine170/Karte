@@ -56,6 +56,7 @@ func TestKarteRendererDependencyContractFixtures(t *testing.T) {
 		for _, want := range []string{
 			"<h1>Karte Renderer Contract</h1>",
 			"<h2>Imported summary</h2>",
+			"<h3>Nested contract detail</h3>",
 			"<th>Metric</th>",
 			"<td>rendered</td>",
 			`class="katex-display"`,
