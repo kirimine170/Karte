@@ -68,6 +68,11 @@ func TestKarteRendererDependencyContractFixtures(t *testing.T) {
 		if strings.Contains(html, "@import(") {
 			t.Fatalf("renderer left an unresolved import:\n%s", html)
 		}
+		for _, excluded := range []string{"<th>Ignored</th>", "<td>not-selected</td>"} {
+			if strings.Contains(html, excluded) {
+				t.Fatalf("renderer ignored the CSV column selection and emitted %q:\n%s", excluded, html)
+			}
+		}
 	})
 
 	t.Run("marp slides", func(t *testing.T) {
