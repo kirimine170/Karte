@@ -41,3 +41,50 @@ func TestExportHTMLToPDFWithRendererUsesTemporaryHTMLInput(t *testing.T) {
 		t.Fatalf("temporary renderer input was not removed: %v", err)
 	}
 }
+
+func TestKarteRendererDependencyContractFixtures(t *testing.T) {
+	root := filepath.Join("testdata", "renderer-contract")
+
+	t.Run("document imports", func(t *testing.T) {
+		html, frontMatter, err := karterenderer.RenderMarkdown(root, "document.md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if frontMatter.Title != "Karte Renderer Contract" {
+			t.Fatalf("unexpected title: %q", frontMatter.Title)
+		}
+		for _, want := range []string{
+			"<h1>Karte Renderer Contract</h1>",
+			"<h2>Imported summary</h2>",
+			"<th>Metric</th>",
+			"<td>rendered</td>",
+			`class="katex-display"`,
+			`data-katex="score = 42"`,
+		} {
+			if !strings.Contains(html, want) {
+				t.Fatalf("renderer contract output is missing %q:\n%s", want, html)
+			}
+		}
+		if strings.Contains(html, "@import(") {
+			t.Fatalf("renderer left an unresolved import:\n%s", html)
+		}
+	})
+
+	t.Run("marp slides", func(t *testing.T) {
+		html, frontMatter, err := karterenderer.RenderMarkdown(root, "slides.md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !frontMatter.Marp {
+			t.Fatal("renderer did not preserve the Marp front matter contract")
+		}
+		if got := strings.Count(html, `class="marp-slide"`); got != 2 {
+			t.Fatalf("renderer returned %d Marp slides, want 2:\n%s", got, html)
+		}
+		for _, want := range []string{"<h1>First slide</h1>", "<h1>Second slide</h1>"} {
+			if !strings.Contains(html, want) {
+				t.Fatalf("renderer contract output is missing %q:\n%s", want, html)
+			}
+		}
+	})
+}
