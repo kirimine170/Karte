@@ -90,6 +90,10 @@ PDF 出力では WebKit の `createPDFWithConfiguration:` を使うため、macO
 
 ## CI と配布用成果物
 
+v1.0.0の正式releaseでは，以下のrolling releaseだけで公開判定を行わない．
+[v1.0 release criteria](RELEASE_CRITERIA_V1.md)に従い，同一candidate SHAの
+test，4 platform artifact，install smoke，checksum，rollback dry-runを確認する．
+
 `.github/workflows/ci.yml` の `Desktop Build` は、PRでは Apple Silicon macOS / Intel macOS / Linux amd64 / Windows amd64 のビルド確認を行います。`main` への push で同じビルドがすべて成功すると、成果物を ZIP 化して GitHub Releases の `latest-main-successful-build` にアップロードします。
 
 - `Karte-macOS-apple-silicon.zip` - Apple Silicon macOS 版（録音 / ASR 依存を含む）

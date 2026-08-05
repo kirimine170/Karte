@@ -165,6 +165,10 @@ karte-desktop/
 
 ## 開発者向け情報
 
+Karte v1.0.0の公開可否は，[v1.0 release criteria](RELEASE_CRITERIA_V1.md)の
+機能，安全，互換性，配布，rollback gateで判定する．Required gateが1件でも
+`FAIL`または`BLOCKED`なら公開しない．
+
 ### アーキテクチャ
 
 - **バックエンド**: Go + Wails v2
