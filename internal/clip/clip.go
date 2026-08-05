@@ -56,9 +56,10 @@ type ClipResult struct {
 }
 
 type Service struct {
-	DataDir string
-	Client  *http.Client
-	Now     func() time.Time
+	DataDir     string
+	Client      *http.Client
+	Now         func() time.Time
+	ResolveHost func(context.Context, string) ([]net.IP, error)
 }
 
 type fetchedPage struct {
@@ -164,7 +165,7 @@ func (s Service) ClipURL(ctx context.Context, req ClipRequest) (ClipResult, erro
 		return ClipResult{}, err
 	}
 	doc.Warnings = append(page.Warnings, doc.Warnings...)
-	sanitizedHTML, removed, err := sanitizeHTMLForMarkdown(doc.ContentHTML, page.URL)
+	sanitizedHTML, removed, err := sanitizeHTMLForMarkdown(doc.ContentHTML, page.URL, s.externalURLValidator(ctx))
 	if err != nil {
 		return ClipResult{}, fmt.Errorf("sanitize article html: %w", err)
 	}
@@ -323,7 +324,7 @@ func (s Service) downloadImages(ctx context.Context, doc clipDocument, pageURL *
 		if responseExt != urlExt {
 			finalName := fmt.Sprintf("image-%03d%s", i+1, responseExt)
 			finalAbs := filepath.Join(assetAbs, finalName)
-			if err := os.Rename(localAbs, finalAbs); err != nil {
+			if err := moveFileExclusive(localAbs, finalAbs); err != nil {
 				_ = os.Remove(localAbs)
 				warnings = append(warnings, fmt.Sprintf("画像の拡張子を確定できませんでした: %s (%v)", candidate.ResolvedURL, err))
 				continue
@@ -439,7 +440,8 @@ func validateExternalHTTPURL(parsed *url.URL) error {
 	if parsed == nil {
 		return errors.New("url is required")
 	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
 		return errors.New("url must use http or https")
 	}
 	if parsed.User != nil {
@@ -456,6 +458,52 @@ func validateExternalHTTPURL(parsed *url.URL) error {
 		return fmt.Errorf("non-public address is not allowed: %s", ip)
 	}
 	return nil
+}
+
+func (s Service) externalURLValidator(ctx context.Context) func(*url.URL) error {
+	cache := map[string]error{}
+	return func(parsed *url.URL) error {
+		if err := validateExternalHTTPURL(parsed); err != nil {
+			return err
+		}
+		host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+		if net.ParseIP(host) != nil {
+			return nil
+		}
+		if cached, ok := cache[host]; ok {
+			return cached
+		}
+		lookupContext, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		var (
+			ips []net.IP
+			err error
+		)
+		if s.ResolveHost != nil {
+			ips, err = s.ResolveHost(lookupContext, host)
+		} else {
+			ips, err = net.DefaultResolver.LookupIP(lookupContext, "ip", host)
+		}
+		if err != nil {
+			err = fmt.Errorf("resolve external host %s: %w", host, err)
+			cache[host] = err
+			return err
+		}
+		if len(ips) == 0 {
+			err = fmt.Errorf("external host resolved to no addresses: %s", host)
+			cache[host] = err
+			return err
+		}
+		for _, ip := range ips {
+			if isUnsafeRemoteIP(ip) {
+				err = fmt.Errorf("external host resolves to a non-public address: %s (%s)", host, ip)
+				cache[host] = err
+				return err
+			}
+		}
+		cache[host] = nil
+		return nil
+	}
 }
 
 func isUnsafeRemoteIP(ip net.IP) bool {
@@ -578,7 +626,7 @@ func fallbackBodyHTML(body []byte) (string, map[string]string, error) {
 	return b.String(), meta, nil
 }
 
-func sanitizeHTMLForMarkdown(rawHTML string, pageURL *url.URL) (string, int, error) {
+func sanitizeHTMLForMarkdown(rawHTML string, pageURL *url.URL, validateURL func(*url.URL) error) (string, int, error) {
 	contextNode := &html.Node{Type: html.ElementNode, Data: "div", DataAtom: atom.Div}
 	nodes, err := html.ParseFragment(strings.NewReader(rawHTML), contextNode)
 	if err != nil {
@@ -588,7 +636,7 @@ func sanitizeHTMLForMarkdown(rawHTML string, pageURL *url.URL) (string, int, err
 	for _, node := range nodes {
 		container.AppendChild(node)
 	}
-	removed := sanitizeHTMLChildren(container, pageURL)
+	removed := sanitizeHTMLChildren(container, pageURL, validateURL)
 	var rendered strings.Builder
 	for child := container.FirstChild; child != nil; child = child.NextSibling {
 		if err := html.Render(&rendered, child); err != nil {
@@ -598,7 +646,7 @@ func sanitizeHTMLForMarkdown(rawHTML string, pageURL *url.URL) (string, int, err
 	return rendered.String(), removed, nil
 }
 
-func sanitizeHTMLChildren(parent *html.Node, pageURL *url.URL) int {
+func sanitizeHTMLChildren(parent *html.Node, pageURL *url.URL, validateURL func(*url.URL) error) int {
 	removed := 0
 	for child := parent.FirstChild; child != nil; {
 		next := child.NextSibling
@@ -616,7 +664,7 @@ func sanitizeHTMLChildren(parent *html.Node, pageURL *url.URL) int {
 					removed++
 					continue
 				}
-				if isHTMLURLAttribute(name) && !isSafeHTMLURL(pageURL, attr.Val, name == "href" || name == "xlink:href") {
+				if isHTMLURLAttribute(name) && !isSafeHTMLURL(pageURL, attr.Val, name == "href" || name == "xlink:href", validateURL) {
 					removed++
 					continue
 				}
@@ -624,7 +672,7 @@ func sanitizeHTMLChildren(parent *html.Node, pageURL *url.URL) int {
 			}
 			child.Attr = attributes
 		}
-		removed += sanitizeHTMLChildren(child, pageURL)
+		removed += sanitizeHTMLChildren(child, pageURL, validateURL)
 		child = next
 	}
 	return removed
@@ -648,7 +696,7 @@ func isHTMLURLAttribute(name string) bool {
 	}
 }
 
-func isSafeHTMLURL(pageURL *url.URL, raw string, allowMailto bool) bool {
+func isSafeHTMLURL(pageURL *url.URL, raw string, allowMailto bool, validateURL func(*url.URL) error) bool {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return true
@@ -672,7 +720,7 @@ func isSafeHTMLURL(pageURL *url.URL, raw string, allowMailto bool) bool {
 		return false
 	}
 	resolved := pageURL.ResolveReference(parsed)
-	return validateExternalHTTPURL(resolved) == nil
+	return validateURL != nil && validateURL(resolved) == nil
 }
 
 func extractMeta(root *html.Node) map[string]string {
@@ -864,6 +912,36 @@ func writeFileExclusive(path string, data []byte, perm os.FileMode) error {
 	}
 	if err := file.Close(); err != nil {
 		_ = os.Remove(path)
+		return err
+	}
+	return nil
+}
+
+func moveFileExclusive(source, destination string) error {
+	sourceFile, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+	sourceInfo, err := sourceFile.Stat()
+	if err != nil {
+		return err
+	}
+	destinationFile, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, sourceInfo.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(destinationFile, sourceFile); err != nil {
+		_ = destinationFile.Close()
+		_ = os.Remove(destination)
+		return err
+	}
+	if err := destinationFile.Close(); err != nil {
+		_ = os.Remove(destination)
+		return err
+	}
+	if err := os.Remove(source); err != nil {
+		_ = os.Remove(destination)
 		return err
 	}
 	return nil

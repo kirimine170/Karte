@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -42,8 +43,9 @@ func TestClipURLExtractsArticleAndDownloadsImages(t *testing.T) {
 
 	dataDir := t.TempDir()
 	service := Service{
-		DataDir: dataDir,
-		Client:  client,
+		DataDir:     dataDir,
+		Client:      client,
+		ResolveHost: publicTestResolver,
 		Now: func() time.Time {
 			return time.Date(2026, 6, 5, 10, 11, 12, 0, time.FixedZone("JST", 9*60*60))
 		},
@@ -127,7 +129,7 @@ func TestClipURLUsesUniqueSlug(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := (Service{DataDir: dataDir, Client: client}).ClipURL(context.Background(), ClipRequest{
+	result, err := testService(dataDir, client).ClipURL(context.Background(), ClipRequest{
 		URL:       "https://example.test/article",
 		ImageMode: ImageModeLink,
 	})
@@ -148,7 +150,7 @@ func TestClipURLKeepsMarkdownWhenImageDownloadFails(t *testing.T) {
 	})
 
 	dataDir := t.TempDir()
-	result, err := (Service{DataDir: dataDir, Client: client}).ClipURL(context.Background(), ClipRequest{
+	result, err := testService(dataDir, client).ClipURL(context.Background(), ClipRequest{
 		URL:       "https://example.test/article",
 		ImageMode: ImageModeDownload,
 	})
@@ -180,7 +182,7 @@ func TestClipURLSanitizesActiveContentAndUnsafeURLs(t *testing.T) {
 	})
 
 	dataDir := t.TempDir()
-	result, err := (Service{DataDir: dataDir, Client: client}).ClipURL(context.Background(), ClipRequest{
+	result, err := testService(dataDir, client).ClipURL(context.Background(), ClipRequest{
 		URL:       "https://example.test/article",
 		ImageMode: ImageModeLink,
 	})
@@ -201,6 +203,39 @@ func TestClipURLSanitizesActiveContentAndUnsafeURLs(t *testing.T) {
 	assertContains(t, markdown, "https://cdn.example.test/public.png")
 }
 
+func TestClipURLStripsHostnamesThatResolveToPrivateAddresses(t *testing.T) {
+	client := fakeClient(func(r *http.Request) *http.Response {
+		return htmlResponse(r, `<html><body><article><h1>DNS Boundary</h1>
+<a href="https://rebind.example.test/admin">private link</a>
+<img src="https://rebind.example.test/private.png">
+<img src="https://cdn.example.test/public.png">
+</article></body></html>`)
+	})
+	service := testService(t.TempDir(), client)
+	service.ResolveHost = func(_ context.Context, host string) ([]net.IP, error) {
+		if host == "rebind.example.test" {
+			return []net.IP{net.ParseIP("127.0.0.1")}, nil
+		}
+		return publicTestResolver(context.Background(), host)
+	}
+	result, err := service.ClipURL(context.Background(), ClipRequest{
+		URL:       "https://example.test/article",
+		ImageMode: ImageModeLink,
+	})
+	if err != nil {
+		t.Fatalf("ClipURL returned error: %v", err)
+	}
+	markdownBytes, err := os.ReadFile(filepath.Join(service.DataDir, filepath.FromSlash(result.MarkdownPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	markdown := string(markdownBytes)
+	if strings.Contains(markdown, "rebind.example.test") {
+		t.Fatalf("private DNS target survived sanitization:\n%s", markdown)
+	}
+	assertContains(t, markdown, "https://cdn.example.test/public.png")
+}
+
 func TestClipURLRejectsPrivatePageURLsBeforeRequest(t *testing.T) {
 	requests := 0
 	client := fakeClient(func(r *http.Request) *http.Response {
@@ -217,7 +252,7 @@ func TestClipURLRejectsPrivatePageURLsBeforeRequest(t *testing.T) {
 	}
 	for _, rawURL := range unsafeURLs {
 		t.Run(rawURL, func(t *testing.T) {
-			_, err := (Service{DataDir: t.TempDir(), Client: client}).ClipURL(context.Background(), ClipRequest{
+			_, err := testService(t.TempDir(), client).ClipURL(context.Background(), ClipRequest{
 				URL:       rawURL,
 				ImageMode: ImageModeNone,
 			})
@@ -241,7 +276,7 @@ func TestClipURLRejectsPrivateRedirectTarget(t *testing.T) {
 		resp.Request = finalRequest
 		return resp
 	})
-	_, err := (Service{DataDir: t.TempDir(), Client: client}).ClipURL(context.Background(), ClipRequest{
+	_, err := testService(t.TempDir(), client).ClipURL(context.Background(), ClipRequest{
 		URL:       "https://example.test/article",
 		ImageMode: ImageModeNone,
 	})
@@ -268,7 +303,7 @@ func TestClipURLDownloadsPublicAssetsButRejectsPrivateAssets(t *testing.T) {
 	})
 
 	dataDir := t.TempDir()
-	result, err := (Service{DataDir: dataDir, Client: client}).ClipURL(context.Background(), ClipRequest{
+	result, err := testService(dataDir, client).ClipURL(context.Background(), ClipRequest{
 		URL:       "https://example.test/article",
 		ImageMode: ImageModeDownload,
 	})
@@ -302,7 +337,7 @@ func TestClipURLUsesImageContentTypeForExtension(t *testing.T) {
 	})
 
 	dataDir := t.TempDir()
-	result, err := (Service{DataDir: dataDir, Client: client}).ClipURL(context.Background(), ClipRequest{
+	result, err := testService(dataDir, client).ClipURL(context.Background(), ClipRequest{
 		URL:       "https://example.test/article",
 		ImageMode: ImageModeDownload,
 	})
@@ -317,6 +352,44 @@ func TestClipURLUsesImageContentTypeForExtension(t *testing.T) {
 	imagePath := filepath.Join(dataDir, "content", "clips", "assets", "extensionless-image", "image-001.jpg")
 	if _, err := os.Stat(imagePath); err != nil {
 		t.Fatalf("expected JPEG extension derived from response content type: %v", err)
+	}
+}
+
+func TestClipURLDoesNotOverwriteExistingAssetDuringExtensionCorrection(t *testing.T) {
+	client := fakeClient(func(r *http.Request) *http.Response {
+		if r.URL.Path == "/image" {
+			return binaryResponse(r, http.StatusOK, "image/jpeg", []byte("new jpeg"))
+		}
+		return htmlResponse(r, `<html><body><article><h1>Collision</h1><img src="/image"></article></body></html>`)
+	})
+	dataDir := t.TempDir()
+	assetDir := filepath.Join(dataDir, "content", "clips", "assets", "collision")
+	if err := os.MkdirAll(assetDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	existingPath := filepath.Join(assetDir, "image-001.jpg")
+	if err := os.WriteFile(existingPath, []byte("existing jpeg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := testService(dataDir, client).ClipURL(context.Background(), ClipRequest{
+		URL:       "https://example.test/article",
+		ImageMode: ImageModeDownload,
+	})
+	if err != nil {
+		t.Fatalf("ClipURL returned error: %v", err)
+	}
+	if len(result.Warnings) == 0 {
+		t.Fatal("expected an asset collision warning")
+	}
+	existing, err := os.ReadFile(existingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(existing) != "existing jpeg" {
+		t.Fatalf("existing asset was overwritten: %q", existing)
+	}
+	if _, err := os.Stat(filepath.Join(assetDir, "image-001.img")); !os.IsNotExist(err) {
+		t.Fatalf("temporary image remained after collision: %v", err)
 	}
 }
 
@@ -367,7 +440,7 @@ func TestClipURLContainsGeneratedPathsWithinDataDir(t *testing.T) {
 		return htmlResponse(r, `<html><body><article><h1>../../outside</h1><p>Safe body.</p></article></body></html>`)
 	})
 	dataDir := t.TempDir()
-	result, err := (Service{DataDir: dataDir, Client: client}).ClipURL(context.Background(), ClipRequest{
+	result, err := testService(dataDir, client).ClipURL(context.Background(), ClipRequest{
 		URL:       "https://example.test/article",
 		ImageMode: ImageModeNone,
 		OutputDir: "../../outside",
@@ -394,7 +467,7 @@ func TestClipURLRejectsSymlinkEscape(t *testing.T) {
 	client := fakeClient(func(r *http.Request) *http.Response {
 		return htmlResponse(r, `<html><body><article><h1>Symlink Escape</h1><p>Safe body.</p></article></body></html>`)
 	})
-	_, err := (Service{DataDir: dataDir, Client: client}).ClipURL(context.Background(), ClipRequest{
+	_, err := testService(dataDir, client).ClipURL(context.Background(), ClipRequest{
 		URL:       "https://example.test/article",
 		ImageMode: ImageModeNone,
 	})
@@ -421,6 +494,14 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func fakeClient(fn func(*http.Request) *http.Response) *http.Client {
 	return &http.Client{Transport: roundTripFunc(fn)}
+}
+
+func testService(dataDir string, client *http.Client) Service {
+	return Service{DataDir: dataDir, Client: client, ResolveHost: publicTestResolver}
+}
+
+func publicTestResolver(context.Context, string) ([]net.IP, error) {
+	return []net.IP{net.ParseIP("93.184.216.34")}, nil
 }
 
 func htmlResponse(r *http.Request, body string) *http.Response {
