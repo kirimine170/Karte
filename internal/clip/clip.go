@@ -212,10 +212,16 @@ func (s Service) ClipURL(ctx context.Context, req ClipRequest) (ClipResult, erro
 	}
 	imageMap := map[string]string{}
 	if req.ImageMode == ImageModeDownload {
-		replacements, warnings := s.downloadImages(ctx, doc, page.URL, now, assetAbs, assetRel)
+		replacements, warnings, failedImages := s.downloadImages(ctx, doc, page.URL, now, assetAbs, assetRel)
 		doc.Warnings = append(doc.Warnings, warnings...)
 		for _, replacement := range replacements {
 			imageMap[replacement.Source] = replacement.Local
+		}
+		if len(failedImages) > 0 {
+			doc.ContentHTML, err = removeHTMLImages(doc.ContentHTML, page.URL, failedImages)
+			if err != nil {
+				return ClipResult{}, fmt.Errorf("remove unsafe or unavailable images: %w", err)
+			}
 		}
 	}
 
@@ -295,22 +301,23 @@ func (s Service) fetchPage(ctx context.Context, rawURL string) (fetchedPage, err
 	return fetchedPage{Body: body, URL: resp.Request.URL, Warnings: warnings}, nil
 }
 
-func (s Service) downloadImages(ctx context.Context, doc clipDocument, pageURL *url.URL, capturedAt time.Time, assetAbs, assetRel string) ([]imageReplacement, []string) {
+func (s Service) downloadImages(ctx context.Context, doc clipDocument, pageURL *url.URL, capturedAt time.Time, assetAbs, assetRel string) ([]imageReplacement, []string, map[string]struct{}) {
 	imageCandidates := extractImageCandidates(doc.ContentHTML, pageURL)
 	if len(imageCandidates) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err := os.MkdirAll(assetAbs, 0o755); err != nil {
-		return nil, []string{fmt.Sprintf("画像保存ディレクトリを作成できませんでした: %v", err)}
+		return nil, []string{fmt.Sprintf("画像保存ディレクトリを作成できませんでした: %v", err)}, imageCandidateURLs(imageCandidates)
 	}
 	if err := ensurePathInsideRoot(s.DataDir, assetAbs); err != nil {
-		return nil, []string{fmt.Sprintf("画像保存ディレクトリがdata directory外を指しています: %v", err)}
+		return nil, []string{fmt.Sprintf("画像保存ディレクトリがdata directory外を指しています: %v", err)}, imageCandidateURLs(imageCandidates)
 	}
 
 	client := s.httpClient()
 	replacements := make([]imageReplacement, 0, len(imageCandidates))
 	manifest := ImageManifest{Schema: ImageManifestSchema}
 	warnings := []string{}
+	failedImages := map[string]struct{}{}
 	for i, candidate := range imageCandidates {
 		urlExt := imageExt(candidate.ResolvedURL)
 		localName := fmt.Sprintf("image-%03d%s", i+1, urlExt)
@@ -318,6 +325,7 @@ func (s Service) downloadImages(ctx context.Context, doc clipDocument, pageURL *
 		capture, err := downloadImage(ctx, client, candidate.ResolvedURL, localAbs)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("画像のダウンロードに失敗しました: %s (%v)", candidate.ResolvedURL, err))
+			failedImages[candidate.ResolvedURL] = struct{}{}
 			continue
 		}
 		responseExt := imageExtFromContentType(capture.ContentType)
@@ -327,6 +335,7 @@ func (s Service) downloadImages(ctx context.Context, doc clipDocument, pageURL *
 			if err := moveFileExclusive(localAbs, finalAbs); err != nil {
 				_ = os.Remove(localAbs)
 				warnings = append(warnings, fmt.Sprintf("画像の拡張子を確定できませんでした: %s (%v)", candidate.ResolvedURL, err))
+				failedImages[candidate.ResolvedURL] = struct{}{}
 				continue
 			}
 			localName = finalName
@@ -356,7 +365,15 @@ func (s Service) downloadImages(ctx context.Context, doc clipDocument, pageURL *
 			warnings = append(warnings, fmt.Sprintf("画像メタデータmanifestを保存できませんでした: %v", err))
 		}
 	}
-	return replacements, warnings
+	return replacements, warnings, failedImages
+}
+
+func imageCandidateURLs(candidates []imageCandidate) map[string]struct{} {
+	urls := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		urls[candidate.ResolvedURL] = struct{}{}
+	}
+	return urls
 }
 
 func (s Service) now() time.Time {
@@ -644,6 +661,45 @@ func sanitizeHTMLForMarkdown(rawHTML string, pageURL *url.URL, validateURL func(
 		}
 	}
 	return rendered.String(), removed, nil
+}
+
+func removeHTMLImages(rawHTML string, pageURL *url.URL, blocked map[string]struct{}) (string, error) {
+	contextNode := &html.Node{Type: html.ElementNode, Data: "div", DataAtom: atom.Div}
+	nodes, err := html.ParseFragment(strings.NewReader(rawHTML), contextNode)
+	if err != nil {
+		return "", err
+	}
+	container := &html.Node{Type: html.ElementNode, Data: "div", DataAtom: atom.Div}
+	for _, node := range nodes {
+		container.AppendChild(node)
+	}
+	removeBlockedImageNodes(container, pageURL, blocked)
+	var rendered strings.Builder
+	for child := container.FirstChild; child != nil; child = child.NextSibling {
+		if err := html.Render(&rendered, child); err != nil {
+			return "", err
+		}
+	}
+	return rendered.String(), nil
+}
+
+func removeBlockedImageNodes(parent *html.Node, pageURL *url.URL, blocked map[string]struct{}) {
+	for child := parent.FirstChild; child != nil; {
+		next := child.NextSibling
+		if child.Type == html.ElementNode && child.Data == "img" {
+			source := firstAttr(child, "src")
+			if source == "" {
+				source = firstAttr(child, "data-src")
+			}
+			if _, shouldRemove := blocked[resolveURL(pageURL, source)]; shouldRemove {
+				parent.RemoveChild(child)
+				child = next
+				continue
+			}
+		}
+		removeBlockedImageNodes(child, pageURL, blocked)
+		child = next
+	}
 }
 
 func sanitizeHTMLChildren(parent *html.Node, pageURL *url.URL, validateURL func(*url.URL) error) int {

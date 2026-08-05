@@ -166,6 +166,13 @@ func TestClipURLKeepsMarkdownWhenImageDownloadFails(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dataDir, filepath.FromSlash(result.MarkdownPath))); err != nil {
 		t.Fatalf("markdown should still be written: %v", err)
 	}
+	markdown, err := os.ReadFile(filepath.Join(dataDir, filepath.FromSlash(result.MarkdownPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(markdown), "missing.png") {
+		t.Fatalf("failed remote image remained in Markdown:\n%s", markdown)
+	}
 }
 
 func TestClipURLSanitizesActiveContentAndUnsafeURLs(t *testing.T) {
@@ -326,6 +333,40 @@ func TestClipURLDownloadsPublicAssetsButRejectsPrivateAssets(t *testing.T) {
 		t.Fatalf("private asset URL survived sanitization:\n%s", markdownBytes)
 	}
 	assertContains(t, string(markdownBytes), "assets/asset-boundary/image-001.png")
+}
+
+func TestClipURLRemovesImageWhenDownloadRedirectsToPrivateAddress(t *testing.T) {
+	client := fakeClient(func(r *http.Request) *http.Response {
+		if r.URL.Path == "/redirect.png" {
+			resp := binaryResponse(r, http.StatusOK, "image/png", []byte("private image"))
+			finalRequest, err := http.NewRequest(http.MethodGet, "http://127.0.0.1/private.png", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Request = finalRequest
+			return resp
+		}
+		return htmlResponse(r, `<html><body><article><h1>Redirect Asset</h1><img src="https://cdn.example.test/redirect.png"></article></body></html>`)
+	})
+	dataDir := t.TempDir()
+	result, err := testService(dataDir, client).ClipURL(context.Background(), ClipRequest{
+		URL:       "https://example.test/article",
+		ImageMode: ImageModeDownload,
+	})
+	if err != nil {
+		t.Fatalf("ClipURL returned error: %v", err)
+	}
+	if len(result.Warnings) == 0 {
+		t.Fatal("expected unsafe redirect warning")
+	}
+	markdownBytes, err := os.ReadFile(filepath.Join(dataDir, filepath.FromSlash(result.MarkdownPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	markdown := string(markdownBytes)
+	if strings.Contains(markdown, "redirect.png") || strings.Contains(markdown, "127.0.0.1") {
+		t.Fatalf("unsafe redirect image remained in Markdown:\n%s", markdown)
+	}
 }
 
 func TestClipURLUsesImageContentTypeForExtension(t *testing.T) {
