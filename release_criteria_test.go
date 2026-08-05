@@ -72,7 +72,11 @@ func TestV1ReleaseCriteriaWorkflowsCanRunForCandidateSHA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count := strings.Count(string(backend), "      - 'RELEASE_CRITERIA_V1.md'"); count != 2 {
-		t.Errorf("Backend CI release criteria path occurs %d times, want push and pull_request", count)
+	triggerPaths := append(workflows, "RELEASE_CRITERIA_V1.md")
+	for _, triggerPath := range triggerPaths {
+		entry := "      - '" + triggerPath + "'"
+		if count := strings.Count(string(backend), entry); count != 2 {
+			t.Errorf("Backend CI path %s occurs %d times, want push and pull_request", triggerPath, count)
+		}
 	}
 }
