@@ -1,10 +1,12 @@
 name: Backend CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
       - '.github/workflows/test.yml'
+      - 'RELEASE_CRITERIA_V1.md'
       - '*.go'
       - 'cmd/**'
       - 'internal/**'
@@ -17,6 +19,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/test.yml'
+      - 'RELEASE_CRITERIA_V1.md'
       - '*.go'
       - 'cmd/**'
       - 'internal/**'

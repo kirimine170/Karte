@@ -49,3 +49,30 @@ func TestV1ReleaseCriteriaDefinesAllRequiredGates(t *testing.T) {
 		t.Error("release criteria must block publishing when any required gate is not PASS")
 	}
 }
+
+func TestV1ReleaseCriteriaWorkflowsCanRunForCandidateSHA(t *testing.T) {
+	workflows := []string{
+		".github/workflows/ci.yml",
+		".github/workflows/test.yml",
+		".github/workflows/asr-audio-ci.yml",
+		".github/workflows/frontend-ci.yml",
+		".github/workflows/frontend-e2e.yml",
+	}
+	for _, workflow := range workflows {
+		b, err := os.ReadFile(workflow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), "  workflow_dispatch:") {
+			t.Errorf("%s cannot be manually dispatched for a release candidate", workflow)
+		}
+	}
+
+	backend, err := os.ReadFile(".github/workflows/test.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(string(backend), "      - 'RELEASE_CRITERIA_V1.md'"); count != 2 {
+		t.Errorf("Backend CI release criteria path occurs %d times, want push and pull_request", count)
+	}
+}
