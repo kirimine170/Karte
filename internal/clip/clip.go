@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	readability "github.com/go-shiori/go-readability"
 	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 	"golang.org/x/net/html/charset"
 )
 
@@ -33,6 +35,9 @@ const (
 
 	ImageManifestFile   = ".webclip-images.json"
 	ImageManifestSchema = "karte.web_clip.images.v1"
+
+	maxPageBytes  = int64(12 * 1024 * 1024)
+	maxImageBytes = int64(20 * 1024 * 1024)
 )
 
 type ClipRequest struct {
@@ -114,7 +119,20 @@ type imageCapture struct {
 	OriginalFormat string
 }
 
-var nonSlugChar = regexp.MustCompile(`[^a-z0-9]+`)
+var (
+	nonSlugChar           = regexp.MustCompile(`[^a-z0-9]+`)
+	blockedRemoteNetworks = parseIPNetworks([]string{
+		"0.0.0.0/8",
+		"100.64.0.0/10",
+		"192.0.0.0/24",
+		"192.0.2.0/24",
+		"198.18.0.0/15",
+		"198.51.100.0/24",
+		"203.0.113.0/24",
+		"240.0.0.0/4",
+		"2001:db8::/32",
+	})
+)
 
 func (s Service) ClipURL(ctx context.Context, req ClipRequest) (ClipResult, error) {
 	if ctx == nil {
@@ -146,6 +164,14 @@ func (s Service) ClipURL(ctx context.Context, req ClipRequest) (ClipResult, erro
 		return ClipResult{}, err
 	}
 	doc.Warnings = append(page.Warnings, doc.Warnings...)
+	sanitizedHTML, removed, err := sanitizeHTMLForMarkdown(doc.ContentHTML, page.URL)
+	if err != nil {
+		return ClipResult{}, fmt.Errorf("sanitize article html: %w", err)
+	}
+	doc.ContentHTML = sanitizedHTML
+	if removed > 0 {
+		doc.Warnings = append(doc.Warnings, fmt.Sprintf("安全でないHTML要素またはURL属性を%d件除去しました", removed))
+	}
 
 	now := s.now()
 	slugBase := makeSlug(doc.Title)
@@ -157,8 +183,17 @@ func (s Service) ClipURL(ctx context.Context, req ClipRequest) (ClipResult, erro
 	}
 
 	contentRoot := filepath.Join(s.DataDir, "content", "clips")
+	if err := os.MkdirAll(s.DataDir, 0o755); err != nil {
+		return ClipResult{}, fmt.Errorf("prepare data directory: %w", err)
+	}
+	if err := ensurePathInsideRoot(s.DataDir, contentRoot); err != nil {
+		return ClipResult{}, fmt.Errorf("validate clips directory: %w", err)
+	}
 	if err := os.MkdirAll(contentRoot, 0o755); err != nil {
 		return ClipResult{}, fmt.Errorf("prepare clips directory: %w", err)
+	}
+	if err := ensurePathInsideRoot(s.DataDir, contentRoot); err != nil {
+		return ClipResult{}, fmt.Errorf("validate clips directory: %w", err)
 	}
 
 	markdownAbs, slug, err := uniqueMarkdownPath(contentRoot, slugBase)
@@ -168,6 +203,12 @@ func (s Service) ClipURL(ctx context.Context, req ClipRequest) (ClipResult, erro
 
 	assetRel := filepath.ToSlash(filepath.Join("assets", slug))
 	assetAbs := filepath.Join(contentRoot, "assets", slug)
+	if err := ensurePathInsideRoot(s.DataDir, markdownAbs); err != nil {
+		return ClipResult{}, fmt.Errorf("validate markdown path: %w", err)
+	}
+	if err := ensurePathInsideRoot(s.DataDir, assetAbs); err != nil {
+		return ClipResult{}, fmt.Errorf("validate asset path: %w", err)
+	}
 	imageMap := map[string]string{}
 	if req.ImageMode == ImageModeDownload {
 		replacements, warnings := s.downloadImages(ctx, doc, page.URL, now, assetAbs, assetRel)
@@ -184,7 +225,10 @@ func (s Service) ClipURL(ctx context.Context, req ClipRequest) (ClipResult, erro
 	articleMarkdown = strings.TrimSpace(rewriteMarkdownImages(articleMarkdown, imageMap, req.ImageMode))
 
 	markdown := buildMarkdown(doc, page.URL.String(), now, assetRel, articleMarkdown)
-	if err := os.WriteFile(markdownAbs, []byte(markdown), 0o644); err != nil {
+	if err := ensurePathInsideRoot(s.DataDir, markdownAbs); err != nil {
+		return ClipResult{}, fmt.Errorf("validate markdown path before write: %w", err)
+	}
+	if err := writeFileExclusive(markdownAbs, []byte(markdown), 0o644); err != nil {
 		return ClipResult{}, fmt.Errorf("write markdown: %w", err)
 	}
 
@@ -211,14 +255,11 @@ func (s Service) fetchPage(ctx context.Context, rawURL string) (fetchedPage, err
 	if err != nil {
 		return fetchedPage{}, fmt.Errorf("invalid url: %w", err)
 	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fetchedPage{}, fmt.Errorf("url must use http or https")
+	if err := validateExternalHTTPURL(parsed); err != nil {
+		return fetchedPage{}, fmt.Errorf("invalid url: %w", err)
 	}
 
-	client := s.Client
-	if client == nil {
-		client = &http.Client{Timeout: 20 * time.Second}
-	}
+	client := s.httpClient()
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 	if err != nil {
 		return fetchedPage{}, fmt.Errorf("create request: %w", err)
@@ -230,6 +271,12 @@ func (s Service) fetchPage(ctx context.Context, rawURL string) (fetchedPage, err
 		return fetchedPage{}, fmt.Errorf("fetch url: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.Request == nil || resp.Request.URL == nil {
+		return fetchedPage{}, errors.New("fetch url: response is missing the final request url")
+	}
+	if err := validateExternalHTTPURL(resp.Request.URL); err != nil {
+		return fetchedPage{}, fmt.Errorf("fetch url: unsafe redirect target: %w", err)
+	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fetchedPage{}, fmt.Errorf("fetch url: unexpected status %d", resp.StatusCode)
@@ -240,7 +287,7 @@ func (s Service) fetchPage(ctx context.Context, rawURL string) (fetchedPage, err
 		reader = resp.Body
 		warnings = append(warnings, "charset判定に失敗したためUTF-8として処理しました")
 	}
-	body, err := io.ReadAll(io.LimitReader(reader, 12*1024*1024))
+	body, err := readAllLimited(reader, maxPageBytes)
 	if err != nil {
 		return fetchedPage{}, fmt.Errorf("read response body: %w", err)
 	}
@@ -255,23 +302,35 @@ func (s Service) downloadImages(ctx context.Context, doc clipDocument, pageURL *
 	if err := os.MkdirAll(assetAbs, 0o755); err != nil {
 		return nil, []string{fmt.Sprintf("画像保存ディレクトリを作成できませんでした: %v", err)}
 	}
-
-	client := s.Client
-	if client == nil {
-		client = &http.Client{Timeout: 20 * time.Second}
+	if err := ensurePathInsideRoot(s.DataDir, assetAbs); err != nil {
+		return nil, []string{fmt.Sprintf("画像保存ディレクトリがdata directory外を指しています: %v", err)}
 	}
+
+	client := s.httpClient()
 	replacements := make([]imageReplacement, 0, len(imageCandidates))
 	manifest := ImageManifest{Schema: ImageManifestSchema}
 	warnings := []string{}
 	for i, candidate := range imageCandidates {
-		localName := fmt.Sprintf("image-%03d%s", i+1, imageExt(candidate.ResolvedURL))
+		urlExt := imageExt(candidate.ResolvedURL)
+		localName := fmt.Sprintf("image-%03d%s", i+1, urlExt)
 		localAbs := filepath.Join(assetAbs, localName)
-		localRel := filepath.ToSlash(filepath.Join(assetRel, localName))
 		capture, err := downloadImage(ctx, client, candidate.ResolvedURL, localAbs)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("画像のダウンロードに失敗しました: %s (%v)", candidate.ResolvedURL, err))
 			continue
 		}
+		responseExt := imageExtFromContentType(capture.ContentType)
+		if responseExt != urlExt {
+			finalName := fmt.Sprintf("image-%03d%s", i+1, responseExt)
+			finalAbs := filepath.Join(assetAbs, finalName)
+			if err := os.Rename(localAbs, finalAbs); err != nil {
+				_ = os.Remove(localAbs)
+				warnings = append(warnings, fmt.Sprintf("画像の拡張子を確定できませんでした: %s (%v)", candidate.ResolvedURL, err))
+				continue
+			}
+			localName = finalName
+		}
+		localRel := filepath.ToSlash(filepath.Join(assetRel, localName))
 		replacements = append(replacements, imageReplacement{Source: candidate.ResolvedURL, Local: localRel})
 		manifest.Images = append(manifest.Images, ImageManifestItem{
 			LocalPath:         filepath.ToSlash(filepath.Join("content", "clips", localRel)),
@@ -304,6 +363,134 @@ func (s Service) now() time.Time {
 		return s.Now()
 	}
 	return time.Now()
+}
+
+func (s Service) httpClient() *http.Client {
+	if s.Client == nil {
+		return newSafeHTTPClient()
+	}
+	client := *s.Client
+	if client.Timeout == 0 {
+		client.Timeout = 20 * time.Second
+	}
+	previousRedirectPolicy := client.CheckRedirect
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if err := validateExternalHTTPURL(req.URL); err != nil {
+			return fmt.Errorf("unsafe redirect target: %w", err)
+		}
+		if previousRedirectPolicy != nil {
+			return previousRedirectPolicy(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &client
+}
+
+func newSafeHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, fmt.Errorf("parse remote address: %w", err)
+		}
+		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+		if err != nil {
+			return nil, fmt.Errorf("resolve remote host: %w", err)
+		}
+		if len(ips) == 0 {
+			return nil, errors.New("remote host resolved to no addresses")
+		}
+		for _, ip := range ips {
+			if isUnsafeRemoteIP(ip) {
+				return nil, fmt.Errorf("remote host resolves to a non-public address: %s", ip)
+			}
+		}
+		var lastErr error
+		for _, ip := range ips {
+			conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			if err == nil {
+				return conn, nil
+			}
+			lastErr = err
+		}
+		return nil, lastErr
+	}
+	return &http.Client{
+		Transport: transport,
+		Timeout:   20 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if err := validateExternalHTTPURL(req.URL); err != nil {
+				return fmt.Errorf("unsafe redirect target: %w", err)
+			}
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			return nil
+		},
+	}
+}
+
+func validateExternalHTTPURL(parsed *url.URL) error {
+	if parsed == nil {
+		return errors.New("url is required")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return errors.New("url must use http or https")
+	}
+	if parsed.User != nil {
+		return errors.New("url credentials are not allowed")
+	}
+	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	if host == "" {
+		return errors.New("url host is required")
+	}
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".localdomain") || strings.HasSuffix(host, ".internal") || strings.HasSuffix(host, ".home.arpa") {
+		return fmt.Errorf("non-public host is not allowed: %s", host)
+	}
+	if ip := net.ParseIP(host); ip != nil && isUnsafeRemoteIP(ip) {
+		return fmt.Errorf("non-public address is not allowed: %s", ip)
+	}
+	return nil
+}
+
+func isUnsafeRemoteIP(ip net.IP) bool {
+	if ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+		return true
+	}
+	for _, network := range blockedRemoteNetworks {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseIPNetworks(rawCIDRs []string) []*net.IPNet {
+	networks := make([]*net.IPNet, 0, len(rawCIDRs))
+	for _, rawCIDR := range rawCIDRs {
+		_, network, err := net.ParseCIDR(rawCIDR)
+		if err != nil {
+			panic(fmt.Sprintf("invalid built-in CIDR %q: %v", rawCIDR, err))
+		}
+		networks = append(networks, network)
+	}
+	return networks
+}
+
+func readAllLimited(reader io.Reader, limit int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("response exceeds %d byte limit", limit)
+	}
+	return body, nil
 }
 
 func extractDocument(body []byte, pageURL *url.URL) (clipDocument, error) {
@@ -389,6 +576,103 @@ func fallbackBodyHTML(body []byte) (string, map[string]string, error) {
 		}
 	}
 	return b.String(), meta, nil
+}
+
+func sanitizeHTMLForMarkdown(rawHTML string, pageURL *url.URL) (string, int, error) {
+	contextNode := &html.Node{Type: html.ElementNode, Data: "div", DataAtom: atom.Div}
+	nodes, err := html.ParseFragment(strings.NewReader(rawHTML), contextNode)
+	if err != nil {
+		return "", 0, err
+	}
+	container := &html.Node{Type: html.ElementNode, Data: "div", DataAtom: atom.Div}
+	for _, node := range nodes {
+		container.AppendChild(node)
+	}
+	removed := sanitizeHTMLChildren(container, pageURL)
+	var rendered strings.Builder
+	for child := container.FirstChild; child != nil; child = child.NextSibling {
+		if err := html.Render(&rendered, child); err != nil {
+			return "", removed, err
+		}
+	}
+	return rendered.String(), removed, nil
+}
+
+func sanitizeHTMLChildren(parent *html.Node, pageURL *url.URL) int {
+	removed := 0
+	for child := parent.FirstChild; child != nil; {
+		next := child.NextSibling
+		if child.Type == html.ElementNode && isActiveHTMLElement(child.Data) {
+			parent.RemoveChild(child)
+			removed++
+			child = next
+			continue
+		}
+		if child.Type == html.ElementNode {
+			attributes := child.Attr[:0]
+			for _, attr := range child.Attr {
+				name := strings.ToLower(attr.Key)
+				if strings.HasPrefix(name, "on") || name == "style" || name == "srcdoc" || name == "srcset" {
+					removed++
+					continue
+				}
+				if isHTMLURLAttribute(name) && !isSafeHTMLURL(pageURL, attr.Val, name == "href" || name == "xlink:href") {
+					removed++
+					continue
+				}
+				attributes = append(attributes, attr)
+			}
+			child.Attr = attributes
+		}
+		removed += sanitizeHTMLChildren(child, pageURL)
+		child = next
+	}
+	return removed
+}
+
+func isActiveHTMLElement(name string) bool {
+	switch strings.ToLower(name) {
+	case "script", "style", "noscript", "iframe", "frame", "frameset", "object", "embed", "applet", "form", "input", "button", "select", "option", "textarea", "template", "svg", "math", "link", "meta", "base":
+		return true
+	default:
+		return false
+	}
+}
+
+func isHTMLURLAttribute(name string) bool {
+	switch name {
+	case "href", "src", "data-src", "poster", "action", "formaction", "xlink:href":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSafeHTMLURL(pageURL *url.URL, raw string, allowMailto bool) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return true
+	}
+	for _, r := range raw {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	if allowMailto && strings.HasPrefix(raw, "#") {
+		return true
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	if allowMailto && strings.EqualFold(parsed.Scheme, "mailto") {
+		return true
+	}
+	if pageURL == nil {
+		return false
+	}
+	resolved := pageURL.ResolveReference(parsed)
+	return validateExternalHTTPURL(resolved) == nil
 }
 
 func extractMeta(root *html.Node) map[string]string {
@@ -495,7 +779,14 @@ func imageCaption(img *html.Node) string {
 }
 
 func downloadImage(ctx context.Context, client *http.Client, imageURL, dest string) (imageCapture, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+	parsed, err := url.Parse(strings.TrimSpace(imageURL))
+	if err != nil {
+		return imageCapture{}, fmt.Errorf("invalid image url: %w", err)
+	}
+	if err := validateExternalHTTPURL(parsed); err != nil {
+		return imageCapture{}, fmt.Errorf("unsafe image url: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 	if err != nil {
 		return imageCapture{}, err
 	}
@@ -505,6 +796,12 @@ func downloadImage(ctx context.Context, client *http.Client, imageURL, dest stri
 		return imageCapture{}, err
 	}
 	defer resp.Body.Close()
+	if resp.Request == nil || resp.Request.URL == nil {
+		return imageCapture{}, errors.New("image response is missing the final request url")
+	}
+	if err := validateExternalHTTPURL(resp.Request.URL); err != nil {
+		return imageCapture{}, fmt.Errorf("unsafe image redirect target: %w", err)
+	}
 	capture := imageCapture{
 		HTTPStatus:     resp.StatusCode,
 		ContentType:    resp.Header.Get("Content-Type"),
@@ -515,16 +812,35 @@ func downloadImage(ctx context.Context, client *http.Client, imageURL, dest stri
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return capture, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
+	responseExt := imageExtFromContentType(resp.Header.Get("Content-Type"))
+	if responseExt == ".img" {
+		return capture, fmt.Errorf("unexpected content type %q", resp.Header.Get("Content-Type"))
+	}
+	if resp.ContentLength > maxImageBytes {
+		return capture, fmt.Errorf("image exceeds %d byte limit", maxImageBytes)
+	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return capture, err
 	}
-	file, err := os.Create(dest)
+	file, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return capture, err
 	}
-	defer file.Close()
-	_, err = io.Copy(file, io.LimitReader(resp.Body, 20*1024*1024))
-	return capture, err
+	written, copyErr := io.Copy(file, io.LimitReader(resp.Body, maxImageBytes+1))
+	closeErr := file.Close()
+	if copyErr != nil {
+		_ = os.Remove(dest)
+		return capture, copyErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(dest)
+		return capture, closeErr
+	}
+	if written > maxImageBytes {
+		_ = os.Remove(dest)
+		return capture, fmt.Errorf("image exceeds %d byte limit", maxImageBytes)
+	}
+	return capture, nil
 }
 
 func writeImageManifest(assetAbs string, manifest ImageManifest) error {
@@ -533,7 +849,24 @@ func writeImageManifest(assetAbs string, manifest ImageManifest) error {
 		return fmt.Errorf("marshal image manifest: %w", err)
 	}
 	data = append(data, '\n')
-	return os.WriteFile(filepath.Join(assetAbs, ImageManifestFile), data, 0o644)
+	return writeFileExclusive(filepath.Join(assetAbs, ImageManifestFile), data, 0o644)
+}
+
+func writeFileExclusive(path string, data []byte, perm os.FileMode) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return nil
 }
 
 func normalizedImageContentType(contentType, imageURL string) string {
@@ -559,7 +892,7 @@ func imageExt(rawURL string) string {
 	if err == nil {
 		ext := strings.ToLower(path.Ext(parsed.Path))
 		switch ext {
-		case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg":
+		case ".jpg", ".jpeg", ".png", ".gif", ".webp":
 			return ext
 		}
 	}
@@ -569,6 +902,25 @@ func imageExt(rawURL string) string {
 		}
 	}
 	return ".img"
+}
+
+func imageExtFromContentType(contentType string) string {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return ".img"
+	}
+	switch strings.ToLower(mediaType) {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	default:
+		return ".img"
+	}
 }
 
 func rewriteMarkdownImages(markdown string, images map[string]string, mode string) string {
@@ -688,6 +1040,52 @@ func resolveURL(base *url.URL, raw string) string {
 	return resolved.String()
 }
 
+func ensurePathInsideRoot(root, candidate string) error {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	candidateAbs, err := filepath.Abs(candidate)
+	if err != nil {
+		return err
+	}
+	lexicalRel, err := filepath.Rel(rootAbs, candidateAbs)
+	if err != nil || pathEscapesRoot(lexicalRel) {
+		return fmt.Errorf("path escapes data directory: %s", candidate)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return fmt.Errorf("resolve data directory: %w", err)
+	}
+	current := rootAbs
+	components := strings.Split(filepath.Clean(lexicalRel), string(filepath.Separator))
+	for _, component := range components {
+		if component == "." || component == "" {
+			continue
+		}
+		current = filepath.Join(current, component)
+		if _, err := os.Lstat(current); err != nil {
+			if os.IsNotExist(err) {
+				break
+			}
+			return err
+		}
+		resolvedCurrent, err := filepath.EvalSymlinks(current)
+		if err != nil {
+			return err
+		}
+		resolvedRel, err := filepath.Rel(resolvedRoot, resolvedCurrent)
+		if err != nil || pathEscapesRoot(resolvedRel) {
+			return fmt.Errorf("path escapes data directory through symlink: %s", candidate)
+		}
+	}
+	return nil
+}
+
+func pathEscapesRoot(relative string) bool {
+	return relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative)
+}
+
 func firstAttr(n *html.Node, name string) string {
 	for _, attr := range n.Attr {
 		if strings.EqualFold(attr.Key, name) {
@@ -731,6 +1129,8 @@ func textContent(n *html.Node) string {
 func yamlQuote(value string) string {
 	escaped := strings.ReplaceAll(value, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	escaped = strings.ReplaceAll(escaped, "\r", `\r`)
+	escaped = strings.ReplaceAll(escaped, "\n", `\n`)
 	return `"` + escaped + `"`
 }
 
