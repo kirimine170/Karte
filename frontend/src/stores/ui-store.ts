@@ -2,6 +2,7 @@ import { createStore } from 'zustand/vanilla';
 import type { UIState, Theme, ActiveTab } from '../types/ui-state';
 
 const THEME_STORAGE_KEY = 'karte-theme';
+const HARD_WRAP_STORAGE_KEY = 'karte-hard-wrap';
 
 function getInitialTheme(): Theme {
     if (typeof window === 'undefined') {
@@ -16,6 +17,17 @@ function getInitialTheme(): Theme {
         // Ignore storage errors (private mode, permissions).
     }
     return 'light';
+}
+
+function getInitialHardWrap(): boolean {
+    if (typeof window === 'undefined') {
+        return false;
+    }
+    try {
+        return localStorage.getItem(HARD_WRAP_STORAGE_KEY) === 'true';
+    } catch {
+        return false;
+    }
 }
 
 function applyThemeToDocument(theme: Theme): void {
@@ -41,6 +53,7 @@ interface UIStore extends UIState {
 }
 
 const initialTheme = getInitialTheme();
+const initialHardWrap = getInitialHardWrap();
 applyThemeToDocument(initialTheme);
 
 export const useUIStore = createStore<UIStore>((set, get) => ({
@@ -51,7 +64,7 @@ export const useUIStore = createStore<UIStore>((set, get) => ({
     workspaceMode: false,
     activeTab: 'editor',
     theme: initialTheme,
-    hardWrap: false,
+    hardWrap: initialHardWrap,
     statusMessage: '',
     statusClearTimer: null,
 
@@ -73,7 +86,14 @@ export const useUIStore = createStore<UIStore>((set, get) => ({
             // Ignore storage errors.
         }
     },
-    setHardWrap: (hardWrap) => set({ hardWrap }),
+    setHardWrap: (hardWrap) => {
+        set({ hardWrap });
+        try {
+            localStorage.setItem(HARD_WRAP_STORAGE_KEY, String(hardWrap));
+        } catch {
+            // Ignore storage errors (private mode, permissions).
+        }
+    },
     setStatusMessage: (message, duration = 3000) => {
         const { statusClearTimer } = get();
         if (statusClearTimer) {

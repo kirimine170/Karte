@@ -36,6 +36,7 @@ import (
 	gitvcs "karte/internal/git"
 	"karte/internal/markdown"
 	"karte/internal/printout"
+	"karte/internal/runtimepath"
 	"karte/internal/screenshot"
 	syncpkg "karte/internal/sync"
 	"karte/internal/webpchunk"
@@ -517,9 +518,32 @@ func (a *App) startup(ctx context.Context) {
 		}
 	}
 
-	// Initialize karte_data directory next to the application unless overridden above.
+	// Initialize the runtime data directory unless it was explicitly overridden
+	// or resolved to the development workspace above.
 	if a.dataDir == "" {
-		a.dataDir = filepath.Join(a.root, "karte_data")
+		defaultRoot, defaultDataDir, pathErr := runtimepath.DefaultDataDir(
+			goruntime.GOOS,
+			appPlacedDir,
+			os.Getenv("LOCALAPPDATA"),
+		)
+		if pathErr != nil {
+			runtime.LogError(ctx, fmt.Sprintf("Failed to resolve data directory: %v", pathErr))
+			return
+		}
+		a.root = defaultRoot
+		a.dataDir = defaultDataDir
+
+		if goruntime.GOOS == "windows" {
+			legacyDataDir := filepath.Join(appPlacedDir, "karte_data")
+			migrated, migrationErr := runtimepath.MigrateLegacyDataDir(legacyDataDir, a.dataDir)
+			if migrationErr != nil {
+				runtime.LogError(ctx, fmt.Sprintf("Failed to migrate legacy data directory: %v", migrationErr))
+				return
+			}
+			if migrated {
+				a.logInfo(fmt.Sprintf("Copied legacy data directory from %s to %s; source was preserved", legacyDataDir, a.dataDir))
+			}
+		}
 	}
 	if err := a.initializeDataDirectory(); err != nil {
 		runtime.LogError(ctx, fmt.Sprintf("Failed to initialize data directory: %v", err))
@@ -649,7 +673,7 @@ func (a *App) initializeDataDirectory() error {
 	return a.initializeGitRepository()
 }
 
-// findTemplatePath finds the karte_data_template path in .app bundle
+// findTemplatePath finds the packaged karte_data_template directory.
 func (a *App) findTemplatePath() string {
 	exePath, err := os.Executable()
 	if err != nil {
@@ -663,6 +687,15 @@ func (a *App) findTemplatePath() string {
 		appBundleDir := filepath.Dir(contentsDir) // .../Karte.app
 		templatePath := filepath.Join(appBundleDir, "Contents", "Resources", "karte_data_template")
 		if _, err := os.Stat(templatePath); err == nil {
+			return templatePath
+		}
+	}
+
+	for _, templatePath := range []string{
+		filepath.Join(exeDir, "karte_data_template"),
+		filepath.Join(exeDir, "resources", "karte_data_template"),
+	} {
+		if info, err := os.Stat(templatePath); err == nil && info.IsDir() {
 			return templatePath
 		}
 	}
@@ -5415,7 +5448,7 @@ func (a *App) GetPdfFileURL(pdfPath string) (string, error) {
 		return "", fmt.Errorf("failed to stat pdf file: %w", err)
 	}
 
-	urlPath := "/pdf/" + filepath.ToSlash(pdfPath)
+	urlPath := (&url.URL{Path: "/pdf/" + filepath.ToSlash(pdfPath)}).EscapedPath()
 	a.logInfo(fmt.Sprintf("PDF file URL: %s (size: %d bytes)", urlPath, info.Size()))
 	return urlPath, nil
 }

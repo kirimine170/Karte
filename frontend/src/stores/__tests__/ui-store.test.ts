@@ -3,6 +3,7 @@ import { useUIStore } from '../ui-store';
 
 describe('UIStore', () => {
     beforeEach(() => {
+        localStorage.clear();
         // 各テスト前にストアをリセット
         useUIStore.setState({
             sidebarVisible: true,
@@ -57,6 +58,16 @@ describe('UIStore', () => {
 
             expect(useUIStore.getState().theme).toBe('dark');
             expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+        });
+    });
+
+    describe('setHardWrap', () => {
+        it('persists the setting in local storage', () => {
+            const store = useUIStore.getState();
+            store.setHardWrap(true);
+
+            expect(useUIStore.getState().hardWrap).toBe(true);
+            expect(localStorage.getItem('karte-hard-wrap')).toBe('true');
         });
     });
 

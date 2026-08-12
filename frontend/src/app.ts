@@ -11,6 +11,7 @@ import { ImageGallery } from './components/image-gallery';
 import { CsvGallery } from './components/csv-gallery';
 import { getWailsAppAPI, getWailsRuntimeAPI } from './api/wails-api';
 import { useUIStore, useDocStore, useASRStore, useExportStore, useModalStore, useCustomCssStore, useBoardStore } from './stores/index';
+import { getASRStatusPollingDecision, markASRInitializationStopped } from './utils/asr-status';
 import type { BoardDocument, WailsAppAPI, WailsRuntimeAPI } from './types/wails-api';
 import type { Theme } from './types/ui-state';
 import { eventLogger } from './utils/event-logger';
@@ -444,12 +445,28 @@ export class App {
             useASRStore.getState().setStatus(status);
 
             // 初期化されていない場合は定期的にチェック
-            if (!status.initialized /*&& !status.initializing*/) {
+            if (status.initializing) {
+                const startedAt = Date.now();
                 const interval = setInterval(async () => {
-                    const newStatus = await this.api!.GetASRStatus();
-                    useASRStore.getState().setStatus(newStatus);
-                    if (newStatus.initialized) {
+                    try {
+                        const newStatus = await this.api!.GetASRStatus();
+                        const decision = getASRStatusPollingDecision(newStatus, Date.now() - startedAt);
+                        if (decision === 'timeout') {
+                            useASRStore.getState().setStatus(markASRInitializationStopped(newStatus));
+                            useUIStore.getState().setStatusMessage('ASRの初期化がタイムアウトしました', 5000);
+                            clearInterval(interval);
+                            return;
+                        }
+                        useASRStore.getState().setStatus(newStatus);
+                        if (decision === 'complete') {
+                            clearInterval(interval);
+                        }
+                    } catch (error) {
+                        const currentStatus = useASRStore.getState().status;
+                        useASRStore.getState().setStatus(markASRInitializationStopped(currentStatus));
+                        useUIStore.getState().setStatusMessage('ASRの初期化状態を取得できませんでした', 5000);
                         clearInterval(interval);
+                        console.error('Failed to poll ASR status:', error);
                     }
                 }, 2000);
             }

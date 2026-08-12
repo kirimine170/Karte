@@ -103,6 +103,19 @@ test，4 platform artifact，install smoke，checksum，rollback dry-runを確�
 
 このリリースは「最後に成功した main ブランチのビルド」を指すローリングリリースです。新しい main ビルドが成功するたびに同じタグと添付ファイルが更新されます。
 
+Windows v1候補は`.github/workflows/windows-release.yml`で別に生成します。このworkflowは公式
+FFmpeg 8.0.3の固定コミットを`--disable-gpl --disable-nonfree`でビルドし、Karte本体、
+FFmpeg、Sherpa／ONNX／PortAudio／MinGW DLL、初期データテンプレート、第三者ライセンス、
+runtime manifestを1つのZIPへまとめます。設定値は次のsecretを使用します。
+
+- `WINDOWS_CERTIFICATE_BASE64`: Authenticode証明書（PFX）のBase64
+- `WINDOWS_CERTIFICATE_PASSWORD`: PFXのパスワード
+
+tagからのbuildでは署名を必須とし、ZIP内の全EXE／DLLへ署名後に`signtool verify /pa`を実行します。
+手動dispatchだけは検証用のunsigned RCを許可できますが、v1公開条件には使用できません。workflowが
+作成するGitHub Releaseはdraftであり、[WindowsクリーンVM試験](WINDOWS_V1_SMOKE.md)を完了する
+まで公開しません。
+
 ## ビルド成果物
 
 ビルド成果物は、`build/targets.json` で指定された `artifactDir` に出力されます：
@@ -112,6 +125,15 @@ test，4 platform artifact，install smoke，checksum，rollback dry-runを確�
 - `darwin-amd64` → `dist/darwin-amd64/`
 - `windows` → `dist/windows/`
 - `linux` → `dist/linux/`
+
+Windowsのrelease buildでは`dist/windows/`に次も追加されます。
+
+- `ffmpeg.exe`とFFmpeg共有DLL
+- Sherpa／ONNX／PortAudio／MinGWランタイムDLL
+- `karte_data_template/`
+- `licenses/`
+- `runtime-manifest.json`
+- `SIGNING_STATUS.txt`（署名workflowで追加）
 
 ## 方法2: Wailsコマンドを直接使用
 
