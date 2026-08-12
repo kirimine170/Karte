@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -298,30 +299,61 @@ func StreamWavChunks(wavPath string, chunkSamples int, handler func(sampleRate i
 	return nil
 }
 
-// findFFmpeg tries to locate ffmpeg in PATH and common install locations.
+// findFFmpeg tries to locate the packaged ffmpeg, PATH, and common install
+// locations. Explicit overrides remain available for development and support.
 func findFFmpeg() (string, error) {
-	// 1) Respect explicit override
-	if custom := os.Getenv("FFMPEG_PATH"); custom != "" {
-		if _, err := os.Stat(custom); err == nil {
+	executable, _ := os.Executable()
+	return findFFmpegForOS(runtime.GOOS, executable, os.Getenv, exec.LookPath, regularFileExists)
+}
+
+func findFFmpegForOS(
+	goos string,
+	executable string,
+	getenv func(string) string,
+	lookPath func(string) (string, error),
+	fileExists func(string) bool,
+) (string, error) {
+	for _, envName := range []string{"KARTE_FFMPEG_BINARY", "FFMPEG_PATH"} {
+		if custom := strings.TrimSpace(getenv(envName)); custom != "" && fileExists(custom) {
 			return custom, nil
 		}
 	}
 
-	// 2) Normal PATH lookup
-	if p, err := exec.LookPath("ffmpeg"); err == nil {
-		return p, nil
-	}
-
-	// 3) Common macOS locations (Homebrew / Intel Homebrew)
-	common := []string{
-		"/opt/homebrew/bin/ffmpeg",
-		"/usr/local/bin/ffmpeg",
-	}
-	for _, c := range common {
-		if _, err := os.Stat(c); err == nil {
-			return c, nil
+	if executable != "" {
+		exeDir := filepath.Dir(executable)
+		binaryName := "ffmpeg"
+		if goos == "windows" {
+			binaryName = "ffmpeg.exe"
+		}
+		for _, candidate := range []string{
+			filepath.Join(exeDir, binaryName),
+			filepath.Join(exeDir, "bin", binaryName),
+			filepath.Join(exeDir, "runtime", "ffmpeg", "bin", binaryName),
+		} {
+			if fileExists(candidate) {
+				return candidate, nil
+			}
 		}
 	}
 
-	return "", fmt.Errorf("ffmpeg not found; install it (e.g. 'brew install ffmpeg') or set FFMPEG_PATH")
+	if p, err := lookPath("ffmpeg"); err == nil {
+		return p, nil
+	}
+
+	common := map[string][]string{
+		"darwin": {"/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"},
+		"linux":  {"/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"},
+	}
+	for _, candidate := range common[goos] {
+		if fileExists(candidate) {
+			return candidate, nil
+		}
+	}
+
+	return "", fmt.Errorf("ffmpeg not found; reinstall Karte or set KARTE_FFMPEG_BINARY/FFMPEG_PATH")
+}
+
+func regularFileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }

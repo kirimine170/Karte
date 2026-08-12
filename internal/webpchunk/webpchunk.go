@@ -281,6 +281,11 @@ func WriteChunkToWebP(webpPath, targetChunkID string, chunkData []byte) error {
 	if err := outFile.Close(); err != nil {
 		return fmt.Errorf("close temp file: %w", err)
 	}
+	// Windows does not allow replacing a file while the source handle remains
+	// open. Unix permits this, which previously hid the issue from Linux CI.
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close source webp before replacement: %w", err)
+	}
 
 	// Replace original file with new file
 	if err := os.Rename(webpPath+".tmp", webpPath); err != nil {
