@@ -87,3 +87,34 @@
 - name: status/stale
   color: cfd3d7
   description: 長期間更新なし
+
+# --- OS ---
+- name: os/windows
+  color: 0078d4
+  description: Windows固有またはWindowsでの検証が必要
+
+- name: os/macos
+  color: 555555
+  description: macOS固有またはmacOSでの検証が必要
+
+- name: os/linux
+  color: fcc624
+  description: Linux固有またはLinuxでの検証が必要
+
+# --- 外部ランタイム ---
+- name: prereq/browser
+  color: 4285f4
+  description: Edge／Chromeなどのブラウザーランタイムに依存
+
+- name: prereq/ffmpeg
+  color: 008000
+  description: FFmpegランタイムに依存
+
+- name: prereq/asr-runtime
+  color: 8e44ad
+  description: Sherpa／ONNX／PortAudioランタイムに依存
+
+# --- リリース ---
+- name: release/v1
+  color: 0e8a16
+  description: Karte v1のリリース条件に含まれる

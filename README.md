@@ -19,8 +19,8 @@ Karteは、Wailsフレームワークを使用して開発されたクロスプ�
 
 ### 前提条件
 
-- Go 1.23以上
-- Node.js 16以上
+- Go 1.25.0（`go.mod`を正本とする）
+- Node.js 22.13.0（`.node-version`を正本とする）
 - Wails CLI v2
 
 ### Wails CLIのインストール
@@ -35,10 +35,9 @@ go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
 埋め込みフォントとして`internal/pdf/fonts/NotoSansJP-Regular.ttf`を配置する。
 
-#### wkhtmltopdf.exeの配置
-
-wkhtmltopdf.exeをインストールし、`C:\\Program Files\\wkhtmltopdf\\bin\\wkhtmltopdf.exe`に配置する。  
-Download wkhtmltopdf [Downloadlink](https://wkhtmltopdf.org/downloads.html)
+PDF出力ではwkhtmltopdfを使用しません。Karte Rendererは明示設定、`PATH`、Windows標準の
+インストール先の順にEdge／Chromeを探索します。通常のWindows 11では追加インストールは不要です。
+詳細と診断方法は[Windowsガイド](windows.md)を参照してください。
 
 ### アプリケーションのビルド
 
@@ -79,7 +78,8 @@ wails dev
 ### アプリケーションの使用
 
 1. **プロジェクトの初期化**
-   - アプリケーションを起動すると、現在のディレクトリがプロジェクトルートとして使用されます
+   - Windowsでは`%LOCALAPPDATA%\Karte\karte_data`、macOS／Linuxでは従来どおりアプリケーション隣接の`karte_data`を使用します
+   - `KARTE_DATA_DIR`を設定すると保存先を明示的に上書きできます
    - `content/`ディレクトリにMarkdownファイルを配置してください
 
 2. **ファイルの編集**
@@ -115,7 +115,8 @@ wails dev
      - `sampleRate` は 16000 を推奨
 
 3. **依存コマンド**
-   - ffmpeg が PATH に必要です（例: `brew install ffmpeg`）
+   - Windowsの正式配布ZIPにはFFmpegが同梱されます。開発ビルドでは`KARTE_FFMPEG_BINARY`、
+     `FFMPEG_PATH`、または`PATH`で任意のFFmpegを指定できます
 
 4. **実行フロー**
    - 音声ファイルをドロップすると `audio-imported` イベント→ASR開始
@@ -164,6 +165,10 @@ karte-desktop/
 - **ACLメタデータ**: アクセス制御の統合管理
 
 ## 開発者向け情報
+
+Karte v1.0.0の公開可否は，[v1.0 release criteria](RELEASE_CRITERIA_V1.md)の
+機能，安全，互換性，配布，rollback gateで判定する．Required gateが1件でも
+`FAIL`または`BLOCKED`なら公開しない．
 
 ### アーキテクチャ
 

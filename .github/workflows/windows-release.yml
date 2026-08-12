@@ -1,0 +1,313 @@
+name: Windows signed release candidate
+
+on:
+  push:
+    tags:
+      - 'v1.0.0-rc.*'
+      - 'v1.0.0'
+  workflow_dispatch:
+    inputs:
+      allow_unsigned_rc:
+        description: 'Allow an unsigned manual RC artifact (never eligible for v1 publication)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FFMPEG_VERSION: '8.0.3'
+  FFMPEG_COMMIT: '3b9813e76f3d2a6663de825ccebbef3968d7a576'
+  FFMPEG_SOURCE_URL: 'https://github.com/FFmpeg/FFmpeg'
+
+jobs:
+  ffmpeg:
+    name: Build pinned LGPL FFmpeg
+    runs-on: windows-latest
+    steps:
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel
+            git
+            nasm
+            mingw-w64-x86_64-toolchain
+
+      - name: Build FFmpeg from the pinned source commit
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none "$FFMPEG_SOURCE_URL" ffmpeg-source
+          cd ffmpeg-source
+          git checkout --detach "$FFMPEG_COMMIT"
+          test "$(git rev-parse HEAD)" = "$FFMPEG_COMMIT"
+          ./configure \
+            --prefix="$PWD/../ffmpeg-runtime" \
+            --arch=x86_64 \
+            --target-os=mingw32 \
+            --enable-shared \
+            --disable-static \
+            --disable-gpl \
+            --disable-nonfree \
+            --disable-debug \
+            --disable-doc \
+            --disable-ffplay \
+            --disable-ffprobe \
+            --enable-ffmpeg
+          make -j2
+          make install
+          cp COPYING.LGPLv2.1 ../ffmpeg-runtime/COPYING.LGPLv2.1
+          ../ffmpeg-runtime/bin/ffmpeg.exe -version > ../ffmpeg-runtime/ffmpeg-version.txt
+          ../ffmpeg-runtime/bin/ffmpeg.exe -buildconf > ../ffmpeg-runtime/ffmpeg-buildconf.txt
+
+      - name: Verify FFmpeg license configuration
+        shell: pwsh
+        run: |
+          $configuration = Get-Content ffmpeg-runtime\ffmpeg-buildconf.txt -Raw
+          if ($configuration -notmatch '--disable-gpl' -or $configuration -notmatch '--disable-nonfree') {
+            throw 'FFmpeg was not built with the required LGPL-only configuration'
+          }
+          if (!(Test-Path ffmpeg-runtime\bin\ffmpeg.exe)) {
+            throw 'ffmpeg.exe was not produced'
+          }
+
+      - name: Upload FFmpeg runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-windows-x64-${{ env.FFMPEG_VERSION }}
+          path: ffmpeg-runtime
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-release:
+    name: Build, sign, and smoke-test Windows ZIP
+    needs: ffmpeg
+    runs-on: windows-latest
+    env:
+      GOFLAGS: -buildvcs=false
+      WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      ALLOW_UNSIGNED_RC: ${{ inputs.allow_unsigned_rc || 'false' }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: '.node-version'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Windows native build dependencies
+        shell: pwsh
+        run: |
+          C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed `
+            mingw-w64-x86_64-gcc `
+            mingw-w64-x86_64-pkg-config `
+            mingw-w64-x86_64-portaudio
+          'C:\msys64\mingw64\bin' | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          'PKG_CONFIG_PATH=C:\msys64\mingw64\lib\pkgconfig' | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          'CGO_ENABLED=1' | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Download dependencies and install Wails
+        shell: pwsh
+        run: |
+          go mod download
+          $wailsVersion = go list -m -f '{{.Version}}' github.com/wailsapp/wails/v2
+          go install "github.com/wailsapp/wails/v2/cmd/wails@$wailsVersion"
+          $sherpaDir = go list -m -f '{{.Dir}}' github.com/k2-fsa/sherpa-onnx-go-windows
+          $sherpaDllDir = Join-Path $sherpaDir 'lib\x86_64-pc-windows-gnu'
+          if (!(Test-Path $sherpaDllDir)) {
+            throw "sherpa runtime DLL directory not found: $sherpaDllDir"
+          }
+          $sherpaDllDir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Install and test frontend
+        working-directory: frontend
+        run: |
+          npm ci --no-audit
+          npm run typecheck
+          npm test -- --run
+          npm run build
+
+      - name: Run Windows regression tests
+        shell: pwsh
+        run: |
+          go test -count=1 github.com/kirimine170/KarteRenderer/...
+          go test -count=1 . ./cmd/buildmatrix ./internal/audio ./internal/runtimepath ./internal/screenshot ./internal/webpchunk
+
+      - name: Download FFmpeg runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: ffmpeg-windows-x64-${{ env.FFMPEG_VERSION }}
+          path: ffmpeg-runtime
+
+      - name: Fetch the pinned ONNX Runtime license
+        shell: pwsh
+        run: |
+          Invoke-WebRequest `
+            -Uri 'https://raw.githubusercontent.com/microsoft/onnxruntime/v1.27.0/LICENSE' `
+            -OutFile "$env:RUNNER_TEMP\ONNXRuntime-LICENSE.txt"
+          if (!(Test-Path "$env:RUNNER_TEMP\ONNXRuntime-LICENSE.txt")) {
+            throw 'ONNX Runtime license was not downloaded'
+          }
+
+      - name: Build Windows distribution
+        shell: pwsh
+        env:
+          KARTE_REQUIRE_FFMPEG: '1'
+          KARTE_FFMPEG_BINARY: ${{ github.workspace }}\ffmpeg-runtime\bin\ffmpeg.exe
+          KARTE_FFMPEG_RUNTIME_DIR: ${{ github.workspace }}\ffmpeg-runtime\bin
+          KARTE_FFMPEG_LICENSE_FILE: ${{ github.workspace }}\ffmpeg-runtime\COPYING.LGPLv2.1
+          KARTE_FFMPEG_SOURCE_URL: ${{ env.FFMPEG_SOURCE_URL }}
+          KARTE_FFMPEG_SOURCE_COMMIT: ${{ env.FFMPEG_COMMIT }}
+          KARTE_REQUIRE_RUNTIME_LICENSES: '1'
+          KARTE_ONNXRUNTIME_LICENSE_FILE: ${{ runner.temp }}\ONNXRuntime-LICENSE.txt
+          KARTE_PORTAUDIO_LICENSE_FILE: C:\msys64\mingw64\share\doc\portaudio\LICENSE.txt
+          KARTE_GCC_RUNTIME_LICENSE_DIR: C:\msys64\mingw64\share\licenses\gcc-libs
+        run: go run ./cmd/buildmatrix --targets windows --clean
+
+      - name: Sign and verify every packaged PE file
+        id: signing
+        shell: pwsh
+        run: |
+          $hasCertificate = ![string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_BASE64)
+          if (!$hasCertificate) {
+            if ($env:GITHUB_EVENT_NAME -ne 'workflow_dispatch' -or $env:ALLOW_UNSIGNED_RC -ne 'true') {
+              throw 'Code-signing secrets are required for tag builds and signed release candidates'
+            }
+            'UNSIGNED RC - NOT ELIGIBLE FOR v1 PUBLICATION' | Set-Content dist\windows\SIGNING_STATUS.txt -Encoding utf8
+            'signed=false' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            exit 0
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
+            throw 'WINDOWS_CERTIFICATE_PASSWORD is required when a signing certificate is configured'
+          }
+
+          $signTool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter signtool.exe -Recurse |
+            Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if ($null -eq $signTool) {
+            throw '64-bit signtool.exe was not found'
+          }
+
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'karte-signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+            $peFiles = Get-ChildItem dist\windows -Recurse -File | Where-Object { $_.Extension -in '.exe', '.dll' }
+            if (!$peFiles) {
+              throw 'No Windows PE files were found to sign'
+            }
+            foreach ($file in $peFiles) {
+              & $signTool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $certificatePath /p $env:WINDOWS_CERTIFICATE_PASSWORD $file.FullName
+              if ($LASTEXITCODE -ne 0) { throw "Signing failed: $($file.FullName)" }
+              & $signTool.FullName verify /pa /all $file.FullName
+              if ($LASTEXITCODE -ne 0) { throw "Signature verification failed: $($file.FullName)" }
+            }
+
+            $manifestPath = 'dist\windows\runtime-manifest.json'
+            if (!(Test-Path $manifestPath)) {
+              throw 'runtime-manifest.json was not packaged'
+            }
+            $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+            foreach ($entry in $manifest.files) {
+              $runtimePath = Join-Path 'dist\windows' $entry.name
+              if (!(Test-Path $runtimePath)) {
+                throw "Manifest runtime file was not packaged: $($entry.name)"
+              }
+              $entry.sha256 = (Get-FileHash -Algorithm SHA256 $runtimePath).Hash.ToLowerInvariant()
+            }
+            $ffmpegComponent = $manifest.components | Where-Object { $_.name -eq 'ffmpeg' } | Select-Object -First 1
+            if ($null -eq $ffmpegComponent) {
+              throw 'FFmpeg component is missing from runtime-manifest.json'
+            }
+            $ffmpegComponent.sha256 = (Get-FileHash -Algorithm SHA256 'dist\windows\ffmpeg.exe').Hash.ToLowerInvariant()
+            $manifest | ConvertTo-Json -Depth 8 | Set-Content $manifestPath -Encoding utf8
+
+            'SIGNED AND VERIFIED' | Set-Content dist\windows\SIGNING_STATUS.txt -Encoding utf8
+            'signed=true' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          } finally {
+            if (Test-Path $certificatePath) {
+              Remove-Item -LiteralPath $certificatePath -Force
+            }
+          }
+
+      - name: Launch packaged application smoke test
+        shell: pwsh
+        run: |
+          $executable = (Get-ChildItem dist\windows -Filter Karte.exe -Recurse | Select-Object -First 1).FullName
+          if ([string]::IsNullOrWhiteSpace($executable)) {
+            throw 'Karte.exe was not found in the distribution'
+          }
+          $smokeDataDir = Join-Path $env:RUNNER_TEMP 'Karte Smoke 日本語 🚀'
+          $env:KARTE_DATA_DIR = $smokeDataDir
+          $process = Start-Process -FilePath $executable -PassThru -WindowStyle Hidden
+          try {
+            Start-Sleep -Seconds 15
+            $process.Refresh()
+            if ($process.HasExited) {
+              throw "Karte exited during startup smoke test with code $($process.ExitCode)"
+            }
+            if (!(Test-Path $smokeDataDir)) {
+              throw "Karte did not initialize its data directory: $smokeDataDir"
+            }
+          } finally {
+            if (!$process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+            }
+          }
+
+      - name: Create ZIP and SHA-256 checksum
+        id: package
+        shell: pwsh
+        run: |
+          $zipName = if ('${{ steps.signing.outputs.signed }}' -eq 'true') { 'Karte-windows-amd64.zip' } else { 'Karte-windows-amd64-unsigned-rc.zip' }
+          Compress-Archive -Path dist\windows\* -DestinationPath $zipName -Force
+          $hash = (Get-FileHash -Algorithm SHA256 $zipName).Hash.ToLowerInvariant()
+          "$hash  $zipName" | Set-Content SHA256SUMS-windows.txt -Encoding ascii
+          "zip_name=$zipName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: Karte-windows-amd64-${{ github.sha }}
+          path: |
+            ${{ steps.package.outputs.zip_name }}
+            SHA256SUMS-windows.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create draft GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') && steps.signing.outputs.signed == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-rc.') }}
+          files: |
+            Karte-windows-amd64.zip
+            SHA256SUMS-windows.txt
+          body: |
+            Windows 11 x64 signed release candidate.
+
+            Publication remains blocked until the clean-VM checklist in `WINDOWS_V1_SMOKE.md` is complete.

@@ -30,3 +30,18 @@ area/devops:
       - any-glob-to-any-file:
           - ".github/**"
           - "scripts/**"
+
+os/windows:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*_windows.go"
+          - "**/*_windows_test.go"
+          - "windows.md"
+          - ".github/workflows/windows-release.yml"
+
+prereq/ffmpeg:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "internal/audio/**"
+          - "cmd/buildmatrix/**"
+          - ".github/workflows/windows-release.yml"

@@ -2,6 +2,24 @@
 
 このプロジェクトは、Goで実装されたビルドマトリックスタイツール（`cmd/buildmatrix/main.go`）を使用してビルドします。
 
+## Karte Renderer依存関係
+
+Markdown・Marp・PDFのレンダリングは、別リポジトリの
+[`kirimine170/Karte_renderer`](https://github.com/kirimine170/Karte_renderer)を使用します。
+`go.mod`では検証済みコミットのpseudo-versionを固定しているため、通常の
+`go mod download`とビルド時に自動取得されます。兄弟ディレクトリへのcloneは不要です。
+
+Karte Rendererの`main`が更新されたら、次のコマンドで依存の更新、依存モジュール自身の
+テスト、Karte全体のテストを続けて実行できます。
+
+```bash
+./scripts/update-karte-renderer.sh
+```
+
+リポジトリ名（`Karte_renderer`）と現在のGo module宣言（`KarteRenderer`）が異なるため、
+公開リポジトリの固定バージョンを`replace`で参照しています。将来module pathを統一して
+タグを公開した後は、通常のタグ付き`require`へ移行できます。
+
 ## ビルドマトリックスタイツール
 
 `buildmatrix` は、`build/targets.json` に定義された複数のプラットフォームを一度にビルドできるGoプログラムです。
@@ -72,6 +90,10 @@ PDF 出力では WebKit の `createPDFWithConfiguration:` を使うため、macO
 
 ## CI と配布用成果物
 
+v1.0.0の正式releaseでは，以下のrolling releaseだけで公開判定を行わない．
+[v1.0 release criteria](RELEASE_CRITERIA_V1.md)に従い，同一candidate SHAの
+test，4 platform artifact，install smoke，checksum，rollback dry-runを確認する．
+
 `.github/workflows/ci.yml` の `Desktop Build` は、PRでは Apple Silicon macOS / Intel macOS / Linux amd64 / Windows amd64 のビルド確認を行います。`main` への push で同じビルドがすべて成功すると、成果物を ZIP 化して GitHub Releases の `latest-main-successful-build` にアップロードします。
 
 - `Karte-macOS-apple-silicon.zip` - Apple Silicon macOS 版（録音 / ASR 依存を含む）
@@ -80,6 +102,19 @@ PDF 出力では WebKit の `createPDFWithConfiguration:` を使うため、macO
 - `Karte-windows-amd64.zip` - Windows amd64 版
 
 このリリースは「最後に成功した main ブランチのビルド」を指すローリングリリースです。新しい main ビルドが成功するたびに同じタグと添付ファイルが更新されます。
+
+Windows v1候補は`.github/workflows/windows-release.yml`で別に生成します。このworkflowは公式
+FFmpeg 8.0.3の固定コミットを`--disable-gpl --disable-nonfree`でビルドし、Karte本体、
+FFmpeg、Sherpa／ONNX／PortAudio／MinGW DLL、初期データテンプレート、第三者ライセンス、
+runtime manifestを1つのZIPへまとめます。設定値は次のsecretを使用します。
+
+- `WINDOWS_CERTIFICATE_BASE64`: Authenticode証明書（PFX）のBase64
+- `WINDOWS_CERTIFICATE_PASSWORD`: PFXのパスワード
+
+tagからのbuildでは署名を必須とし、ZIP内の全EXE／DLLへ署名後に`signtool verify /pa`を実行します。
+手動dispatchだけは検証用のunsigned RCを許可できますが、v1公開条件には使用できません。workflowが
+作成するGitHub Releaseはdraftであり、[WindowsクリーンVM試験](WINDOWS_V1_SMOKE.md)を完了する
+まで公開しません。
 
 ## ビルド成果物
 
@@ -90,6 +125,15 @@ PDF 出力では WebKit の `createPDFWithConfiguration:` を使うため、macO
 - `darwin-amd64` → `dist/darwin-amd64/`
 - `windows` → `dist/windows/`
 - `linux` → `dist/linux/`
+
+Windowsのrelease buildでは`dist/windows/`に次も追加されます。
+
+- `ffmpeg.exe`とFFmpeg共有DLL
+- Sherpa／ONNX／PortAudio／MinGWランタイムDLL
+- `karte_data_template/`
+- `licenses/`
+- `runtime-manifest.json`
+- `SIGNING_STATUS.txt`（署名workflowで追加）
 
 ## 方法2: Wailsコマンドを直接使用
 

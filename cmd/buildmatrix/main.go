@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -93,6 +94,12 @@ func main() {
 			}
 			if err := packageWindowsRuntimeDLLs(ctx, t.ArtifactDir); err != nil {
 				log.Fatalf("failed to package Windows runtime DLLs for %s: %v", t.Name, err)
+			}
+			if err := packageWindowsRuntimeLicenses(ctx, t.ArtifactDir); err != nil {
+				log.Fatalf("failed to package Windows runtime licenses for %s: %v", t.Name, err)
+			}
+			if err := packageWindowsFFmpeg(ctx, t.ArtifactDir); err != nil {
+				log.Fatalf("failed to package Windows FFmpeg for %s: %v", t.Name, err)
 			}
 		}
 
@@ -301,6 +308,199 @@ func packageWindowsRuntimeDLLs(ctx context.Context, artifactDir string) error {
 	return nil
 }
 
+func packageWindowsRuntimeLicenses(ctx context.Context, artifactDir string) error {
+	licenseDir := filepath.Join(artifactDir, "licenses")
+	if err := os.MkdirAll(licenseDir, 0o755); err != nil {
+		return fmt.Errorf("create Windows license directory: %w", err)
+	}
+
+	sherpaDir, err := goListModuleDir(ctx, "github.com/k2-fsa/sherpa-onnx-go-windows")
+	if err != nil {
+		return fmt.Errorf("locate sherpa-onnx-go-windows license: %w", err)
+	}
+	portAudioGoDir, err := goListModuleDir(ctx, "github.com/gordonklaus/portaudio")
+	if err != nil {
+		return fmt.Errorf("locate portaudio Go wrapper license: %w", err)
+	}
+	required := []struct {
+		source string
+		name   string
+	}{
+		{filepath.Join(sherpaDir, "LICENSE"), "sherpa-onnx-Apache-2.0.txt"},
+		{filepath.Join(portAudioGoDir, "LICENSE"), "gordonklaus-portaudio-MIT.txt"},
+	}
+	for _, item := range required {
+		if err := copyFile(item.source, filepath.Join(licenseDir, item.name)); err != nil {
+			return fmt.Errorf("copy %s: %w", item.name, err)
+		}
+	}
+
+	optional := []struct {
+		envName string
+		name    string
+	}{
+		{"KARTE_ONNXRUNTIME_LICENSE_FILE", "ONNXRuntime-MIT.txt"},
+		{"KARTE_PORTAUDIO_LICENSE_FILE", "PortAudio-MIT.txt"},
+	}
+	for _, item := range optional {
+		source := strings.TrimSpace(os.Getenv(item.envName))
+		if source == "" {
+			if os.Getenv("KARTE_REQUIRE_RUNTIME_LICENSES") == "1" {
+				return fmt.Errorf("%s is required for release packaging", item.envName)
+			}
+			continue
+		}
+		if err := copyFile(source, filepath.Join(licenseDir, item.name)); err != nil {
+			return fmt.Errorf("copy %s: %w", item.name, err)
+		}
+	}
+
+	gccLicenseDir := strings.TrimSpace(os.Getenv("KARTE_GCC_RUNTIME_LICENSE_DIR"))
+	if gccLicenseDir == "" {
+		if os.Getenv("KARTE_REQUIRE_RUNTIME_LICENSES") == "1" {
+			return errors.New("KARTE_GCC_RUNTIME_LICENSE_DIR is required for release packaging")
+		}
+		return nil
+	}
+	entries, err := os.ReadDir(gccLicenseDir)
+	if err != nil {
+		return fmt.Errorf("read GCC runtime license directory: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		target := filepath.Join(licenseDir, "GCC-runtime-"+entry.Name()+".txt")
+		if err := copyFile(filepath.Join(gccLicenseDir, entry.Name()), target); err != nil {
+			return fmt.Errorf("copy GCC runtime license %s: %w", entry.Name(), err)
+		}
+	}
+	return nil
+}
+
+type windowsRuntimeManifest struct {
+	SchemaVersion int                    `json:"schemaVersion"`
+	Components    []windowsRuntimeBinary `json:"components"`
+	Files         []windowsRuntimeFile   `json:"files"`
+}
+
+type windowsRuntimeBinary struct {
+	Name               string `json:"name"`
+	Version            string `json:"version"`
+	SourceURL          string `json:"sourceUrl"`
+	SourceCommit       string `json:"sourceCommit"`
+	License            string `json:"license"`
+	SHA256             string `json:"sha256"`
+	BuildConfiguration string `json:"buildConfiguration"`
+}
+
+type windowsRuntimeFile struct {
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256"`
+}
+
+func packageWindowsFFmpeg(ctx context.Context, artifactDir string) error {
+	binary := strings.TrimSpace(os.Getenv("KARTE_FFMPEG_BINARY"))
+	if binary == "" {
+		binary = strings.TrimSpace(os.Getenv("FFMPEG_PATH"))
+	}
+	if binary == "" {
+		if os.Getenv("KARTE_REQUIRE_FFMPEG") == "1" {
+			return errors.New("KARTE_FFMPEG_BINARY is required for release packaging")
+		}
+		fmt.Println("WARN: KARTE_FFMPEG_BINARY is not set; development artifact will not contain ffmpeg.exe")
+		return nil
+	}
+	if info, err := os.Stat(binary); err != nil || info.IsDir() {
+		return fmt.Errorf("FFmpeg binary is not a regular file: %s", binary)
+	}
+
+	destination := filepath.Join(artifactDir, "ffmpeg.exe")
+	if err := copyFile(binary, destination); err != nil {
+		return fmt.Errorf("copy FFmpeg binary: %w", err)
+	}
+	packagedFiles := []string{destination}
+	if runtimeDir := strings.TrimSpace(os.Getenv("KARTE_FFMPEG_RUNTIME_DIR")); runtimeDir != "" {
+		entries, err := os.ReadDir(runtimeDir)
+		if err != nil {
+			return fmt.Errorf("read FFmpeg runtime directory: %w", err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".dll") {
+				continue
+			}
+			source := filepath.Join(runtimeDir, entry.Name())
+			target := filepath.Join(artifactDir, entry.Name())
+			if err := copyFile(source, target); err != nil {
+				return fmt.Errorf("copy FFmpeg runtime %s: %w", entry.Name(), err)
+			}
+			packagedFiles = append(packagedFiles, target)
+		}
+	}
+	licenseFile := strings.TrimSpace(os.Getenv("KARTE_FFMPEG_LICENSE_FILE"))
+	if licenseFile == "" {
+		return errors.New("KARTE_FFMPEG_LICENSE_FILE is required when bundling FFmpeg")
+	}
+	licenseDir := filepath.Join(artifactDir, "licenses")
+	if err := os.MkdirAll(licenseDir, 0o755); err != nil {
+		return fmt.Errorf("create license directory: %w", err)
+	}
+	if err := copyFile(licenseFile, filepath.Join(licenseDir, "FFmpeg-LGPL-2.1.txt")); err != nil {
+		return fmt.Errorf("copy FFmpeg license: %w", err)
+	}
+
+	versionOutput, err := exec.CommandContext(ctx, destination, "-version").Output()
+	if err != nil {
+		return fmt.Errorf("read FFmpeg version: %w", err)
+	}
+	version := strings.TrimSpace(strings.SplitN(string(versionOutput), "\n", 2)[0])
+	buildOutput, err := exec.CommandContext(ctx, destination, "-buildconf").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("read FFmpeg build configuration: %w: %s", err, strings.TrimSpace(string(buildOutput)))
+	}
+	configuration := strings.TrimSpace(string(buildOutput))
+	content, err := os.ReadFile(destination)
+	if err != nil {
+		return fmt.Errorf("hash FFmpeg binary: %w", err)
+	}
+	digest := sha256.Sum256(content)
+	manifest := windowsRuntimeManifest{
+		SchemaVersion: 1,
+		Components: []windowsRuntimeBinary{{
+			Name:               "ffmpeg",
+			Version:            version,
+			SourceURL:          strings.TrimSpace(os.Getenv("KARTE_FFMPEG_SOURCE_URL")),
+			SourceCommit:       strings.TrimSpace(os.Getenv("KARTE_FFMPEG_SOURCE_COMMIT")),
+			License:            "LGPL-2.1-or-later",
+			SHA256:             fmt.Sprintf("%x", digest),
+			BuildConfiguration: configuration,
+		}},
+	}
+	for _, packagedFile := range packagedFiles {
+		packagedContent, err := os.ReadFile(packagedFile)
+		if err != nil {
+			return fmt.Errorf("hash packaged FFmpeg file %s: %w", packagedFile, err)
+		}
+		packagedDigest := sha256.Sum256(packagedContent)
+		manifest.Files = append(manifest.Files, windowsRuntimeFile{
+			Name:   filepath.Base(packagedFile),
+			SHA256: fmt.Sprintf("%x", packagedDigest),
+		})
+	}
+	if manifest.Components[0].SourceURL == "" || manifest.Components[0].SourceCommit == "" {
+		return errors.New("KARTE_FFMPEG_SOURCE_URL and KARTE_FFMPEG_SOURCE_COMMIT are required when bundling FFmpeg")
+	}
+	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode Windows runtime manifest: %w", err)
+	}
+	manifestJSON = append(manifestJSON, '\n')
+	if err := os.WriteFile(filepath.Join(artifactDir, "runtime-manifest.json"), manifestJSON, 0o644); err != nil {
+		return fmt.Errorf("write Windows runtime manifest: %w", err)
+	}
+	return nil
+}
+
 func copyExistingDLL(src, artifactDir string) error {
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("required DLL not found %s: %w", src, err)
@@ -323,7 +523,7 @@ func packageTemplateIntoArtifact(projectRoot, artifactDir string) error {
 	if fi, err := os.Stat(templateSource); err != nil || !fi.IsDir() {
 		return nil
 	}
-	templateTarget := filepath.Join(artifactDir, "karte_data")
+	templateTarget := filepath.Join(artifactDir, "karte_data_template")
 	if err := os.MkdirAll(templateTarget, 0o755); err != nil {
 		return fmt.Errorf("create template target %s: %w", templateTarget, err)
 	}

@@ -14,6 +14,7 @@ const mockApi = {
 
 describe('EditorLayout', () => {
     beforeEach(() => {
+        vi.clearAllMocks();
         clearLogs();
         
         useUIStore.setState({
@@ -110,5 +111,22 @@ describe('EditorLayout', () => {
         expectLogContainsSequence([
             { component: 'EditorLayout', action: 'recording-start' }
         ]);
+    });
+
+    it('keeps hardwrap enabled after saving with Ctrl+S', async () => {
+        const editorLayout = new EditorLayout(mockApi);
+        editorLayout.init();
+        useUIStore.getState().setHardWrap(true);
+
+        document.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 's',
+            ctrlKey: true,
+            bubbles: true,
+            cancelable: true,
+        }));
+
+        await vi.waitFor(() => expect(mockApi.SaveFile).toHaveBeenCalledWith('content/test.md', '# Test'));
+        expect(useUIStore.getState().hardWrap).toBe(true);
+        editorLayout.destroy();
     });
 });

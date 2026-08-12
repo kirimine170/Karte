@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/ci.yml'
+      - '.node-version'
       - '**/*.go'
       - 'frontend/**'
       - 'build/**'
       - 'scripts/package-macos-runtime.sh'
+      - 'testdata/renderer-contract/**'
       - 'templates/**'
       - 'themes/**'
       - 'wails.json'
@@ -18,10 +20,12 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/ci.yml'
+      - '.node-version'
       - '**/*.go'
       - 'frontend/**'
       - 'build/**'
       - 'scripts/package-macos-runtime.sh'
+      - 'testdata/renderer-contract/**'
       - 'templates/**'
       - 'themes/**'
       - 'wails.json'
@@ -76,18 +80,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          lfs: true
+          # PR verification only needs source and LFS pointer files. Main
+          # artifacts still require the real model assets.
+          lfs: ${{ github.event_name != 'pull_request' }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version-file: go.mod
           cache: true
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version-file: '.node-version'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
@@ -157,6 +163,16 @@ jobs:
           mkdir -p frontend/dist
           touch frontend/dist/.placeholder
 
+      - name: Run Renderer dependency and contract tests
+        run: |
+          go test github.com/kirimine170/KarteRenderer/...
+          go test . -run 'Test(KarteRendererDependencyContractFixtures|ExportHTMLToPDFWithRendererUsesTemporaryHTMLInput)$'
+
+      - name: Run Windows regression tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: go test . ./internal/audio ./internal/runtimepath ./internal/screenshot ./internal/webpchunk
+
       - name: Prepare font file for Windows build
         if: runner.os == 'Windows'
         run: |
@@ -186,7 +202,10 @@ jobs:
         run: go run ./cmd/buildmatrix --targets ${{ matrix.target }} --clean
 
       - name: Bundle and verify macOS runtime dependencies
-        if: runner.os == 'macOS'
+        # This release-only check requires the full LFS-hosted ASR models.
+        # PR builds still compile/package the app while the repository's LFS
+        # budget is unavailable; main builds must fetch and verify real models.
+        if: runner.os == 'macOS' && github.event_name != 'pull_request'
         run: ./scripts/package-macos-runtime.sh "${{ matrix.artifact_path }}/Karte.app" "${{ matrix.target }}"
 
       - name: Archive artifact (macOS)

@@ -1,16 +1,19 @@
 name: Frontend E2E
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
       - '.github/workflows/frontend-e2e.yml'
+      - '.node-version'
       - 'frontend/tests/**/*.e2e.*'
       - 'frontend/playwright.config.*'
   pull_request:
     branches: [main]
     paths:
       - '.github/workflows/frontend-e2e.yml'
+      - '.node-version'
       - 'frontend/tests/**/*.e2e.*'
       - 'frontend/playwright.config.*'
 
@@ -32,7 +35,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version-file: '.node-version'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
