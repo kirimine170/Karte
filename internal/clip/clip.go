@@ -262,7 +262,8 @@ func (s Service) fetchPage(ctx context.Context, rawURL string) (fetchedPage, err
 	if err != nil {
 		return fetchedPage{}, fmt.Errorf("invalid url: %w", err)
 	}
-	if err := validateExternalHTTPURL(parsed); err != nil {
+	validateURL := s.externalURLValidator(ctx)
+	if err := validateURL(parsed); err != nil {
 		return fetchedPage{}, fmt.Errorf("invalid url: %w", err)
 	}
 
@@ -281,7 +282,7 @@ func (s Service) fetchPage(ctx context.Context, rawURL string) (fetchedPage, err
 	if resp.Request == nil || resp.Request.URL == nil {
 		return fetchedPage{}, errors.New("fetch url: response is missing the final request url")
 	}
-	if err := validateExternalHTTPURL(resp.Request.URL); err != nil {
+	if err := validateURL(resp.Request.URL); err != nil {
 		return fetchedPage{}, fmt.Errorf("fetch url: unsafe redirect target: %w", err)
 	}
 
@@ -314,6 +315,7 @@ func (s Service) downloadImages(ctx context.Context, doc clipDocument, pageURL *
 	}
 
 	client := s.httpClient()
+	validateURL := s.externalURLValidator(ctx)
 	replacements := make([]imageReplacement, 0, len(imageCandidates))
 	manifest := ImageManifest{Schema: ImageManifestSchema}
 	warnings := []string{}
@@ -322,7 +324,7 @@ func (s Service) downloadImages(ctx context.Context, doc clipDocument, pageURL *
 		urlExt := imageExt(candidate.ResolvedURL)
 		localName := fmt.Sprintf("image-%03d%s", i+1, urlExt)
 		localAbs := filepath.Join(assetAbs, localName)
-		capture, err := downloadImage(ctx, client, candidate.ResolvedURL, localAbs)
+		capture, err := downloadImage(ctx, client, candidate.ResolvedURL, localAbs, validateURL)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("画像のダウンロードに失敗しました: %s (%v)", candidate.ResolvedURL, err))
 			failedImages[candidate.ResolvedURL] = struct{}{}
@@ -393,7 +395,7 @@ func (s Service) httpClient() *http.Client {
 	}
 	previousRedirectPolicy := client.CheckRedirect
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if err := validateExternalHTTPURL(req.URL); err != nil {
+		if err := s.externalURLValidator(req.Context())(req.URL); err != nil {
 			return fmt.Errorf("unsafe redirect target: %w", err)
 		}
 		if previousRedirectPolicy != nil {
@@ -882,12 +884,15 @@ func imageCaption(img *html.Node) string {
 	return ""
 }
 
-func downloadImage(ctx context.Context, client *http.Client, imageURL, dest string) (imageCapture, error) {
+func downloadImage(ctx context.Context, client *http.Client, imageURL, dest string, validateURL func(*url.URL) error) (imageCapture, error) {
 	parsed, err := url.Parse(strings.TrimSpace(imageURL))
 	if err != nil {
 		return imageCapture{}, fmt.Errorf("invalid image url: %w", err)
 	}
-	if err := validateExternalHTTPURL(parsed); err != nil {
+	if validateURL == nil {
+		validateURL = validateExternalHTTPURL
+	}
+	if err := validateURL(parsed); err != nil {
 		return imageCapture{}, fmt.Errorf("unsafe image url: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
@@ -903,7 +908,7 @@ func downloadImage(ctx context.Context, client *http.Client, imageURL, dest stri
 	if resp.Request == nil || resp.Request.URL == nil {
 		return imageCapture{}, errors.New("image response is missing the final request url")
 	}
-	if err := validateExternalHTTPURL(resp.Request.URL); err != nil {
+	if err := validateURL(resp.Request.URL); err != nil {
 		return imageCapture{}, fmt.Errorf("unsafe image redirect target: %w", err)
 	}
 	capture := imageCapture{

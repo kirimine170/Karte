@@ -273,6 +273,31 @@ func TestClipURLRejectsPrivatePageURLsBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestClipURLRejectsCustomClientHostResolvingToPrivateAddressBeforeRequest(t *testing.T) {
+	requests := 0
+	service := testService(t.TempDir(), fakeClient(func(r *http.Request) *http.Response {
+		requests++
+		return htmlResponse(r, `<html><body><article><h1>Unexpected</h1></article></body></html>`)
+	}))
+	service.ResolveHost = func(_ context.Context, host string) ([]net.IP, error) {
+		if host == "rebind.example.test" {
+			return []net.IP{net.ParseIP("127.0.0.1")}, nil
+		}
+		return publicTestResolver(context.Background(), host)
+	}
+
+	_, err := service.ClipURL(context.Background(), ClipRequest{
+		URL:       "https://rebind.example.test/article",
+		ImageMode: ImageModeNone,
+	})
+	if err == nil {
+		t.Fatal("expected private DNS page target to be rejected")
+	}
+	if requests != 0 {
+		t.Fatalf("private DNS page target reached the custom HTTP client %d times", requests)
+	}
+}
+
 func TestClipURLRejectsPrivateRedirectTarget(t *testing.T) {
 	client := fakeClient(func(r *http.Request) *http.Response {
 		resp := htmlResponse(r, `<html><body><article><h1>Redirected</h1></article></body></html>`)
@@ -441,7 +466,7 @@ func TestDownloadImageRejectsOversizedAndNonImageResponses(t *testing.T) {
 			return binaryResponse(r, http.StatusOK, "image/png", body)
 		})
 		dest := filepath.Join(t.TempDir(), "oversized.png")
-		if _, err := downloadImage(context.Background(), client, "https://images.example.test/oversized", dest); err == nil {
+		if _, err := downloadImage(context.Background(), client, "https://images.example.test/oversized", dest, validateExternalHTTPURL); err == nil {
 			t.Fatal("expected oversized image to be rejected")
 		}
 		if _, err := os.Stat(dest); !os.IsNotExist(err) {
@@ -454,7 +479,7 @@ func TestDownloadImageRejectsOversizedAndNonImageResponses(t *testing.T) {
 			return binaryResponse(r, http.StatusOK, "text/html", []byte("<script>alert(1)</script>"))
 		})
 		dest := filepath.Join(t.TempDir(), "not-image.img")
-		if _, err := downloadImage(context.Background(), client, "https://images.example.test/not-image", dest); err == nil {
+		if _, err := downloadImage(context.Background(), client, "https://images.example.test/not-image", dest, validateExternalHTTPURL); err == nil {
 			t.Fatal("expected non-image response to be rejected")
 		}
 		if _, err := os.Stat(dest); !os.IsNotExist(err) {
@@ -467,7 +492,7 @@ func TestDownloadImageRejectsOversizedAndNonImageResponses(t *testing.T) {
 			return binaryResponse(r, http.StatusOK, "image/svg+xml", []byte(`<svg onload="alert(1)"></svg>`))
 		})
 		dest := filepath.Join(t.TempDir(), "active.svg")
-		if _, err := downloadImage(context.Background(), client, "https://images.example.test/active.svg", dest); err == nil {
+		if _, err := downloadImage(context.Background(), client, "https://images.example.test/active.svg", dest, validateExternalHTTPURL); err == nil {
 			t.Fatal("expected active SVG response to be rejected")
 		}
 		if _, err := os.Stat(dest); !os.IsNotExist(err) {
