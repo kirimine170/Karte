@@ -55,3 +55,16 @@ func TestDecodeDIBRejectsTruncatedPixels(t *testing.T) {
 		t.Fatal("expected truncated DIB error")
 	}
 }
+
+func TestDecodeDIBRejectsDimensionsThatOverflowPixelSize(t *testing.T) {
+	dib := make([]byte, 40)
+	binary.LittleEndian.PutUint32(dib[0:4], 40)
+	binary.LittleEndian.PutUint32(dib[4:8], uint32(^uint32(0)>>1))
+	binary.LittleEndian.PutUint32(dib[8:12], uint32(^uint32(0)>>1))
+	binary.LittleEndian.PutUint16(dib[12:14], 1)
+	binary.LittleEndian.PutUint16(dib[14:16], 32)
+
+	if _, err := decodeDIB(dib); err == nil {
+		t.Fatal("expected oversized DIB dimensions to be rejected")
+	}
+}

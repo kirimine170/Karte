@@ -22,6 +22,7 @@ const (
 	clipboardFormatDIB         = 8
 	bitmapCompressionRGB       = 0
 	bitmapCompressionBitfields = 3
+	maxClipboardDIBBytes       = 512 << 20
 	windowsCaptureTimeout      = 2 * time.Minute
 )
 
@@ -129,7 +130,7 @@ func readClipboardDIB() ([]byte, error) {
 	}
 	defer procGlobalUnlock.Call(handle)
 
-	if size > uintptr(^uint(0)>>1) {
+	if size > maxClipboardDIBBytes || size > uintptr(^uint(0)>>1) {
 		return nil, fmt.Errorf("clipboard DIB is too large: %d bytes", size)
 	}
 	data := make([]byte, int(size))
@@ -164,17 +165,23 @@ func decodeDIB(data []byte) (image.Image, error) {
 	if headerSize == 40 && compression == bitmapCompressionBitfields {
 		pixelOffset += 12
 	}
-	height := rawHeight
-	bottomUp := height > 0
-	if height < 0 {
-		height = -height
+	height64 := int64(rawHeight)
+	bottomUp := height64 > 0
+	if height64 < 0 {
+		height64 = -height64
 	}
-	stride := ((width*bitsPerPixel + 31) / 32) * 4
-	required := pixelOffset + stride*height
-	if required > len(data) {
-		return nil, fmt.Errorf("DIB pixel data is truncated: need %d bytes, have %d", required, len(data))
+	if uint64(height64) > uint64(^uint(0)>>1) {
+		return nil, fmt.Errorf("DIB height is too large: %d", height64)
 	}
-
+	height := int(height64)
+	stride64 := ((uint64(width)*uint64(bitsPerPixel) + 31) / 32) * 4
+	if stride64 == 0 || stride64 > uint64(^uint(0)>>1) {
+		return nil, fmt.Errorf("DIB row stride is too large: %d", stride64)
+	}
+	stride := int(stride64)
+	if pixelOffset > len(data) || height > (len(data)-pixelOffset)/stride {
+		return nil, fmt.Errorf("DIB pixel data is truncated for %dx%d image", width, height)
+	}
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	bytesPerPixel := bitsPerPixel / 8
 	for y := 0; y < height; y++ {
