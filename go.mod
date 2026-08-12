@@ -5,14 +5,14 @@ go 1.25.0
 require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 	github.com/chai2010/webp v1.4.0
-	github.com/go-git/go-git/v5 v5.19.1
+	github.com/go-git/go-git/v5 v5.19.2
 	github.com/go-shiori/go-readability v0.0.0-20251205110129-5db1dc9836f0
 	github.com/gordonklaus/portaudio v0.0.0-20250206071425-98a94950218b
 	github.com/k2-fsa/sherpa-onnx-go-macos v1.13.4
 	github.com/k2-fsa/sherpa-onnx-go-windows v1.13.4
 	github.com/kirimine170/KarteRenderer v0.0.0
 	github.com/wailsapp/wails/v2 v2.13.0
-	github.com/yuin/goldmark v1.8.4
+	github.com/yuin/goldmark v1.8.5
 	golang.org/x/image v0.44.0
 	golang.org/x/net v0.57.0
 	gopkg.in/yaml.v3 v3.0.1
