@@ -80,7 +80,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          lfs: true
+          # PR verification only needs source and LFS pointer files. Main
+          # artifacts still require the real model assets.
+          lfs: ${{ github.event_name != 'pull_request' }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
