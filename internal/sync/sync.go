@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -127,7 +128,7 @@ func (sm *SyncManager) GetPeers() []Peer {
 
 // ConnectToPeer connects to a peer
 func (sm *SyncManager) ConnectToPeer(address string, port int) error {
-	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", address, port))
+	conn, err := net.Dial("tcp", peerEndpoint(address, port))
 	if err != nil {
 		return fmt.Errorf("failed to connect to peer: %v", err)
 	}
@@ -150,6 +151,10 @@ func (sm *SyncManager) ConnectToPeer(address string, port int) error {
 
 	runtime.LogInfo(sm.ctx, fmt.Sprintf("Connected to peer %s", peer.Name))
 	return nil
+}
+
+func peerEndpoint(address string, port int) string {
+	return net.JoinHostPort(address, strconv.Itoa(port))
 }
 
 // BroadcastFileChange broadcasts a file change to all peers
