@@ -89,3 +89,24 @@ func TestApplyFileChangeWriteError(t *testing.T) {
 		t.Fatalf("file manager not called correctly: %+v", fm)
 	}
 }
+
+func TestPeerEndpointSupportsIPv4HostnamesAndIPv6(t *testing.T) {
+	tests := []struct {
+		name    string
+		address string
+		port    int
+		want    string
+	}{
+		{name: "IPv4", address: "192.0.2.10", port: 8080, want: "192.0.2.10:8080"},
+		{name: "hostname", address: "peer.example", port: 443, want: "peer.example:443"},
+		{name: "IPv6", address: "2001:db8::1", port: 8080, want: "[2001:db8::1]:8080"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := peerEndpoint(tc.address, tc.port); got != tc.want {
+				t.Fatalf("peerEndpoint(%q, %d) = %q, want %q", tc.address, tc.port, got, tc.want)
+			}
+		})
+	}
+}
