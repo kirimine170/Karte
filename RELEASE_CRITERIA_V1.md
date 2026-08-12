@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | macOS Apple Silicon | macOS 11以降，arm64 | `Karte-macOS-apple-silicon.zip` |
 | macOS Intel | macOS 11以降，amd64 | `Karte-macOS-intel.zip` |
-| Windows | Windows amd64 | `Karte-windows-amd64.zip` |
+| Windows | Windows 11 x64 | `Karte-windows-amd64.zip`（Authenticode署名済み） |
 | Linux | Ubuntu 22.04互換，amd64 | `Karte-linux-amd64.zip` |
 
 `latest-main-successful-build`は開発用rolling releaseであり，v1.0.0の配布証跡には使用しない．v1.0.0はimmutable tagとreleaseを使用する．
@@ -56,6 +56,8 @@
 | D-02 | 4つのrequired artifactが同一candidateから生成され，非空で，SHA-256 checksumが公開される． | Artifact URL，file size，checksum manifest． | 欠落，0 byte，SHA不一致，candidate不一致がある． |
 | D-03 | 各archiveをclean環境へ展開／installし，launch，workspace open，save，preview，export，終了を確認する．macOS runtime dependencyも検証する． | Platform別smoke logとscreenshot． | 起動警告を回避できない，runtime欠落，基本操作失敗がある． |
 | D-04 | `wails.json`，tag，release名，release noteが`1.0.0`で一致し，license，既知の制約，install／upgrade／rollback手順が公開される． | Release draft URLと内容review． | version不一致，license／手順欠落，rolling tagだけで配布する． |
+| D-05 | Windows ZIPの全EXE／DLLがAuthenticode署名済みで`signtool verify /pa`に成功し，同梱FFmpegのversion，source commit，LGPL build configuration，SHA-256，licenseをmanifestで確認できる． | Windows release workflow URL，署名検証log，`runtime-manifest.json`． | `Unknown publisher`，未署名PE，GPL／nonfree有効化，FFmpeg／license／manifest欠落がある． |
+| D-06 | 開発ツール未導入のWindows 11 x64で，Unicode／OneDrive path，PDF，WebP KART chunk，音声変換，ASR，画面／範囲captureを含むclean-VM checklistを完走する． | `WINDOWS_V1_SMOKE.md`の全項目とVM証跡． | 手動外部tool導入，欠落DLL，権限error，主要flow未確認がある． |
 
 ### Rollback
 

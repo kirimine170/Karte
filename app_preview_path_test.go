@@ -5,6 +5,8 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,6 +47,37 @@ func TestPreviewMarkdownForPathKeepsMissingRelativeImagesUnchanged(t *testing.T)
 	}
 	if strings.Contains(html, `/image/content/clips/assets/example/missing.png`) {
 		t.Fatalf("missing image should not be rewritten, got:\n%s", html)
+	}
+}
+
+func TestPDFAssetHandlerSupportsUnicodeAndOneDrivePaths(t *testing.T) {
+	dataDir := t.TempDir()
+	relativePath := filepath.Join("content", "OneDrive - 研究室", "日本語 メモ😀.pdf")
+	absolutePath := filepath.Join(dataDir, relativePath)
+	if err := os.MkdirAll(filepath.Dir(absolutePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte("%PDF-1.4\n%%EOF\n")
+	if err := os.WriteFile(absolutePath, want, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{dataDir: dataDir}
+	urlPath, err := app.GetPdfFileURL(filepath.ToSlash(relativePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, urlPath, nil)
+	response := httptest.NewRecorder()
+	app.createAssetHandler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET %s returned %d: %s", urlPath, response.Code, response.Body.String())
+	}
+	if got := response.Body.Bytes(); string(got) != string(want) {
+		t.Fatalf("unexpected PDF response: %q", got)
+	}
+	if contentType := response.Header().Get("Content-Type"); contentType != "application/pdf" {
+		t.Fatalf("Content-Type = %q, want application/pdf", contentType)
 	}
 }
 

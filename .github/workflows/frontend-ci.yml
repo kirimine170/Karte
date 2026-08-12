@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/frontend-ci.yml'
+      - '.node-version'
       - 'frontend/**'
       - '!frontend/tests/**/*.e2e.*'
       - '!frontend/playwright.config.*'
@@ -13,6 +14,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/frontend-ci.yml'
+      - '.node-version'
       - 'frontend/**'
       - '!frontend/tests/**/*.e2e.*'
       - '!frontend/playwright.config.*'
@@ -23,7 +25,11 @@ concurrency:
 
 jobs:
   frontend:
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest]
     defaults:
       run:
         shell: bash
@@ -35,7 +41,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version-file: '.node-version'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 

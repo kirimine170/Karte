@@ -76,6 +76,8 @@ github.com/kevinburke/ssh_config v1.2.0 h1:x584FjTGwHzMwvHx18PXxbBVzfnxogHaAReU4
 github.com/kevinburke/ssh_config v1.2.0/go.mod h1:CT57kijsi8u/K/BOFA39wgDQJ9CxiF4nAY/ojJ6r6mM=
 github.com/kirimine170/Karte_renderer v0.0.0-20260801160039-ede38ba276cd h1:9M1I+vpqknHYpuYeTDYuGhdQ/bpVwaJmrygFMarxywM=
 github.com/kirimine170/Karte_renderer v0.0.0-20260801160039-ede38ba276cd/go.mod h1:aLBQ8kzhmrunl2svgagHhIWuVK1uzF4Wr5rzNchS4uQ=
+github.com/kirimine170/Karte_renderer v0.0.0-20260812100243-30e5dfbab03f h1:cDh8trboaViCOhroXzjOEzygYA4Fgt2LUTXJIqvSx90=
+github.com/kirimine170/Karte_renderer v0.0.0-20260812100243-30e5dfbab03f/go.mod h1:aLBQ8kzhmrunl2svgagHhIWuVK1uzF4Wr5rzNchS4uQ=
 github.com/klauspost/cpuid/v2 v2.3.0 h1:S4CRMLnYUhGeDFDqkGriYKdfoFlDnMtqTiI/sFzhA9Y=
 github.com/klauspost/cpuid/v2 v2.3.0/go.mod h1:hqwkgyIinND0mEev00jJYCxPNVRVXFQeu1XKlok6oO0=
 github.com/kr/pretty v0.1.0/go.mod h1:dAy3ld7l9f0ibDNOQOHHMYYIIbhfbHSm3C4ZsoJORNo=
