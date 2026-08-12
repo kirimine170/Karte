@@ -202,7 +202,10 @@ jobs:
         run: go run ./cmd/buildmatrix --targets ${{ matrix.target }} --clean
 
       - name: Bundle and verify macOS runtime dependencies
-        if: runner.os == 'macOS'
+        # This release-only check requires the full LFS-hosted ASR models.
+        # PR builds still compile/package the app while the repository's LFS
+        # budget is unavailable; main builds must fetch and verify real models.
+        if: runner.os == 'macOS' && github.event_name != 'pull_request'
         run: ./scripts/package-macos-runtime.sh "${{ matrix.artifact_path }}/Karte.app" "${{ matrix.target }}"
 
       - name: Archive artifact (macOS)
