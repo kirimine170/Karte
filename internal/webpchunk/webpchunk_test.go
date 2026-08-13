@@ -40,4 +40,22 @@ func TestTagsRoundTripInUnicodeWindowsPath(t *testing.T) {
 	if len(content) < 12 || string(content[:4]) != "RIFF" || string(content[8:12]) != "WEBP" {
 		t.Fatalf("invalid RIFF/WebP header: %q", content)
 	}
+
+	// A second write exercises replacement of an existing KART chunk. On
+	// Windows this fails if either the source WebP or temporary output is still
+	// open when os.Rename replaces the destination.
+	replacement := []string{"更新後", "OneDrive 資料", "🚀"}
+	if err := WriteTagsToWebP(path, replacement); err != nil {
+		t.Fatalf("replace KART chunk: %v", err)
+	}
+	got, err = ReadTagsFromWebP(path)
+	if err != nil {
+		t.Fatalf("read replaced KART chunk: %v", err)
+	}
+	if !reflect.DeepEqual(got, replacement) {
+		t.Fatalf("replaced tags = %#v, want %#v", got, replacement)
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("temporary replacement file remains, stat error = %v", err)
+	}
 }

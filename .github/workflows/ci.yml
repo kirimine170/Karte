@@ -171,7 +171,13 @@ jobs:
       - name: Run Windows regression tests
         if: runner.os == 'Windows'
         shell: pwsh
-        run: go test . ./internal/audio ./internal/runtimepath ./internal/screenshot ./internal/webpchunk
+        run: |
+          Write-Host "Windows regression environment"
+          Write-Host "OS: $([System.Environment]::OSVersion.VersionString)"
+          Write-Host "Go: $(go version)"
+          Write-Host "Node: $(node --version)"
+          Write-Host "Wails: $(wails version)"
+          go test -count=1 -v . ./internal/audio ./internal/runtimepath ./internal/screenshot ./internal/webpchunk
 
       - name: Prepare font file for Windows build
         if: runner.os == 'Windows'
