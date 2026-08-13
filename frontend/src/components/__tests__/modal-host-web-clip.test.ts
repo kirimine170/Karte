@@ -4,6 +4,7 @@ import { ModalHost } from '../modal-host';
 import { useDocStore, useModalStore, useUIStore } from '../../stores/index';
 
 const mockApi = {
+    CreateNewFile: vi.fn(),
     ClipURL: vi.fn(),
     GetFileList: vi.fn(),
     LoadFile: vi.fn(),
@@ -124,6 +125,25 @@ describe('ModalHost Web Clip', () => {
         await waitFor(() => expect(useDocStore.getState().currentPath).toBe('content/clips/example.md'));
         expect(useDocStore.getState().markdownContent).toBe('# Example');
         expect(useModalStore.getState().webClipModal.visible).toBe(false);
+    });
+
+    it('renders the preview after creating a new file', async () => {
+        mockApi.CreateNewFile.mockResolvedValue(true);
+        mockApi.GetFileList.mockResolvedValue([{ path: 'content/new-note.md', title: 'New Note' }]);
+        mockApi.LoadFile.mockResolvedValue('# New Note');
+        mockApi.PreviewMarkdown.mockResolvedValue('<h1>New Note</h1>');
+
+        const host = new ModalHost(mockApi);
+        host.init();
+        useModalStore.getState().showFilenameModal();
+        useModalStore.getState().setFilenameModalValue('new-note');
+
+        document.getElementById('createFileBtn')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+        await waitFor(() => expect(mockApi.CreateNewFile).toHaveBeenCalledWith('new-note'));
+        await waitFor(() => expect(useDocStore.getState().currentPath).toBe('content/new-note.md'));
+        expect(useDocStore.getState().markdownContent).toBe('# New Note');
+        expect(useDocStore.getState().previewHtml).toContain('<h1>New Note</h1>');
     });
 
     it('keeps the modal open and shows warnings when import fails', async () => {
