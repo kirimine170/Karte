@@ -578,6 +578,12 @@ export class ModalHost extends BaseComponent {
             useDocStore.getState().setMarkdownContent(content);
             useDocStore.getState().clearUnsavedChanges();
 
+            const { prepared, html } = await renderMarkdownPreview(content, this.api, newFilePath);
+            const theme = useUIStore.getState().theme;
+            const customCss = useCustomCssStore.getState().customCss;
+            const withCss = applyCustomCssToHtml(prepared, html, customCss, theme);
+            useDocStore.getState().setPreviewHtml(convertTimestampsToLinks(withCss));
+
             useUIStore.getState().setStatusMessage('新規ファイルを作成しました', 2000);
         } catch (error) {
             console.error('Failed to create file:', error);
