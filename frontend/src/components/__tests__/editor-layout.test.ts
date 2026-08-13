@@ -10,6 +10,7 @@ const mockApi = {
     StartRecording: vi.fn().mockResolvedValue(undefined),
     StopRecording: vi.fn().mockResolvedValue('audio.wav'),
     GetAudioFileURL: vi.fn().mockResolvedValue('http://localhost/audio.wav'),
+    GetASRStatus: vi.fn().mockResolvedValue({ initialized: true, initializing: false }),
 } as any;
 
 describe('EditorLayout', () => {
@@ -111,6 +112,22 @@ describe('EditorLayout', () => {
         expectLogContainsSequence([
             { component: 'EditorLayout', action: 'recording-start' }
         ]);
+    });
+
+    it('synchronizes the ASR status before recording', async () => {
+        useASRStore.setState({
+            status: { initialized: false, initializing: true },
+        });
+        mockApi.GetASRStatus.mockResolvedValueOnce({ initialized: true, initializing: false });
+
+        const editorLayout = new EditorLayout(mockApi);
+        editorLayout.init();
+        const recordingBtnFooter = document.getElementById('recordingBtnFooter') as HTMLButtonElement;
+        recordingBtnFooter.click();
+
+        await vi.waitFor(() => expect(mockApi.StartRecording).toHaveBeenCalled());
+        expect(useASRStore.getState().status).toEqual({ initialized: true, initializing: false });
+        editorLayout.destroy();
     });
 
     it('keeps hardwrap enabled after saving with Ctrl+S', async () => {
