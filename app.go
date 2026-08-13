@@ -554,7 +554,7 @@ func (a *App) startup(ctx context.Context) {
 	go func() {
 		if err := a.initASRService(); err != nil {
 			runtime.LogError(ctx, fmt.Sprintf("Failed to initialize ASR service: %v", err))
-		} else if a.asrService != nil {
+		} else if a.asrService != nil || a.realtimeService != nil {
 			a.logInfo("ASR service initialized")
 		}
 		close(a.asrInitDone)
@@ -578,6 +578,10 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.asrService != nil {
 		a.asrService.Close()
 		a.asrService = nil
+	}
+	if a.realtimeService != nil {
+		a.realtimeService.Close()
+		a.realtimeService = nil
 	}
 	// Cleanup recording if active
 	if a.isRecording {
@@ -3523,6 +3527,10 @@ func (a *App) startTranscriptionJob(absAudioPath, relAudioPath string) {
 		a.logInfo("ASR service not configured; skipping transcription")
 		return
 	}
+	if a.asrService == nil {
+		a.logInfo("Offline ASR service not configured; skipping file transcription for streaming model")
+		return
+	}
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
@@ -3832,6 +3840,16 @@ func (a *App) initASRService() error {
 		return nil
 	}
 	cfg.EnsureModelPathsAbsolute(a.dataDir)
+	if cfg.IsStreamingModel() {
+		svc, err := asr.NewRealtimeServiceWithLogger(cfg, func(format string, args ...interface{}) {
+			a.logInfo(fmt.Sprintf("[RealtimeASR] "+format, args...))
+		})
+		if err != nil {
+			return err
+		}
+		a.realtimeService = svc
+		return nil
+	}
 	svc, err := asr.NewService(cfg)
 	if err != nil {
 		return err
@@ -3841,7 +3859,7 @@ func (a *App) initASRService() error {
 }
 
 func (a *App) waitForASRReady() bool {
-	if a.asrService != nil {
+	if a.asrService != nil || a.realtimeService != nil {
 		return true
 	}
 	if a.asrInitDone == nil {
@@ -3849,9 +3867,9 @@ func (a *App) waitForASRReady() bool {
 	}
 	select {
 	case <-a.asrInitDone:
-		return a.asrService != nil
+		return a.asrService != nil || a.realtimeService != nil
 	case <-time.After(30 * time.Second):
-		return a.asrService != nil
+		return a.asrService != nil || a.realtimeService != nil
 	}
 }
 
@@ -3863,7 +3881,7 @@ type ASRStatus struct {
 
 // GetASRStatus returns the current initialization status of the ASR service
 func (a *App) GetASRStatus() ASRStatus {
-	initialized := a.asrService != nil
+	initialized := a.asrService != nil || a.realtimeService != nil
 
 	initializing := false
 	if a.asrInitDone != nil {
@@ -6075,7 +6093,7 @@ type recordingSegment struct {
 }
 
 // StartRecording starts real-time recording with transcription
-// Uses existing asr.Service (OfflineStream) instead of RealtimeService to avoid crashes
+// Uses the recognizer type that matches the configured model.
 func (a *App) StartRecording() error {
 	a.logInfo("[Recording] StartRecording called")
 	a.recordingMu.Lock()
@@ -6118,18 +6136,10 @@ func (a *App) StartRecording() error {
 	a.logInfo(fmt.Sprintf("[Recording] Model paths: encoder=%s, decoder=%s, joiner=%s, tokens=%s",
 		cfg.Model.Encoder, cfg.Model.Decoder, cfg.Model.Joiner, cfg.Model.Tokens))
 
-	// Check if model is suitable for online recognition
-	// Streaming models typically have "chunk", "left", "right", or "streaming" in the filename
-	isStreamingModel := strings.Contains(cfg.Model.Encoder, "chunk") ||
-		strings.Contains(cfg.Model.Encoder, "left") ||
-		strings.Contains(cfg.Model.Encoder, "right") ||
-		strings.Contains(cfg.Model.Encoder, "streaming") ||
-		strings.Contains(cfg.Model.Decoder, "chunk") ||
-		strings.Contains(cfg.Model.Decoder, "left") ||
-		strings.Contains(cfg.Model.Decoder, "right") ||
-		strings.Contains(cfg.Model.Decoder, "streaming")
-
-	if !isStreamingModel {
+	if a.realtimeService != nil {
+		a.realtimeService.Reset()
+		a.logInfo("[Recording] Reusing initialized RealtimeService")
+	} else if !cfg.IsStreamingModel() {
 		a.logInfo("[Recording] Model appears to be offline-only (no streaming indicators in filename). Skipping RealtimeService initialization.")
 		a.logInfo("[Recording] Partial text will not be available, but recording will continue with offline ASR.")
 		// Continue without RealtimeService - we'll use offline ASR only
@@ -6183,10 +6193,9 @@ func (a *App) StartRecording() error {
 	recorder, err := audio.NewRecorder()
 	if err != nil {
 		a.logError(fmt.Sprintf("[Recording] Failed to create recorder: %v", err))
-		// Clean up RealtimeService if recorder creation fails
+		// Keep the shared recognizer available for a later retry.
 		if a.realtimeService != nil {
-			a.realtimeService.Close()
-			a.realtimeService = nil
+			a.realtimeService.Reset()
 		}
 		return fmt.Errorf("failed to create recorder: %w", err)
 	}
@@ -6933,15 +6942,15 @@ func (a *App) cleanupRecording() {
 		a.logInfo("[Recording] Audio recorder closed")
 	}
 
-	// Close RealtimeService if it exists
+	// The recognizer is shared across recordings and is closed during app
+	// shutdown. Reset its stream here so another recording can start.
 	func() {
 		a.recordingMu.Lock()
 		defer a.recordingMu.Unlock()
 		if a.realtimeService != nil {
-			a.logInfo("[Recording] Closing RealtimeService...")
-			a.realtimeService.Close()
-			a.realtimeService = nil
-			a.logInfo("[Recording] RealtimeService closed")
+			a.logInfo("[Recording] Resetting RealtimeService...")
+			a.realtimeService.Reset()
+			a.logInfo("[Recording] RealtimeService reset")
 		}
 	}()
 

@@ -1427,6 +1427,7 @@ export class EditorLayout extends BaseComponent {
             // ASRステータスを確認
             try {
                 const asrStatus = await this.api.GetASRStatus();
+                asrStore.setStatus(asrStatus);
                 if (!asrStatus.initialized && !asrStatus.initializing) {
                     eventLogger.log('EditorLayout', 'recording-start-error', {
                         error: 'ASR service not ready',
