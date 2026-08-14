@@ -108,6 +108,12 @@ FFmpeg 8.0.3の固定コミットを`--disable-gpl --disable-nonfree`でビル�
 FFmpeg、Sherpa／ONNX／PortAudio／MinGW DLL、初期データテンプレート、第三者ライセンス、
 runtime manifestを1つのZIPへまとめます。設定値は次のsecretを使用します。
 
+ASR modelはGit LFSから取得しません．`scripts/fetch-asr-models.sh`が公式sherpa-onnx release
+assetを取得し，固定したarchive SHA-256と各ONNX fileのSHA-256を検証してから
+`karte_data_template`へ配置します．ローカルで配布成果物を作る場合はbuild前に同scriptを実行します．
+この変更は現行checkoutとCIのLFS依存を除去しますが，GitHub側に保存済みの過去のLFS objectや
+storage使用量を削除するものではありません．
+
 - `WINDOWS_CERTIFICATE_BASE64`: Authenticode証明書（PFX）のBase64
 - `WINDOWS_CERTIFICATE_PASSWORD`: PFXのパスワード
 

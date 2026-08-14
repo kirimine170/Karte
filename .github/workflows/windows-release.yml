@@ -102,8 +102,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          lfs: true
           fetch-depth: 0
+
+      - name: Fetch pinned ASR models
+        shell: bash
+        run: ./scripts/fetch-asr-models.sh
 
       - name: Set up Go
         uses: actions/setup-go@v7
