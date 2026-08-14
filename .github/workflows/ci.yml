@@ -9,6 +9,7 @@ on:
       - '**/*.go'
       - 'frontend/**'
       - 'build/**'
+      - 'scripts/fetch-asr-models.sh'
       - 'scripts/package-macos-runtime.sh'
       - 'testdata/renderer-contract/**'
       - 'templates/**'
@@ -24,6 +25,7 @@ on:
       - '**/*.go'
       - 'frontend/**'
       - 'build/**'
+      - 'scripts/fetch-asr-models.sh'
       - 'scripts/package-macos-runtime.sh'
       - 'testdata/renderer-contract/**'
       - 'templates/**'
@@ -79,10 +81,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          # PR verification only needs source and LFS pointer files. Main
-          # artifacts still require the real model assets.
-          lfs: ${{ github.event_name != 'pull_request' }}
+
+      - name: Fetch pinned ASR models
+        if: github.event_name != 'pull_request'
+        run: ./scripts/fetch-asr-models.sh
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -202,9 +204,8 @@ jobs:
         run: go run ./cmd/buildmatrix --targets ${{ matrix.target }} --clean
 
       - name: Bundle and verify macOS runtime dependencies
-        # This release-only check requires the full LFS-hosted ASR models.
-        # PR builds still compile/package the app while the repository's LFS
-        # budget is unavailable; main builds must fetch and verify real models.
+        # PR builds compile and package without the large ASR model payload.
+        # Main and manual builds fetch and verify the pinned upstream archive.
         if: runner.os == 'macOS' && github.event_name != 'pull_request'
         run: ./scripts/package-macos-runtime.sh "${{ matrix.artifact_path }}/Karte.app" "${{ matrix.target }}"
 

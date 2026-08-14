@@ -106,6 +106,8 @@ wails dev
 ### ASR 設定手順
 
 1. **モデルファイルの配置**
+   - main／manual buildとWindows releaseでは`./scripts/fetch-asr-models.sh`が固定したsherpa-onnx release assetを取得し，archiveと3つのONNX fileをSHA-256で検証して初期templateへ配置
+   - ローカルで配布成果物を作る場合も，build前に同じscriptを一度実行
    - Encoder/Decoder/Joiner 形式の Transducer モデル、または Zipformer CTC モデルを `karte_data/data/asr/` などに配置
 
 2. **設定ファイルの編集**
