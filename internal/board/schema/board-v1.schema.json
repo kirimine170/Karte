@@ -1,0 +1,291 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://karte.local/schema/board/v1",
+  "title": "Karte Board Document v1",
+  "description": "Persistent Board resource contract. UI selection state such as selectedCardId and selectedEdgeId is ephemeral and is intentionally excluded. The persisted ViewState is layout.viewport.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "path",
+    "title",
+    "docId",
+    "type",
+    "version",
+    "created",
+    "updated",
+    "tags",
+    "cards",
+    "edges",
+    "layout",
+    "notes",
+    "rawContent"
+  ],
+  "properties": {
+    "path": {
+      "type": "string",
+      "pattern": "^content/([^/]+/)*[^/]+\\.board\\.md$",
+      "maxLength": 4096
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "docId": {
+      "type": "string",
+      "pattern": "^(?:|board:[A-Za-z0-9][A-Za-z0-9._:-]{0,255})$"
+    },
+    "type": {
+      "const": "karte-board"
+    },
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "created": {
+      "$ref": "#/$defs/Date"
+    },
+    "updated": {
+      "$ref": "#/$defs/Date"
+    },
+    "tags": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      }
+    },
+    "cards": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "$ref": "#/$defs/Card"
+      }
+    },
+    "edges": {
+      "type": "array",
+      "maxItems": 50000,
+      "items": {
+        "$ref": "#/$defs/Edge"
+      }
+    },
+    "layout": {
+      "$ref": "#/$defs/Layout"
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 4194304
+    },
+    "rawContent": {
+      "type": "string",
+      "readOnly": true,
+      "description": "Diagnostic source snapshot. The file or IPC caller must enforce the whole-input byte limit before parsing.",
+      "x-karte-sizeBoundary": "caller-before-parse"
+    }
+  },
+  "$defs": {
+    "Date": {
+      "type": "string",
+      "format": "date"
+    },
+    "CardType": {
+      "type": "string",
+      "enum": [
+        "resource",
+        "board",
+        "quote",
+        "thought",
+        "llm-note",
+        "summary",
+        "claim",
+        "question",
+        "task"
+      ]
+    },
+    "Relation": {
+      "type": "string",
+      "enum": [
+        "contains",
+        "references",
+        "quotes",
+        "cites",
+        "supports",
+        "contradicts",
+        "derived_from",
+        "summarizes",
+        "expands",
+        "answers",
+        "depends_on",
+        "related_to"
+      ]
+    },
+    "MetaValue": {
+      "x-karte-maxDepth": 16,
+      "oneOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "string", "maxLength": 65536 },
+        { "type": "number" },
+        {
+          "type": "array",
+          "maxItems": 1024,
+          "items": { "$ref": "#/$defs/MetaValue" }
+        },
+        {
+          "type": "object",
+          "maxProperties": 1024,
+          "propertyNames": { "minLength": 1, "maxLength": 500 },
+          "additionalProperties": { "$ref": "#/$defs/MetaValue" }
+        }
+      ]
+    },
+    "Card": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "title",
+        "body"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^card:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "type": {
+          "$ref": "#/$defs/CardType"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "source": {
+          "type": "string",
+          "description": "Empty or a canonical project-relative path rooted at content, data/image, data/audio, or data/csv.",
+          "maxLength": 4096,
+          "anyOf": [
+            { "const": "" },
+            { "pattern": "^content/(?:[^/]+/)*[^/]+$" },
+            { "pattern": "^data/image/(?:[^/]+/)*[^/]+$" },
+            { "pattern": "^data/audio/(?:[^/]+/)*[^/]+$" },
+            { "pattern": "^data/csv/[^/]+\\.csv$" }
+          ]
+        },
+        "tags": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "createdBy": { "type": "string", "maxLength": 500 },
+        "updatedBy": { "type": "string", "maxLength": 500 },
+        "reviewed": { "type": "boolean" },
+        "reviewedBy": { "type": "string", "maxLength": 500 },
+        "model": { "type": "string", "maxLength": 500 },
+        "body": { "type": "string", "maxLength": 4194304 },
+        "meta": {
+          "type": "object",
+          "description": "The only Board extension point. Reserved Card field names are forbidden as keys.",
+          "maxProperties": 1024,
+          "x-karte-maxNodes": 4096,
+          "propertyNames": {
+            "allOf": [
+              { "minLength": 1, "maxLength": 500 },
+              {
+                "not": {
+                  "enum": [
+                    "id",
+                    "type",
+                    "title",
+                    "source",
+                    "tags",
+                    "created_by",
+                    "createdBy",
+                    "updated_by",
+                    "updatedBy",
+                    "reviewed",
+                    "reviewed_by",
+                    "reviewedBy",
+                    "model",
+                    "body",
+                    "meta"
+                  ]
+                }
+              }
+            ]
+          },
+          "additionalProperties": { "$ref": "#/$defs/MetaValue" }
+        }
+      }
+    },
+    "Edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from", "to", "relation"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^edge:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "from": {
+          "type": "string",
+          "pattern": "^card:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^card:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "relation": {
+          "$ref": "#/$defs/Relation"
+        },
+        "label": { "type": "string", "maxLength": 500 },
+        "description": { "type": "string", "maxLength": 16384 }
+      }
+    },
+    "CardLayout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": { "type": "number", "minimum": -1000000, "maximum": 1000000 },
+        "y": { "type": "number", "minimum": -1000000, "maximum": 1000000 },
+        "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 100000 },
+        "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 100000 }
+      }
+    },
+    "ViewState": {
+      "type": "object",
+      "description": "The persisted Board view state. Card and edge selection remains UI-only ephemeral state.",
+      "additionalProperties": false,
+      "required": ["x", "y", "zoom"],
+      "properties": {
+        "x": { "type": "number", "minimum": -1000000, "maximum": 1000000 },
+        "y": { "type": "number", "minimum": -1000000, "maximum": 1000000 },
+        "zoom": { "type": "number", "minimum": 0.1, "maximum": 8 }
+      }
+    },
+    "Layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cards", "viewport"],
+      "properties": {
+        "cards": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/CardLayout" }
+        },
+        "viewport": {
+          "$ref": "#/$defs/ViewState"
+        }
+      }
+    }
+  }
+}
