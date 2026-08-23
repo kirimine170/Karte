@@ -1,0 +1,72 @@
+[
+  {
+    "code": "card.meta.reserved",
+    "path": "/cards/0/meta/title",
+    "message": "meta key collides with a reserved Card field"
+  },
+  {
+    "code": "card.source.invalid",
+    "path": "/cards/0/source",
+    "message": "source must be empty or a canonical project resource path"
+  },
+  {
+    "code": "card.id.duplicate",
+    "path": "/cards/1/id",
+    "message": "card id duplicates /cards/0/id"
+  },
+  {
+    "code": "card.type.invalid",
+    "path": "/cards/1/type",
+    "message": "card type is not in the v1 enum"
+  },
+  {
+    "code": "edge.self",
+    "path": "/edges/0",
+    "message": "self edges are not allowed"
+  },
+  {
+    "code": "edge.duplicate",
+    "path": "/edges/1",
+    "message": "edge duplicates /edges/0"
+  },
+  {
+    "code": "edge.self",
+    "path": "/edges/1",
+    "message": "self edges are not allowed"
+  },
+  {
+    "code": "edge.id.duplicate",
+    "path": "/edges/1/id",
+    "message": "edge id duplicates /edges/0/id"
+  },
+  {
+    "code": "edge.relation.invalid",
+    "path": "/edges/2/relation",
+    "message": "relation is not in the v1 enum"
+  },
+  {
+    "code": "edge.to.missing",
+    "path": "/edges/2/to",
+    "message": "to does not reference an existing card"
+  },
+  {
+    "code": "layout.geometry.range",
+    "path": "/layout/cards/card:a/width",
+    "message": "dimension is outside the v1 practical range"
+  },
+  {
+    "code": "layout.geometry.non-finite",
+    "path": "/layout/cards/card:a/x",
+    "message": "coordinate must be finite"
+  },
+  {
+    "code": "layout.card.orphan",
+    "path": "/layout/cards/card:orphan",
+    "message": "layout entry does not reference an existing card"
+  },
+  {
+    "code": "view-state.geometry.range",
+    "path": "/layout/viewport/zoom",
+    "message": "zoom is outside the v1 practical range"
+  }
+]

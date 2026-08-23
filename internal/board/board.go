@@ -1,14 +1,9 @@
 package board
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	fm "karte/internal/frontmatter"
-	"sort"
-	"strconv"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -83,6 +78,11 @@ type Viewport struct {
 	Zoom float64 `json:"zoom"`
 }
 
+// ViewState is the persisted Board view state stored as Layout.Viewport.
+// selectedCardId and selectedEdgeId are ephemeral frontend state and are not
+// part of the Board resource schema.
+type ViewState = Viewport
+
 type boardFrontMatter struct {
 	Type    string   `yaml:"type"`
 	DocID   string   `yaml:"doc_id,omitempty"`
@@ -102,17 +102,33 @@ type edgeYAML struct {
 	Description string `yaml:"description,omitempty"`
 }
 
+type cardYAML struct {
+	Type       string         `yaml:"type"`
+	Title      string         `yaml:"title"`
+	Source     string         `yaml:"source,omitempty"`
+	Tags       []string       `yaml:"tags,omitempty"`
+	CreatedBy  string         `yaml:"created_by,omitempty"`
+	UpdatedBy  string         `yaml:"updated_by,omitempty"`
+	Reviewed   bool           `yaml:"reviewed,omitempty"`
+	ReviewedBy string         `yaml:"reviewed_by,omitempty"`
+	Model      string         `yaml:"model,omitempty"`
+	Meta       map[string]any `yaml:"meta,omitempty"`
+}
+
 type layoutYAML struct {
 	Cards    map[string]CardLayout `yaml:"cards,omitempty"`
 	Viewport Viewport              `yaml:"viewport,omitempty"`
 }
 
+// Parse decodes, migrates, and validates a Board resource. Whole-input byte
+// limits belong at the file/IPC boundary before Parse; semantic collection and
+// string limits are enforced here.
 func Parse(path, content string) (*Document, error) {
-	parsedFM, body := fm.ParseFrontMatter(content)
-	if parsedFM == nil {
-		return nil, ErrMissingFrontMatter
+	parsedFM, body, err := parseBoardFrontMatter(content)
+	if err != nil {
+		return nil, err
 	}
-	boardType := extractRawString(parsedFM.Raw, "type")
+	boardType := parsedFM.Type
 	if boardType == "" {
 		boardType = BoardType
 	}
@@ -120,7 +136,10 @@ func Parse(path, content string) (*Document, error) {
 		return nil, ErrInvalidBoardType
 	}
 
-	sections := parseSections(body)
+	sections, err := parseSections(body)
+	if err != nil {
+		return nil, err
+	}
 	cardsSection, ok := sections["cards"]
 	if !ok {
 		return nil, ErrMissingCards
@@ -139,24 +158,12 @@ func Parse(path, content string) (*Document, error) {
 		Title:      parsedFM.Title,
 		DocID:      parsedFM.DocID,
 		Type:       BoardType,
-		Version:    extractRawInt(parsedFM.Raw, "version", 1),
-		Created:    extractRawString(parsedFM.Raw, "created"),
-		Updated:    extractRawString(parsedFM.Raw, "updated"),
-		Tags:       extractRawStringSlice(parsedFM.Raw, "tags"),
+		Version:    parsedFM.Version,
+		Created:    parsedFM.Created,
+		Updated:    parsedFM.Updated,
+		Tags:       parsedFM.Tags,
 		Notes:      strings.TrimSpace(sections["notes"]),
 		RawContent: content,
-	}
-	if doc.Version == 0 {
-		doc.Version = 1
-	}
-	if doc.Tags == nil {
-		doc.Tags = []string{}
-	}
-	if doc.Created == "" {
-		doc.Created = time.Now().Format("2006-01-02")
-	}
-	if doc.Updated == "" {
-		doc.Updated = doc.Created
 	}
 
 	cards, err := parseCards(cardsSection)
@@ -176,6 +183,12 @@ func Parse(path, content string) (*Document, error) {
 		return nil, err
 	}
 	doc.Layout = layout
+	if err := Migrate(doc); err != nil {
+		return nil, err
+	}
+	if violations := ValidateDocument(doc); len(violations) > 0 {
+		return nil, &ValidationError{Violations: violations}
+	}
 
 	return doc, nil
 }
@@ -184,17 +197,21 @@ func Serialize(doc *Document) (string, error) {
 	if doc == nil {
 		return "", fmt.Errorf("board document is nil")
 	}
-	frontMatter := boardFrontMatter{
-		Type:    BoardType,
-		DocID:   doc.DocID,
-		Title:   doc.Title,
-		Version: doc.Version,
-		Created: doc.Created,
-		Updated: doc.Updated,
-		Tags:    doc.Tags,
+	normalized := *doc
+	if err := Migrate(&normalized); err != nil {
+		return "", err
 	}
-	if frontMatter.Version == 0 {
-		frontMatter.Version = 1
+	if violations := ValidateDocument(&normalized); len(violations) > 0 {
+		return "", &ValidationError{Violations: violations}
+	}
+	frontMatter := boardFrontMatter{
+		Type:    normalized.Type,
+		DocID:   normalized.DocID,
+		Title:   normalized.Title,
+		Version: normalized.Version,
+		Created: normalized.Created,
+		Updated: normalized.Updated,
+		Tags:    normalized.Tags,
 	}
 
 	fmBytes, err := yaml.Marshal(frontMatter)
@@ -208,22 +225,26 @@ func Serialize(doc *Document) (string, error) {
 	b.WriteString("---\n\n")
 	b.WriteString("# Board\n\n")
 	b.WriteString("## Cards\n\n")
-	for i, card := range doc.Cards {
+	for i, card := range normalized.Cards {
 		b.WriteString(fmt.Sprintf("### %s\n\n", card.ID))
 		b.WriteString("```yaml\n")
-		b.WriteString(serializeCardYAML(card))
+		cardBytes, err := serializeCardYAML(card)
+		if err != nil {
+			return "", err
+		}
+		b.Write(cardBytes)
 		b.WriteString("```\n\n")
 		if strings.TrimSpace(card.Body) != "" {
 			b.WriteString(strings.TrimSpace(card.Body))
 			b.WriteString("\n\n")
 		}
-		if i < len(doc.Cards)-1 {
+		if i < len(normalized.Cards)-1 {
 			b.WriteString("---\n\n")
 		}
 	}
 	b.WriteString("## Edges\n\n")
 	b.WriteString("```yaml\n")
-	edgesBytes, err := yaml.Marshal(toEdgeYAML(doc.Edges))
+	edgesBytes, err := yaml.Marshal(toEdgeYAML(normalized.Edges))
 	if err != nil {
 		return "", fmt.Errorf("marshal edges: %w", err)
 	}
@@ -232,17 +253,17 @@ func Serialize(doc *Document) (string, error) {
 	b.WriteString("## Layout\n\n")
 	b.WriteString("```yaml\n")
 	layoutBytes, err := yaml.Marshal(layoutYAML{
-		Cards:    doc.Layout.Cards,
-		Viewport: doc.Layout.Viewport,
+		Cards:    normalized.Layout.Cards,
+		Viewport: normalized.Layout.Viewport,
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal layout: %w", err)
 	}
 	b.Write(layoutBytes)
 	b.WriteString("```\n")
-	if strings.TrimSpace(doc.Notes) != "" {
+	if strings.TrimSpace(normalized.Notes) != "" {
 		b.WriteString("\n## Notes\n\n")
-		b.WriteString(strings.TrimSpace(doc.Notes))
+		b.WriteString(strings.TrimSpace(normalized.Notes))
 		b.WriteString("\n")
 	}
 	return b.String(), nil
@@ -300,30 +321,37 @@ func parseCard(block string) (Card, error) {
 	if err != nil {
 		return Card{}, err
 	}
-	var meta map[string]any
-	if err := yaml.Unmarshal([]byte(yamlBlock), &meta); err != nil {
+	var typed cardYAML
+	if err := yaml.Unmarshal([]byte(yamlBlock), &typed); err != nil {
 		return Card{}, fmt.Errorf("unmarshal card yaml %s: %w", card.ID, err)
 	}
-	card.Type = extractMapString(meta, "type")
-	card.Title = extractMapString(meta, "title")
-	card.Source = extractMapString(meta, "source")
-	card.CreatedBy = extractMapString(meta, "created_by")
-	card.UpdatedBy = extractMapString(meta, "updated_by")
-	card.ReviewedBy = extractMapString(meta, "reviewed_by")
-	card.Model = extractMapString(meta, "model")
-	card.Reviewed = extractMapBool(meta, "reviewed")
-	card.Tags = extractMapStringSlice(meta, "tags")
+	var raw map[string]any
+	if err := yaml.Unmarshal([]byte(yamlBlock), &raw); err != nil {
+		return Card{}, fmt.Errorf("unmarshal card yaml %s: %w", card.ID, err)
+	}
+	card.Type = typed.Type
+	card.Title = typed.Title
+	card.Source = typed.Source
+	card.CreatedBy = typed.CreatedBy
+	card.UpdatedBy = typed.UpdatedBy
+	card.ReviewedBy = typed.ReviewedBy
+	card.Model = typed.Model
+	card.Reviewed = typed.Reviewed
+	card.Tags = typed.Tags
 
-	delete(meta, "type")
-	delete(meta, "title")
-	delete(meta, "source")
-	delete(meta, "created_by")
-	delete(meta, "updated_by")
-	delete(meta, "reviewed_by")
-	delete(meta, "model")
-	delete(meta, "reviewed")
-	delete(meta, "tags")
-	card.Meta = meta
+	for _, key := range []string{"type", "title", "source", "created_by", "updated_by", "reviewed_by", "model", "reviewed", "tags", "meta"} {
+		delete(raw, key)
+	}
+	card.Meta = make(map[string]any, len(typed.Meta)+len(raw))
+	for key, value := range typed.Meta {
+		card.Meta[key] = normalizeMetaValue(value)
+	}
+	for key, value := range raw {
+		if _, exists := card.Meta[key]; exists {
+			return Card{}, fmt.Errorf("card %s meta key %q is present in both legacy flat and nested meta", card.ID, key)
+		}
+		card.Meta[key] = normalizeMetaValue(value)
+	}
 	card.Body = strings.TrimSpace(body)
 	return card, nil
 }
@@ -334,7 +362,7 @@ func parseEdges(section string) ([]Edge, error) {
 		return nil, err
 	}
 	var raw []edgeYAML
-	if err := yaml.Unmarshal([]byte(yamlBlock), &raw); err != nil {
+	if err := decodeStrictYAML(yamlBlock, &raw); err != nil {
 		return nil, fmt.Errorf("unmarshal edges: %w", err)
 	}
 	edges := make([]Edge, 0, len(raw))
@@ -357,14 +385,11 @@ func parseLayout(section string) (Layout, error) {
 		return Layout{}, err
 	}
 	var raw layoutYAML
-	if err := yaml.Unmarshal([]byte(yamlBlock), &raw); err != nil {
+	if err := decodeStrictYAML(yamlBlock, &raw); err != nil {
 		return Layout{}, fmt.Errorf("unmarshal layout: %w", err)
 	}
 	if raw.Cards == nil {
 		raw.Cards = map[string]CardLayout{}
-	}
-	if raw.Viewport.Zoom == 0 {
-		raw.Viewport.Zoom = 1
 	}
 	return Layout{
 		Cards:    raw.Cards,
@@ -372,22 +397,37 @@ func parseLayout(section string) (Layout, error) {
 	}, nil
 }
 
-func parseSections(body string) map[string]string {
+func parseSections(body string) (map[string]string, error) {
 	lines := strings.Split(body, "\n")
 	sections := map[string]string{}
 	current := ""
 	var buf strings.Builder
-	flush := func() {
+	flush := func() error {
 		if current == "" {
-			return
+			return nil
+		}
+		if _, exists := sections[current]; exists {
+			return &ValidationError{Violations: []Violation{{
+				Code: "board.section.duplicate", Path: "/sections/" + escapeJSONPointer(current), Message: "Board section is duplicated",
+			}}}
 		}
 		sections[current] = strings.TrimSpace(buf.String())
 		buf.Reset()
+		return nil
 	}
 	for _, line := range lines {
-		if strings.HasPrefix(line, "## ") {
-			flush()
+		if strings.HasPrefix(line, "## ") && current != "notes" {
+			if err := flush(); err != nil {
+				return nil, err
+			}
 			current = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, "## ")))
+			switch current {
+			case "cards", "edges", "layout", "notes":
+			default:
+				return nil, &ValidationError{Violations: []Violation{{
+					Code: "board.section.unknown", Path: "/sections/" + escapeJSONPointer(current), Message: "Board section is not part of the v1 contract",
+				}}}
+			}
 			continue
 		}
 		if current == "" {
@@ -396,8 +436,10 @@ func parseSections(body string) map[string]string {
 		buf.WriteString(line)
 		buf.WriteString("\n")
 	}
-	flush()
-	return sections
+	if err := flush(); err != nil {
+		return nil, err
+	}
+	return sections, nil
 }
 
 func extractFirstYAMLBlock(section string) (string, string, error) {
@@ -419,76 +461,23 @@ func extractFirstYAMLBlock(section string) (string, string, error) {
 	return yamlBlock, body, nil
 }
 
-func serializeCardYAML(card Card) string {
-	var buf bytes.Buffer
-	writeYAMLKV(&buf, "type", card.Type)
-	writeYAMLKV(&buf, "title", card.Title)
-	if card.Source != "" {
-		writeYAMLKV(&buf, "source", card.Source)
-	}
-	if len(card.Tags) > 0 {
-		writeYAMLStringList(&buf, "tags", card.Tags)
-	}
-	if card.CreatedBy != "" {
-		writeYAMLKV(&buf, "created_by", card.CreatedBy)
-	}
-	if card.UpdatedBy != "" {
-		writeYAMLKV(&buf, "updated_by", card.UpdatedBy)
-	}
-	if card.ReviewedBy != "" {
-		writeYAMLKV(&buf, "reviewed_by", card.ReviewedBy)
-	}
-	if card.Reviewed {
-		buf.WriteString("reviewed: true\n")
-	}
-	if card.Model != "" {
-		writeYAMLKV(&buf, "model", card.Model)
-	}
-	if len(card.Meta) > 0 {
-		keys := make([]string, 0, len(card.Meta))
-		for key := range card.Meta {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			writeAnyValue(&buf, key, card.Meta[key])
-		}
-	}
-	return buf.String()
-}
-
-func writeYAMLKV(buf *bytes.Buffer, key, value string) {
-	if value == "" {
-		return
-	}
-	encoded, _ := yaml.Marshal(value)
-	buf.WriteString(key)
-	buf.WriteString(": ")
-	buf.Write(bytes.TrimSpace(encoded))
-	buf.WriteByte('\n')
-}
-
-func writeYAMLStringList(buf *bytes.Buffer, key string, values []string) {
-	if len(values) == 0 {
-		return
-	}
-	buf.WriteString(key)
-	buf.WriteString(":\n")
-	for _, value := range values {
-		encoded, _ := yaml.Marshal(value)
-		buf.WriteString("  - ")
-		buf.Write(bytes.TrimSpace(encoded))
-		buf.WriteByte('\n')
-	}
-}
-
-func writeAnyValue(buf *bytes.Buffer, key string, value any) {
-	m := map[string]any{key: value}
-	encoded, err := yaml.Marshal(m)
+func serializeCardYAML(card Card) ([]byte, error) {
+	encoded, err := yaml.Marshal(cardYAML{
+		Type:       card.Type,
+		Title:      card.Title,
+		Source:     card.Source,
+		Tags:       card.Tags,
+		CreatedBy:  card.CreatedBy,
+		UpdatedBy:  card.UpdatedBy,
+		Reviewed:   card.Reviewed,
+		ReviewedBy: card.ReviewedBy,
+		Model:      card.Model,
+		Meta:       card.Meta,
+	})
 	if err != nil {
-		return
+		return nil, fmt.Errorf("marshal card %s: %w", card.ID, err)
 	}
-	buf.Write(encoded)
+	return encoded, nil
 }
 
 func toEdgeYAML(edges []Edge) []edgeYAML {
@@ -504,94 +493,4 @@ func toEdgeYAML(edges []Edge) []edgeYAML {
 		})
 	}
 	return items
-}
-
-func extractRawString(raw map[string]any, key string) string {
-	if raw == nil {
-		return ""
-	}
-	if value, ok := raw[key].(string); ok {
-		return value
-	}
-	return ""
-}
-
-func extractRawInt(raw map[string]any, key string, defaultValue int) int {
-	if raw == nil {
-		return defaultValue
-	}
-	switch value := raw[key].(type) {
-	case int:
-		return value
-	case int64:
-		return int(value)
-	case float64:
-		return int(value)
-	case string:
-		parsed, err := strconv.Atoi(value)
-		if err == nil {
-			return parsed
-		}
-	}
-	return defaultValue
-}
-
-func extractRawStringSlice(raw map[string]any, key string) []string {
-	if raw == nil {
-		return nil
-	}
-	if value, ok := raw[key]; ok {
-		return anyToStringSlice(value)
-	}
-	return nil
-}
-
-func extractMapString(m map[string]any, key string) string {
-	if value, ok := m[key].(string); ok {
-		return value
-	}
-	return ""
-}
-
-func extractMapBool(m map[string]any, key string) bool {
-	if value, ok := m[key].(bool); ok {
-		return value
-	}
-	return false
-}
-
-func extractMapStringSlice(m map[string]any, key string) []string {
-	if value, ok := m[key]; ok {
-		return anyToStringSlice(value)
-	}
-	return nil
-}
-
-func anyToStringSlice(value any) []string {
-	switch typed := value.(type) {
-	case []string:
-		return typed
-	case []any:
-		result := make([]string, 0, len(typed))
-		for _, item := range typed {
-			if s, ok := item.(string); ok {
-				result = append(result, s)
-			}
-		}
-		return result
-	case string:
-		if typed == "" {
-			return []string{}
-		}
-		parts := strings.Split(typed, ",")
-		result := make([]string, 0, len(parts))
-		for _, part := range parts {
-			trimmed := strings.TrimSpace(part)
-			if trimmed != "" {
-				result = append(result, trimmed)
-			}
-		}
-		return result
-	}
-	return []string{}
 }

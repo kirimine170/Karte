@@ -67,6 +67,11 @@ cards:
     y: 20
     width: 300
     height: 180
+  card:two:
+    x: 360
+    y: 20
+    width: 300
+    height: 180
 viewport:
   x: 0
   y: 0
@@ -117,13 +122,19 @@ func TestSerializeBoardDocumentStableSections(t *testing.T) {
 				CreatedBy: "user",
 				Body:      "Body one.",
 			},
+			{
+				ID:    "card:two",
+				Type:  "claim",
+				Title: "Two",
+			},
 		},
 		Edges: []Edge{
-			{ID: "edge:1", From: "card:one", To: "card:one", Relation: "references", Description: "serialized edge"},
+			{ID: "edge:1", From: "card:one", To: "card:two", Relation: "references", Description: "serialized edge"},
 		},
 		Layout: Layout{
 			Cards: map[string]CardLayout{
 				"card:one": {X: 10, Y: 20, Width: 300, Height: 180},
+				"card:two": {X: 360, Y: 20, Width: 300, Height: 180},
 			},
 			Viewport: Viewport{X: 0, Y: 0, Zoom: 1},
 		},
