@@ -1,5 +1,3 @@
-//go:build darwin && !universal
-
 package asr
 
 import (
@@ -9,20 +7,34 @@ import (
 	"strings"
 	"sync"
 
-	sherpa "github.com/k2-fsa/sherpa-onnx-go-macos"
-
 	"karte/internal/audio"
 )
+
+type offlineStreamAdapter interface {
+	AcceptWaveform(int, []float32) error
+	Close()
+}
+
+type offlineRecognizerAdapter interface {
+	NewStream() (offlineStreamAdapter, error)
+	Decode(offlineStreamAdapter) (string, error)
+	Close()
+}
+
+var errOfflineStreamUnavailable = errors.New("offline stream unavailable")
 
 // Service wraps a sherpa offline recognizer for one-shot transcriptions.
 type Service struct {
 	cfg        *Config
-	recognizer *sherpa.OfflineRecognizer
+	recognizer offlineRecognizerAdapter
 	mu         sync.Mutex
 }
 
 // NewService constructs a Service from a validated config.
 func NewService(cfg *Config) (*Service, error) {
+	if err := offlinePlatformError("new"); err != nil {
+		return nil, err
+	}
 	if cfg == nil {
 		return nil, errors.New("nil config")
 	}
@@ -33,14 +45,14 @@ func NewService(cfg *Config) (*Service, error) {
 		return nil, err
 	}
 
-	rec := sherpa.NewOfflineRecognizer(cfg.offlineRecognizerConfig())
-	if rec == nil {
-		return nil, fmt.Errorf("failed to initialize offline recognizer")
+	recognizer, err := newOfflineRecognizerAdapter(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Service{
 		cfg:        cfg,
-		recognizer: rec,
+		recognizer: recognizer,
 	}, nil
 }
 
@@ -49,14 +61,18 @@ func (s *Service) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.recognizer != nil {
-		sherpa.DeleteOfflineRecognizer(s.recognizer)
+		s.recognizer.Close()
 		s.recognizer = nil
 	}
 }
 
-// CountSegments counts the number of speech segments in an audio file using VAD.
-// This is used to estimate progress during transcription.
+// CountSegments counts speech segments without decoding them.
+// TranscribeFile intentionally does not call this method so its converted WAV
+// is traversed only once.
 func (s *Service) CountSegments(ctx context.Context, audioPath string) (int, error) {
+	if err := offlinePlatformError("count"); err != nil {
+		return 0, err
+	}
 	if s == nil {
 		return 0, errors.New("asr service is nil")
 	}
@@ -70,53 +86,22 @@ func (s *Service) CountSegments(ctx context.Context, audioPath string) (int, err
 	}
 	defer cleanup()
 
-	chunkSamples := s.cfg.SampleRate / 100 // 10ms フレーム
-	if chunkSamples < 160 {
-		chunkSamples = 160
-	}
-
-	segmentCount := 0
-	vad := audio.DefaultSimpleVAD()
-	inSegment := false
-	maxSegmentSamples := s.cfg.SampleRate * 15 // 15秒で強制フラッシュ
-	currentSegmentSamples := 0
-
-	if err := audio.StreamWavChunks(tempWav, chunkSamples, func(sampleRate int, chunk []float32) error {
-		isSpeech, flush := vad.Process(chunk)
-		if isSpeech {
-			if !inSegment {
-				inSegment = true
-				segmentCount++
-			}
-			currentSegmentSamples += len(chunk)
-			if currentSegmentSamples >= maxSegmentSamples {
-				// Force segment end
-				inSegment = false
-				currentSegmentSamples = 0
-				vad.Reset()
-			}
-		}
-		if flush {
-			inSegment = false
-			currentSegmentSamples = 0
-			vad.Reset()
-		}
-		return nil
-	}); err != nil {
+	segmentCount, err := countWavSegments(ctx, tempWav, s.cfg.SampleRate, audio.StreamWavChunks)
+	if err != nil {
 		return 0, fmt.Errorf("stream audio: %w", err)
 	}
-
-	// Count final segment if still in one
-	if inSegment {
-		segmentCount++
-	}
-
 	return segmentCount, nil
 }
 
 // TranscribeFile decodes a single audio file into plain text.
-// progress callback receives (line, segmentIndex, totalSegments, timestamp) where segmentIndex is 1-based and timestamp is in seconds.
+// Progress is emitted for each non-empty decoded line as soon as its segment is
+// decoded. segmentIndex remains 1-based and timestamp is in seconds.
+// totalSegments is zero because the final count is unknown until the single
+// audio pass finishes.
 func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress func(line string, segmentIndex, totalSegments int, timestamp float64)) (string, error) {
+	if err := offlinePlatformError("transcribe"); err != nil {
+		return "", err
+	}
 	if s == nil {
 		return "", errors.New("asr service is nil")
 	}
@@ -124,8 +109,14 @@ func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress
 		ctx = context.Background()
 	}
 
-	if s.recognizer == nil {
+	s.mu.Lock()
+	recognizerReady := s.recognizer != nil
+	s.mu.Unlock()
+	if !recognizerReady {
 		return "", errors.New("asr recognizer is not initialized")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 
 	tempWav, cleanup, err := audio.ConvertToPCM16Wav(ctx, audioPath, s.cfg.SampleRate)
@@ -136,106 +127,40 @@ func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	stream := sherpa.NewOfflineStream(s.recognizer)
-	if stream == nil {
-		return "", fmt.Errorf("failed to allocate offline stream")
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
-	defer sherpa.DeleteOfflineStream(stream)
-
-	chunkSize := s.cfg.SampleRate / 2
-	if chunkSize < 4000 {
-		chunkSize = s.cfg.SampleRate
+	if s.recognizer == nil {
+		return "", errors.New("asr recognizer is not initialized")
 	}
-	err = audio.StreamWavChunks(tempWav, chunkSize, func(sampleRate int, chunk []float32) error {
-		stream.AcceptWaveform(sampleRate, chunk)
-		return nil
-	})
+
+	result, err := transcribeWavSinglePass(
+		ctx,
+		tempWav,
+		s.cfg.SampleRate,
+		segmentDecoderOps[offlineStreamAdapter]{
+			newDecoder: func() (offlineStreamAdapter, error) {
+				stream, err := s.recognizer.NewStream()
+				if errors.Is(err, errOfflineStreamUnavailable) {
+					return nil, errors.New("failed to create offline stream")
+				}
+				return stream, err
+			},
+			acceptWaveform: func(stream offlineStreamAdapter, sampleRate int, chunk []float32) error {
+				return stream.AcceptWaveform(sampleRate, chunk)
+			},
+			decode: func(stream offlineStreamAdapter) (string, error) {
+				return s.recognizer.Decode(stream)
+			},
+			close: func(stream offlineStreamAdapter) { stream.Close() },
+		},
+		progress,
+		audio.StreamWavChunks,
+	)
 	if err != nil {
 		return "", fmt.Errorf("stream audio: %w", err)
 	}
-
-	var transcript strings.Builder
-	vad := audio.DefaultSimpleVAD()
-	var segmentStream *sherpa.OfflineStream
-	segmentSamples := 0
-	maxSegmentSamples := s.cfg.SampleRate * 15 // 15秒で強制フラッシュ
-	segmentIndex := 0
-	totalSegments := 0
-	processedSamples := 0    // Total processed samples for timestamp calculation
-	segmentStartSamples := 0 // Samples at the start of current segment
-
-	// Count segments first to get total count
-	totalSegments, err = s.CountSegments(ctx, audioPath)
-	if err != nil {
-		// If counting fails, continue without progress info
-		totalSegments = 0
-	}
-
-	finalizeSegment := func() {
-		if segmentStream == nil {
-			return
-		}
-		defer func() {
-			sherpa.DeleteOfflineStream(segmentStream)
-			segmentStream = nil
-			segmentSamples = 0
-		}()
-
-		s.recognizer.Decode(segmentStream)
-		text := strings.TrimSpace(segmentStream.GetResult().Text)
-		if text != "" {
-			segmentIndex++
-			// Calculate timestamp from segment start samples
-			timestamp := float64(segmentStartSamples) / float64(s.cfg.SampleRate)
-			appendLines(&transcript, text, func(line string) {
-				if progress != nil {
-					progress(line, segmentIndex, totalSegments, timestamp)
-				}
-			})
-		}
-	}
-
-	chunkSamples := s.cfg.SampleRate / 100 // 10ms フレーム
-	if chunkSamples < 160 {
-		chunkSamples = 160
-	}
-
-	if err := audio.StreamWavChunks(tempWav, chunkSamples, func(sampleRate int, chunk []float32) error {
-		isSpeech, flush := vad.Process(chunk)
-		chunkSize := len(chunk)
-
-		if isSpeech {
-			if segmentStream == nil {
-				// New segment starts - record the timestamp
-				segmentStartSamples = processedSamples
-				segmentStream = sherpa.NewOfflineStream(s.recognizer)
-				if segmentStream == nil {
-					return fmt.Errorf("failed to create offline stream")
-				}
-			}
-			segmentSamples += chunkSize
-			segmentStream.AcceptWaveform(sampleRate, chunk)
-			if segmentSamples >= maxSegmentSamples {
-				finalizeSegment()
-				vad.Reset()
-			}
-		}
-		if flush {
-			finalizeSegment()
-			vad.Reset()
-		}
-
-		// Update total processed samples
-		processedSamples += chunkSize
-		return nil
-	}); err != nil {
-		return "", fmt.Errorf("stream audio: %w", err)
-	}
-
-	finalizeSegment()
-
-	return strings.TrimSpace(transcript.String()), nil
+	return result.text, nil
 }
 
 // ProcessSamples processes audio samples in chunks and returns transcribed text.
@@ -243,48 +168,41 @@ func (s *Service) TranscribeFile(ctx context.Context, audioPath string, progress
 // samples: audio samples to process (float32, mono, at cfg.SampleRate)
 // Returns: transcribed text and any error
 func (s *Service) ProcessSamples(samples []float32) (string, error) {
+	if err := offlinePlatformError("samples"); err != nil {
+		return "", err
+	}
 	if s == nil {
 		return "", errors.New("asr service is nil")
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.recognizer == nil {
 		return "", errors.New("asr recognizer is not initialized")
 	}
 	if len(samples) == 0 {
 		return "", nil
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	stream := sherpa.NewOfflineStream(s.recognizer)
-	if stream == nil {
-		return "", fmt.Errorf("failed to allocate offline stream")
+	stream, err := s.recognizer.NewStream()
+	if err != nil {
+		if errors.Is(err, errOfflineStreamUnavailable) {
+			return "", fmt.Errorf("failed to allocate offline stream")
+		}
+		return "", err
 	}
-	defer sherpa.DeleteOfflineStream(stream)
+	defer stream.Close()
 
 	// Feed samples to stream
-	stream.AcceptWaveform(s.cfg.SampleRate, samples)
+	if err := stream.AcceptWaveform(s.cfg.SampleRate, samples); err != nil {
+		return "", err
+	}
 
 	// Decode
-	s.recognizer.Decode(stream)
-
-	// Get result
-	result := stream.GetResult()
-	text := strings.TrimSpace(result.Text)
+	result, err := s.recognizer.Decode(stream)
+	if err != nil {
+		return "", err
+	}
+	text := strings.TrimSpace(result)
 
 	return text, nil
-}
-
-func appendLines(buf *strings.Builder, portion string, progress func(line string)) {
-	for _, line := range strings.Split(portion, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		buf.WriteString(line)
-		buf.WriteRune('\n')
-		if progress != nil {
-			progress(line)
-		}
-	}
 }

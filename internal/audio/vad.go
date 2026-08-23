@@ -28,6 +28,7 @@ type SimpleVAD struct {
 	energyEMA     float32   // Smoothed energy value
 	noiseFloor    float32   // Estimated noise floor
 	energyHist    []float32 // History for noise floor estimation (circular buffer)
+	energyScratch []float32 // Preallocated percentile scratch，never grows per frame
 	energyHistIdx int       // Current index in circular buffer
 
 	// Computed thresholds (updated dynamically)
@@ -56,6 +57,7 @@ func NewSimpleVAD(threshold float32, silenceFrames, minSpeechFrames int) *Simple
 		StopFactor:         1.3,                  // Default: noise floor * 1.3 for speech stop
 		EMAAlpha:           0.2,                  // Default: EMA smoothing factor
 		energyHist:         make([]float32, 100), // Store last 100 frames (~1 second) for noise floor estimation
+		energyScratch:      make([]float32, 100),
 		energyHistIdx:      0,
 	}
 
@@ -179,15 +181,20 @@ func (v *SimpleVAD) updateDynamicThresholds() {
 		return
 	}
 
-	// Collect valid energy values (non-zero)
-	energies := make([]float32, 0, len(v.energyHist))
+	if len(v.energyScratch) < len(v.energyHist) {
+		// Custom callers may replace energyHist after construction．Grow once to
+		// match configuration，never as a consequence of frame content．
+		v.energyScratch = make([]float32, len(v.energyHist))
+	}
+	energyCount := 0
 	for _, e := range v.energyHist {
 		if e > 0 {
-			energies = append(energies, e)
+			v.energyScratch[energyCount] = e
+			energyCount++
 		}
 	}
 
-	if len(energies) < 10 {
+	if energyCount < 10 {
 		// Not enough data yet, use default thresholds
 		return
 	}
@@ -195,16 +202,17 @@ func (v *SimpleVAD) updateDynamicThresholds() {
 	// Sort to find the noise floor (lower 10-20% of energy distribution)
 	// Simple approach: use the minimum of recent values as noise floor estimate
 	// More sophisticated: use percentile of sorted values
-	sorted := make([]float32, len(energies))
-	copy(sorted, energies)
-
-	// Simple bubble sort (small array, performance is fine)
-	for i := 0; i < len(sorted)-1; i++ {
-		for j := 0; j < len(sorted)-1-i; j++ {
-			if sorted[j] > sorted[j+1] {
-				sorted[j], sorted[j+1] = sorted[j+1], sorted[j]
-			}
+	sorted := v.energyScratch[:energyCount]
+	// Insertion sort avoids a closure and heap allocation on this small fixed
+	// history while retaining deterministic percentile semantics．
+	for i := 1; i < len(sorted); i++ {
+		value := sorted[i]
+		j := i - 1
+		for j >= 0 && sorted[j] > value {
+			sorted[j+1] = sorted[j]
+			j--
 		}
+		sorted[j+1] = value
 	}
 
 	// Use the 10th percentile as noise floor estimate
