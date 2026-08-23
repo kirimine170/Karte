@@ -1,69 +1,26 @@
 Third-party Model License Notice
 ================================
 
-This directory contains the following third-party model:
+This notice applies to every redistributed model artifact in:
 
-  Name:
-    sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10
+  templates/karte_data_template/data/asr/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10/
 
-  Purpose:
-    Multilingual streaming ASR model (Arabic, English, Indonesian,
-    Japanese, Russian, Thai, Vietnamese, Chinese) converted for sherpa-onnx.
+Name:
+  PengChengStarling multilingual streaming ASR model，converted to ONNX for
+  sherpa-onnx．
 
-  Upstream sources:
+Pinned original model source and Apache-2.0 metadata:
+  https://huggingface.co/stdo/PengChengStarling/tree/
+  d21e331a200a518138599f1ec412b3bb1c919fe9
 
-    - PengChengStarling multilingual streaming ASR model
-      Hugging Face:
-        https://huggingface.co/stdo/PengChengStarling
-      (License: Apache License 2.0)  [“License: apache-2.0” と明記]:contentReference[oaicite:0]{index=0}
+Pinned ONNX conversion artifact source:
+  https://huggingface.co/csukuangfj/
+  sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10/tree/
+  c6726c1147387ad2a11148b33973135d92a55e6c
 
-    - sherpa-onnx ONNX conversion:
-      https://github.com/k2-fsa/sherpa-onnx  (code: Apache-2.0):contentReference[oaicite:1]{index=1}
-      https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10
-      (Model converted from PengChengStarling for use with sherpa-onnx)
-
-
-License
--------
-
-The bundled model files in this directory are licensed under
-the Apache License, Version 2.0 ("Apache-2.0").
-
-You may not use these files except in compliance with the Apache-2.0
-license.  You may obtain a copy of the License at:
-
-    https://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
-
-Note about this project
------------------------
-
-This license file applies only to the third-party model located in:
-
-  third_party/models/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10/
-
-and does NOT change the license of this project's own source code.
-The main project may be licensed under different terms as specified
-in the project's root LICENSE file.
-
-
-(IMPORTANT)
------------
-
-Below this line, paste the full, unmodified text of
-"Apache License Version 2.0" obtained from:
-
-  https://www.apache.org/licenses/LICENSE-2.0.txt
-
-Do not edit the wording of the license itself.
-
------------
+The files covered by this notice are licensed under Apache-2.0．This notice
+does not change the license of Karte itself．The complete，unmodified Apache
+License，Version 2.0 follows．
 
                                  Apache License
                            Version 2.0, January 2004

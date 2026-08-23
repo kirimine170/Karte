@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"karte/internal/compliance"
 )
 
 const (
@@ -80,6 +82,11 @@ func main() {
 		if err := os.RemoveAll(binDir); err != nil {
 			log.Fatalf("failed to clean %s: %v", binDir, err)
 		}
+		if isDarwinTarget(t.Name) {
+			if err := materializeDarwinInfoPlist(projectRoot); err != nil {
+				log.Fatalf("failed to materialize macOS Info.plist for %s: %v", t.Name, err)
+			}
+		}
 
 		if err := runWailsBuild(ctx, t); err != nil {
 			log.Fatalf("wails build failed for %s: %v", t.Name, err)
@@ -109,11 +116,110 @@ func main() {
 				log.Fatalf("failed to package karte_data_template for %s: %v", t.Name, err)
 			}
 		}
+		if err := packageComplianceDocuments(projectRoot, t); err != nil {
+			log.Fatalf("failed to package compliance documents for %s: %v", t.Name, err)
+		}
+		artifactRoot, artifactPlatform := complianceArtifactRoot(t)
+		if err := compliance.PackageArtifactAssets(projectRoot, artifactRoot, artifactPlatform); err != nil {
+			log.Fatalf("failed to package artifact asset inventory for %s: %v", t.Name, err)
+		}
 
 		fmt.Printf("✅ %s artifacts stored in %s\n", t.Name, t.ArtifactDir)
 	}
 
 	fmt.Println("All requested targets built successfully.")
+}
+
+func complianceArtifactRoot(buildTarget target) (string, string) {
+	if isDarwinTarget(buildTarget.Name) {
+		return filepath.Join(buildTarget.ArtifactDir, "Karte.app"), "darwin"
+	}
+	if isWindowsTarget(buildTarget) {
+		return buildTarget.ArtifactDir, "windows"
+	}
+	return buildTarget.ArtifactDir, "linux"
+}
+
+func materializeDarwinInfoPlist(projectRoot string) error {
+	source := filepath.Join(projectRoot, "templates", "macos", "Info.plist")
+	sourceInfo, err := os.Lstat(source)
+	if err != nil {
+		return fmt.Errorf("inspect macOS Info.plist template: %w", err)
+	}
+	if !sourceInfo.Mode().IsRegular() || sourceInfo.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("macOS Info.plist template is not a regular file: %s", source)
+	}
+	contents, err := os.ReadFile(source)
+	if err != nil {
+		return fmt.Errorf("read macOS Info.plist template: %w", err)
+	}
+
+	destinationDirectory := filepath.Join(projectRoot, "build", "darwin")
+	if err := os.MkdirAll(destinationDirectory, 0o755); err != nil {
+		return fmt.Errorf("create Wails macOS build assets directory: %w", err)
+	}
+	temporary, err := os.CreateTemp(destinationDirectory, ".Info.plist-*")
+	if err != nil {
+		return fmt.Errorf("create temporary Wails Info.plist: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporaryPath)
+	}()
+	if err := temporary.Chmod(sourceInfo.Mode().Perm()); err != nil {
+		return fmt.Errorf("set temporary Wails Info.plist permissions: %w", err)
+	}
+	if _, err := temporary.Write(contents); err != nil {
+		return fmt.Errorf("write temporary Wails Info.plist: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		return fmt.Errorf("sync temporary Wails Info.plist: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close temporary Wails Info.plist: %w", err)
+	}
+
+	destination := filepath.Join(destinationDirectory, "Info.plist")
+	if err := os.Remove(destination); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("replace existing Wails Info.plist: %w", err)
+	}
+	if err := os.Rename(temporaryPath, destination); err != nil {
+		return fmt.Errorf("install Wails Info.plist: %w", err)
+	}
+	return nil
+}
+
+func packageComplianceDocuments(projectRoot string, buildTarget target) error {
+	documentRoot := buildTarget.ArtifactDir
+	if isDarwinTarget(buildTarget.Name) {
+		documentRoot = filepath.Join(buildTarget.ArtifactDir, "Karte.app", "Contents", "Resources")
+		info, err := os.Stat(documentRoot)
+		if err != nil || !info.IsDir() {
+			return fmt.Errorf("macOS Resources directory is unavailable: %s", documentRoot)
+		}
+	}
+	files := map[string]string{
+		"LICENSE":                "LICENSE",
+		"THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+		"bom.cdx.json":           "bom.cdx.json",
+		filepath.Join("compliance", "assets.json"):     filepath.Join("compliance", "assets.json"),
+		filepath.Join("compliance", "components.json"): filepath.Join("compliance", "components.json"),
+	}
+	for destination, source := range files {
+		sourcePath := filepath.Join(projectRoot, source)
+		info, err := os.Lstat(sourcePath)
+		if err != nil {
+			return fmt.Errorf("required compliance source %s: %w", source, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("required compliance source %s is not a regular file", source)
+		}
+		if err := copyFile(sourcePath, filepath.Join(documentRoot, destination)); err != nil {
+			return fmt.Errorf("copy compliance source %s: %w", source, err)
+		}
+	}
+	return nil
 }
 
 func loadTargets(path string) ([]target, error) {
@@ -216,6 +322,10 @@ func ensurePortAudioOnDarwin(ctx context.Context) error {
 func runWailsBuild(ctx context.Context, t target) error {
 	args := []string{"build", "-platform", t.Platform}
 	args = append(args, t.Flags...)
+	wailsBinary := strings.TrimSpace(os.Getenv("KARTE_WAILS_BIN"))
+	if wailsBinary == "" {
+		wailsBinary = "wails"
+	}
 	env := t.Env
 	if isWindowsTarget(t) {
 		var err error
@@ -224,7 +334,7 @@ func runWailsBuild(ctx context.Context, t target) error {
 			fmt.Printf("WARN: failed to configure Windows build PATH: %v\n", err)
 		}
 	}
-	return runCommand(ctx, ".", env, "wails", args...)
+	return runCommand(ctx, ".", env, wailsBinary, args...)
 }
 
 func isWindowsTarget(t target) bool {

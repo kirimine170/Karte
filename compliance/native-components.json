@@ -1,0 +1,227 @@
+{
+  "schemaVersion": 1,
+  "components": [
+    {
+      "id": "native:onnxruntime-macos",
+      "type": "native",
+      "name": "ONNX Runtime",
+      "version": "1.27.0",
+      "license": "MIT",
+      "scope": "runtime",
+      "source": "https://github.com/microsoft/onnxruntime",
+      "distributionPath": "Contents/Frameworks/libonnxruntime*.dylib",
+      "hashes": {
+        "gitCommit": "8f0278c77bf44b0cc83c098c6c722b92a36ac4b5"
+      },
+      "properties": {
+        "platform": "darwin",
+        "packageManager": "source-build",
+        "packageName": "onnxruntime",
+        "packageSource": "https://github.com/microsoft/onnxruntime/tree/8f0278c77bf44b0cc83c098c6c722b92a36ac4b5"
+      }
+    },
+    {
+      "id": "native:sherpa-onnx-macos",
+      "type": "native",
+      "name": "sherpa-onnx",
+      "version": "1.13.4",
+      "license": "Apache-2.0",
+      "scope": "runtime",
+      "source": "https://github.com/k2-fsa/sherpa-onnx",
+      "distributionPath": "Contents/Frameworks/libsherpa-onnx*.dylib",
+      "hashes": {
+        "gitCommit": "142807252687d81b40d6315f23470a1512a00de3"
+      },
+      "properties": {
+        "platform": "darwin",
+        "packageManager": "source-build",
+        "packageName": "sherpa-onnx",
+        "packageSource": "https://github.com/k2-fsa/sherpa-onnx/tree/142807252687d81b40d6315f23470a1512a00de3"
+      }
+    },
+    {
+      "id": "native:portaudio-macos",
+      "type": "native",
+      "name": "PortAudio",
+      "version": "19.7.0",
+      "license": "MIT",
+      "scope": "runtime",
+      "source": "https://files.portaudio.com/archives/pa_stable_v190700_20210406.tgz",
+      "distributionPath": "Contents/Frameworks/libportaudio*.dylib",
+      "hashes": {
+        "SHA-256": "47efbf42c77c19a05d22e627d42873e991ec0c1357219c0d74ce6a2948cb2def"
+      },
+      "properties": {
+        "platform": "darwin",
+        "packageManager": "source-archive",
+        "packageName": "portaudio",
+        "packageSource": "https://files.portaudio.com/archives/pa_stable_v190700_20210406.tgz"
+      }
+    },
+    {
+      "id": "native:onnxruntime-windows",
+      "type": "native",
+      "name": "ONNX Runtime",
+      "version": "1.23.2",
+      "license": "MIT",
+      "scope": "runtime",
+      "source": "https://github.com/k2-fsa/sherpa-onnx-go-windows/tree/v1.13.4",
+      "distributionPath": "onnxruntime.dll",
+      "hashes": {
+        "goModule": "github.com/k2-fsa/sherpa-onnx-go-windows@v1.13.4"
+      },
+      "properties": {
+        "platform": "windows",
+        "packageManager": "go-module",
+        "packageName": "github.com/k2-fsa/sherpa-onnx-go-windows",
+        "packageSource": "https://github.com/k2-fsa/sherpa-onnx-go-windows/tree/v1.13.4"
+      }
+    },
+    {
+      "id": "native:sherpa-onnx-windows",
+      "type": "native",
+      "name": "sherpa-onnx",
+      "version": "1.13.4",
+      "license": "Apache-2.0",
+      "scope": "runtime",
+      "source": "https://github.com/k2-fsa/sherpa-onnx-go-windows/tree/v1.13.4",
+      "distributionPath": "sherpa-onnx-*-api.dll",
+      "hashes": {
+        "goModule": "github.com/k2-fsa/sherpa-onnx-go-windows@v1.13.4"
+      },
+      "properties": {
+        "platform": "windows",
+        "packageManager": "go-module",
+        "packageName": "github.com/k2-fsa/sherpa-onnx-go-windows",
+        "packageSource": "https://github.com/k2-fsa/sherpa-onnx-go-windows/tree/v1.13.4"
+      }
+    },
+    {
+      "id": "native:portaudio-windows",
+      "type": "native",
+      "name": "PortAudio",
+      "license": "MIT",
+      "scope": "runtime",
+      "source": "https://packages.msys2.org/packages/mingw-w64-x86_64-portaudio",
+      "distributionPath": "libportaudio.dll",
+      "properties": {
+        "platform": "windows",
+        "packageManager": "pacman",
+        "packageName": "mingw-w64-x86_64-portaudio",
+        "packageSourcePrefix": "https://repo.msys2.org/mingw/mingw64/"
+      }
+    },
+    {
+      "id": "native:gcc-runtime-windows",
+      "type": "native",
+      "name": "GNU Compiler Collection runtime libraries",
+      "license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+      "scope": "runtime",
+      "source": "https://packages.msys2.org/base/mingw-w64-gcc",
+      "distributionPath": "libgcc_s_seh-1.dll",
+      "properties": {
+        "platform": "windows",
+        "packageManager": "pacman",
+        "packageName": "mingw-w64-x86_64-gcc-libs",
+        "packageSourcePrefix": "https://repo.msys2.org/mingw/mingw64/"
+      }
+    },
+    {
+      "id": "native:libstdcxx-windows",
+      "type": "native",
+      "name": "GNU libstdc++ runtime",
+      "license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+      "scope": "runtime",
+      "source": "https://packages.msys2.org/base/mingw-w64-gcc",
+      "distributionPath": "libstdc++-6.dll",
+      "properties": {
+        "platform": "windows",
+        "packageManager": "pacman",
+        "packageName": "mingw-w64-x86_64-gcc-libs",
+        "packageSourcePrefix": "https://repo.msys2.org/mingw/mingw64/"
+      }
+    },
+    {
+      "id": "native:winpthreads-windows",
+      "type": "native",
+      "name": "MinGW-w64 winpthreads runtime",
+      "license": "BSD-3-Clause AND MIT",
+      "scope": "runtime",
+      "source": "https://packages.msys2.org/packages/mingw-w64-x86_64-libwinpthread",
+      "distributionPath": "libwinpthread-1.dll",
+      "properties": {
+        "platform": "windows",
+        "packageManager": "pacman",
+        "packageName": "mingw-w64-x86_64-libwinpthread",
+        "packageSourcePrefix": "https://repo.msys2.org/mingw/mingw64/"
+      }
+    },
+    {
+      "id": "native:portaudio-linux-system",
+      "type": "native",
+      "name": "PortAudio",
+      "version": "Ubuntu 22.04 portaudio19 package",
+      "license": "MIT",
+      "scope": "system-runtime",
+      "source": "https://packages.ubuntu.com/jammy/libportaudio2",
+      "properties": {
+        "platform": "linux",
+        "systemLibrary": "libportaudio.so",
+        "artifactCoverage": "excluded because the library is resolved by the target system"
+      },
+      "hashes": {
+        "packageSource": "not bundled，resolved by the target system"
+      }
+    }
+  ],
+  "licenseSources": [
+    {
+      "componentId": "native:onnxruntime-macos",
+      "path": "compliance/native-license-sources/onnxruntime-LICENSE",
+      "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
+      "source": "https://github.com/microsoft/onnxruntime/blob/8f0278c77bf44b0cc83c098c6c722b92a36ac4b5/LICENSE"
+    },
+    {
+      "componentId": "native:onnxruntime-windows",
+      "path": "compliance/native-license-sources/onnxruntime-LICENSE",
+      "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
+      "source": "https://github.com/microsoft/onnxruntime/blob/8f0278c77bf44b0cc83c098c6c722b92a36ac4b5/LICENSE"
+    },
+    {
+      "componentId": "native:sherpa-onnx-macos",
+      "path": "compliance/native-license-sources/sherpa-onnx-LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "source": "https://github.com/k2-fsa/sherpa-onnx/blob/142807252687d81b40d6315f23470a1512a00de3/LICENSE"
+    },
+    {
+      "componentId": "native:sherpa-onnx-windows",
+      "path": "compliance/native-license-sources/sherpa-onnx-LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "source": "https://github.com/k2-fsa/sherpa-onnx/blob/142807252687d81b40d6315f23470a1512a00de3/LICENSE"
+    },
+    {
+      "componentId": "native:portaudio-macos",
+      "path": "compliance/native-license-sources/portaudio-LICENSE.txt",
+      "sha256": "a328c6531fd3bbd5323daf4ab38f9313d7040896f608e7819db5558e3c6f9058",
+      "source": "https://files.portaudio.com/archives/pa_stable_v190700_20210406.tgz#sha256=47efbf42c77c19a05d22e627d42873e991ec0c1357219c0d74ce6a2948cb2def"
+    },
+    {
+      "componentId": "native:portaudio-windows",
+      "path": "compliance/native-license-sources/portaudio-LICENSE.txt",
+      "sha256": "a328c6531fd3bbd5323daf4ab38f9313d7040896f608e7819db5558e3c6f9058",
+      "source": "https://files.portaudio.com/archives/pa_stable_v190700_20210406.tgz#sha256=47efbf42c77c19a05d22e627d42873e991ec0c1357219c0d74ce6a2948cb2def"
+    },
+    {
+      "componentId": "native:portaudio-linux-system",
+      "path": "compliance/native-license-sources/portaudio-LICENSE.txt",
+      "sha256": "a328c6531fd3bbd5323daf4ab38f9313d7040896f608e7819db5558e3c6f9058",
+      "source": "https://files.portaudio.com/archives/pa_stable_v190700_20210406.tgz#sha256=47efbf42c77c19a05d22e627d42873e991ec0c1357219c0d74ce6a2948cb2def"
+    },
+    {
+      "componentId": "native:winpthreads-windows",
+      "path": "compliance/native-license-sources/winpthreads-COPYING",
+      "sha256": "63263614cdd29f2f93cba85e992f041b31f9fc7b4033692f31269489a8a1b177",
+      "source": "https://github.com/mingw-w64/mingw-w64/blob/d999af62247693a8b5b25a98d67316c8bb2dcd37/mingw-w64-libraries/winpthreads/COPYING"
+    }
+  ]
+}

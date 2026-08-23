@@ -101,6 +101,29 @@ wails dev
 Authenticode署名、`signtool verify /pa`、起動スモーク、ZIPとSHA-256作成を行います。署名証明書が
 ない手動実行ではunsigned RCを作れますが、v1公開には使用できません。
 
+ASR設定例：
+
+```json
+{
+  "enabled": true,
+  "sampleRate": 16000,
+  "model": {
+      "tokens": "data/asr/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10/tokens.txt",
+      "encoder": "data/asr/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10/encoder-epoch-75-avg-11-chunk-16-left-128.int8.onnx",
+      "decoder": "data/asr/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10/decoder-epoch-75-avg-11-chunk-16-left-128.onnx",
+      "joiner": "data/asr/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10/joiner-epoch-75-avg-11-chunk-16-left-128.int8.onnx"
+  },
+  "decoding": {
+      "method": "greedy_search"
+  },
+  "runtime": {
+      "threads": 2,
+      "provider": "cpu",
+      "idleTimeoutSeconds": 300
+  }
+}
+```
+
 ## 診断
 
 - `SIGNING_STATUS.txt`: 配布物の署名状態

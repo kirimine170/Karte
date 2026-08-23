@@ -17,6 +17,8 @@ on:
       - '!internal/asr/**'
       - '!internal/audio/**'
       - 'testdata/renderer-contract/**'
+      - 'scripts/update-karte-renderer.sh'
+      - 'scripts/test-update-karte-renderer.sh'
       - 'go.mod'
       - 'go.sum'
   pull_request:
@@ -34,6 +36,8 @@ on:
       - '!internal/asr/**'
       - '!internal/audio/**'
       - 'testdata/renderer-contract/**'
+      - 'scripts/update-karte-renderer.sh'
+      - 'scripts/test-update-karte-renderer.sh'
       - 'go.mod'
       - 'go.sum'
 
@@ -53,6 +57,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+
+      - name: Test Renderer dependency update transaction
+        run: |
+          bash -n scripts/update-karte-renderer.sh scripts/test-update-karte-renderer.sh
+          ./scripts/test-update-karte-renderer.sh
 
       - name: Set up Go
         uses: actions/setup-go@v7

@@ -26,18 +26,23 @@ Karteは、Wailsフレームワークを使用して開発されたクロスプ�
 ### Wails CLIのインストール
 
 ```bash
-go install github.com/wailsapp/wails/v2/cmd/wails@latest
+wails_version="$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v2)"
+test -n "$wails_version"
+go install "github.com/wailsapp/wails/v2/cmd/wails@${wails_version}"
 ```
+
+macOSの再現可能buildではWailsを直接実行せず，module pin，Xcode／SDK，native
+runtime stamp，loader path，UniformTypeIdentifiers linkを検証する
+`scripts/macos-wails.sh`を使用します．固定値と実行手順は
+[`BUILD.md`](BUILD.md#再現可能なmacos-nativewails-build)を参照してください．
 
 ### Windows 向けの設定
 
-#### 埋め込みフォントの配置
+#### PDF出力
 
-埋め込みフォントとして`internal/pdf/fonts/NotoSansJP-Regular.ttf`を配置する。
-
-PDF出力ではwkhtmltopdfを使用しません。Karte Rendererは明示設定、`PATH`、Windows標準の
-インストール先の順にEdge／Chromeを探索します。通常のWindows 11では追加インストールは不要です。
-詳細と診断方法は[Windowsガイド](windows.md)を参照してください。
+PDF出力ではwkhtmltopdfを使用しません．Karte Rendererは明示設定，`PATH`，Windows標準の
+インストール先の順にEdge／Chromeを探索します．通常のWindows 11では追加インストールは不要です．
+詳細と診断方法は[Windowsガイド](windows.md)を参照してください．
 
 ### アプリケーションのビルド
 
@@ -115,6 +120,8 @@ wails dev
      - `enabled`: `true`
      - `model.tokens` および各モデルファイルパス（相対パス可）
      - `sampleRate` は 16000 を推奨
+     - `runtime.threads` は既定値2，設定可能範囲1〜8
+     - `runtime.idleTimeoutSeconds` は未使用時にモデルを解放するまでの秒数（既定値300，設定可能範囲1〜86400）
 
 3. **依存コマンド**
    - Windowsの正式配布ZIPにはFFmpegが同梱されます。開発ビルドでは`KARTE_FFMPEG_BINARY`、

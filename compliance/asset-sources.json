@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "collections": [
+    {
+      "id": "asset:pdfjs-cmaps",
+      "name": "Adobe CMap resources for PDF.js",
+      "version": "5.7.284",
+      "license": "BSD-3-Clause",
+      "source": "https://github.com/mozilla/pdf.js/tree/v5.7.284/external/bcmaps",
+      "root": "frontend/public/pdfjs/cmaps",
+      "licensePath": "frontend/public/pdfjs/cmaps/LICENSE"
+    },
+    {
+      "id": "asset:pdfjs-foxit-fonts",
+      "name": "PDFium Foxit base fonts for PDF.js",
+      "version": "5.7.284",
+      "license": "BSD-3-Clause",
+      "source": "https://github.com/mozilla/pdf.js/tree/v5.7.284/standard_fonts",
+      "root": "frontend/public/pdfjs/standard_fonts",
+      "include": ["Foxit*.pfb", "LICENSE_FOXIT"],
+      "licensePath": "frontend/public/pdfjs/standard_fonts/LICENSE_FOXIT"
+    },
+    {
+      "id": "asset:pdfjs-liberation-fonts",
+      "name": "Liberation Sans fonts for PDF.js",
+      "version": "1",
+      "license": "OFL-1.1",
+      "source": "https://github.com/mozilla/pdf.js/tree/v5.7.284/standard_fonts",
+      "root": "frontend/public/pdfjs/standard_fonts",
+      "include": ["LiberationSans-*.ttf", "LICENSE_LIBERATION"],
+      "licensePath": "frontend/public/pdfjs/standard_fonts/LICENSE_LIBERATION"
+    },
+    {
+      "id": "asset:nunito-font",
+      "name": "Nunito Latin Regular",
+      "version": "16",
+      "license": "OFL-1.1",
+      "source": "https://fonts.google.com/specimen/Nunito",
+      "root": "frontend/src/assets/fonts",
+      "licensePath": "frontend/src/assets/fonts/OFL.txt"
+    },
+    {
+      "id": "asset:pengcheng-starling-asr-model",
+      "name": "PengChengStarling multilingual streaming ASR model",
+      "version": "2025-02-10",
+      "license": "Apache-2.0",
+      "source": "https://huggingface.co/stdo/PengChengStarling/tree/d21e331a200a518138599f1ec412b3bb1c919fe9",
+      "secondarySource": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10/tree/c6726c1147387ad2a11148b33973135d92a55e6c",
+      "root": "templates/karte_data_template/data/asr/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10",
+      "licensePath": "templates/karte_data_template/data/asr/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10/LICENSE",
+      "artifactExclusions": {
+        "linux": "The current Linux desktop artifact does not bundle the optional ASR model; users provide model data in the application data directory."
+      }
+    }
+  ]
+}

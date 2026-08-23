@@ -1,0 +1,17 @@
+schemaVersion: 1
+name: karte-fixture
+version: 1.0.0
+
+markdown:
+  layout: markdown/layout.html
+  styles:
+    - markdown/base.css
+    - markdown/print.css
+
+marp:
+  defaultTheme: karte-fixture
+  themes:
+    - marp/karte.css
+
+assets:
+  directory: assets

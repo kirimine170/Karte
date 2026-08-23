@@ -1,0 +1,6 @@
+/* @theme karte-fixture */
+@import "default";
+
+section {
+  background-image: url('../assets/images/paper.webp');
+}

@@ -1,0 +1,5 @@
+@import /* comments between tokens are handled */ url("./base.css");
+
+@media print {
+  .karte-document { background-image: none; }
+}
