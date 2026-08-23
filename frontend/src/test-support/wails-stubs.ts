@@ -3,6 +3,22 @@ export async function GetFileList() {
   return [];
 }
 
+export async function SearchFiles(_query, page, limit) {
+  return { items: [], page, limit, total: 0, hasMore: false };
+}
+
+export async function SearchResources(request) {
+  return {
+    items: [],
+    query: String(request?.query || '').trim().toLowerCase(),
+    kinds: request?.kinds || [],
+    page: request?.page || 1,
+    limit: request?.limit || 50,
+    total: 0,
+    hasMore: false,
+  };
+}
+
 export async function LoadFile() {
   return '';
 }
@@ -51,6 +67,20 @@ export async function ResolveConflict() {
   return true;
 }
 
+export async function BeginMediaImport(_kind, _filename, declaredSize) {
+  return { id: 'stub-media-import', chunkSize: 256 * 1024, maxBytes: Math.max(declaredSize, 1) };
+}
+
+export async function AppendMediaImportChunk(_sessionId, expectedOffset, encodedChunk) {
+  return expectedOffset + atob(encodedChunk).length;
+}
+
+export async function FinishMediaImport() {
+  return '';
+}
+
+export async function AbortMediaImport() {}
+
 export async function ImportAudioFile() {
   return '';
 }
@@ -72,6 +102,14 @@ export async function ImportPdfFile() {
 }
 
 export async function ImportPdfBase64() {
+  return '';
+}
+
+export async function ImportCsvFile() {
+  return '';
+}
+
+export async function ImportCsvBase64() {
   return '';
 }
 
@@ -167,6 +205,23 @@ export async function SaveCsvFile() {
   return true;
 }
 
-export async function SaveEventLogs() {
+export async function GetCsvPage(request) {
+  return {
+    path: request.path,
+    header: ['column'],
+    rows: [],
+    page: request.page,
+    limit: request.limit,
+    totalRows: 0,
+    hasMore: false,
+    revision: 'stub-csv-revision',
+  };
+}
+
+export async function SaveCsvPage(request) {
+  return { path: request.path, revision: 'stub-csv-revision', totalRows: request.rows.length };
+}
+
+export async function SaveEventLogs(_logsJson?: string) {
   return true;
 }

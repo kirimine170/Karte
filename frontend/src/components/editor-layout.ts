@@ -4,22 +4,48 @@ import type { WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
 import { prepareMarkdownForPreview } from '../utils/preview-content';
-import { writePreviewFrame } from '../utils/preview-frame';
+import { clearPreviewFrame, disposePreviewFrame, writePreviewFrame } from '../utils/preview-frame';
 import { convertTimestampsToLinks, updateAudioPlayerFromContent } from '../utils/preview-audio';
-import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { PdfLifecycleManager } from '../utils/pdf-lifecycle';
+import { PreviewSession, type PreviewSessionState } from '../utils/preview-session';
+import {
+    GlobalWorkerOptions,
+    getDocument,
+    type PDFDocumentLoadingTask,
+    type PDFDocumentProxy,
+} from 'pdfjs-dist/legacy/build/pdf.mjs';
 import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
+const PREVIEW_DEBOUNCE_MS = 200;
+const PDF_SCROLL_CACHE_LIMIT = 8;
+const PDF_SCROLL_OVERSCAN_PAGES = 2;
+const PDF_SCROLL_PAGE_GAP = 16;
+const PDF_SCROLL_FALLBACK_WIDTH = 800;
+
+interface PdfScrollCanvasEntry {
+    canvas: HTMLCanvasElement;
+    renderToken: number;
+    rendered: boolean;
+}
+
 export class EditorLayout extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
     private api: WailsAppAPI;
+    private previewDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+    private previewRequestGeneration = 0;
 
     // DOM要素
     private editor: HTMLTextAreaElement | null = null;
     private preview: HTMLIFrameElement | null = null;
     private previewBody: HTMLElement | null = null;
     private previewDropTarget: HTMLElement | null = null;
+    private previewPageControls: HTMLElement | null = null;
+    private previewPageInfo: HTMLElement | null = null;
+    private previewPrevBtn: HTMLButtonElement | null = null;
+    private previewNextBtn: HTMLButtonElement | null = null;
+    private previewSession: PreviewSession | null = null;
     private previewDropHandlersBound = false;
     private previewDragDepth = 0;
     private lastPreviewDropTs = 0;
@@ -35,8 +61,7 @@ export class EditorLayout extends BaseComponent {
     private realtimeTranscriptContent: HTMLElement | null = null;
     private pdfPane: HTMLElement | null = null;
     private lastPath = '';
-    private pdfDoc: PDFDocumentProxy | null = null;
-    private pdfSourceUrl = '';
+    private readonly pdfLifecycle = new PdfLifecycleManager();
     private pdfPageCount = 0;
     private pdfViewMode: 'single' | 'spread' | 'scroll' = 'single';
     private pdfCoverEnabled = true;
@@ -48,6 +73,11 @@ export class EditorLayout extends BaseComponent {
     private pdfCanvasLeft: HTMLCanvasElement | null = null;
     private pdfCanvasRight: HTMLCanvasElement | null = null;
     private pdfScrollContainer: HTMLElement | null = null;
+    private pdfScrollSlots = new Map<number, HTMLElement>();
+    private pdfScrollCanvases = new Map<number, PdfScrollCanvasEntry>();
+    private pdfScrollEstimatedPageHeight = 1;
+    private pdfScrollRenderToken = 0;
+    private pdfScrollUpdateScheduled = false;
     private pdfEmpty: HTMLElement | null = null;
     private pdfPageInfo: HTMLElement | null = null;
     private pdfPrevBtn: HTMLButtonElement | null = null;
@@ -61,6 +91,10 @@ export class EditorLayout extends BaseComponent {
     constructor(api: WailsAppAPI, parent?: HTMLElement) {
         super(parent);
         this.api = api;
+    }
+
+    private get pdfDoc(): PDFDocumentProxy | null {
+        return this.pdfLifecycle.currentDocument;
     }
 
     init(): void {
@@ -78,6 +112,16 @@ export class EditorLayout extends BaseComponent {
         this.preview = document.getElementById('preview') as HTMLIFrameElement;
         this.previewBody = document.querySelector('.preview-pane-body') as HTMLElement;
         this.previewDropTarget = document.getElementById('previewDropTarget');
+        this.previewPageControls = document.getElementById('previewPageControls');
+        this.previewPageInfo = document.getElementById('previewPageInfo');
+        this.previewPrevBtn = document.getElementById('previewPrevBtn') as HTMLButtonElement;
+        this.previewNextBtn = document.getElementById('previewNextBtn') as HTMLButtonElement;
+        if (this.preview) {
+            this.previewSession = new PreviewSession(
+                this.preview,
+                (state) => this.updatePreviewPageControls(state)
+            );
+        }
         this.recordingBtn = document.querySelector('.tabs #recordingBtn') as HTMLButtonElement;
         this.recordingBtnFooter = document.getElementById('recordingBtnFooter') as HTMLButtonElement;
         this.recordingIndicator = document.getElementById('recordingIndicator');
@@ -124,8 +168,7 @@ export class EditorLayout extends BaseComponent {
                     const target = e.target as HTMLTextAreaElement;
                     const content = target.value;
                     eventLogger.log('EditorLayout', 'editor-input', { contentLength: content.length });
-                    docStore.setMarkdownContent(content);
-                    docStore.setHasUnsavedChanges(true);
+                    docStore.setMarkdownContentAndMarkUnsaved(content);
                     this.updatePreview(content);
                 })
             );
@@ -203,6 +246,14 @@ export class EditorLayout extends BaseComponent {
                     window.dispatchEvent(new CustomEvent('karte-file-drop', { detail: { files } }));
                 })
             );
+
+            this.unsubscribe.push(
+                this.addEventListener(this.pdfCanvasContainer, 'scroll', () => {
+                    if (this.pdfViewMode === 'scroll') {
+                        this.schedulePdfScrollWindowUpdate();
+                    }
+                })
+            );
         }
 
         if (this.pdfPrevBtn) {
@@ -217,6 +268,22 @@ export class EditorLayout extends BaseComponent {
             this.unsubscribe.push(
                 this.addEventListener(this.pdfNextBtn, 'click', () => {
                     this.handlePdfArrow('right');
+                })
+            );
+        }
+
+        if (this.previewPrevBtn) {
+            this.unsubscribe.push(
+                this.addEventListener(this.previewPrevBtn, 'click', () => {
+                    this.previewSession?.previous();
+                })
+            );
+        }
+
+        if (this.previewNextBtn) {
+            this.unsubscribe.push(
+                this.addEventListener(this.previewNextBtn, 'click', () => {
+                    this.previewSession?.next();
                 })
             );
         }
@@ -349,11 +416,19 @@ export class EditorLayout extends BaseComponent {
                 ) {
                     return;
                 }
-                if (!this.pdfDoc || !this.pdfPane || this.pdfPane.style.display === 'none') {
+                if (this.pdfDoc && this.pdfPane && this.pdfPane.style.display !== 'none') {
+                    e.preventDefault();
+                    this.handlePdfArrow(e.key === 'ArrowLeft' ? 'left' : 'right');
                     return;
                 }
-                e.preventDefault();
-                this.handlePdfArrow(e.key === 'ArrowLeft' ? 'left' : 'right');
+                if (this.previewSession?.isPaged) {
+                    e.preventDefault();
+                    if (e.key === 'ArrowLeft') {
+                        this.previewSession.previous();
+                    } else {
+                        this.previewSession.next();
+                    }
+                }
             }
         };
         document.addEventListener('keydown', keydownHandler);
@@ -365,31 +440,68 @@ export class EditorLayout extends BaseComponent {
     private subscribeToStores(): void {
         // UI Store - レイアウトの表示/非表示
         this.unsubscribe.push(
-            useUIStore.subscribe((state) => {
+            useUIStore.subscribe((state, previousState) => {
                 this.updateLayout(state);
+                if (state.theme !== previousState.theme) {
+                    this.refreshPreviewTheme();
+                }
+                if (
+                    state.activeTab !== previousState.activeTab &&
+                    state.activeTab === 'editor' &&
+                    useDocStore.getState().currentPath.toLowerCase().endsWith('.board.md')
+                ) {
+                    this.resetPreviewFrame();
+                }
             })
         );
 
         // Doc Store - マークダウンコンテンツ
         this.unsubscribe.push(
-            useDocStore.subscribe((state) => {
-                if (state.currentPath !== this.lastPath) {
-                    this.lastPath = state.currentPath;
-                    const isPdf = state.currentPath.toLowerCase().endsWith('.pdf');
-                    this.setPdfMode(isPdf);
-                    this.setBoardReadOnly(state.currentPath.toLowerCase().endsWith('.board.md'));
-                    if (isPdf) {
-                        this.updatePdfPreview(state.currentPath);
+            useDocStore.subscribe(
+                (state) => ({
+                    currentPath: state.currentPath,
+                    markdownContent: state.markdownContent,
+                    previewHtml: state.previewHtml,
+                }),
+                (state, previousState) => {
+                    const pathChanged = state.currentPath !== this.lastPath;
+                    if (pathChanged) {
+                        this.cancelPendingPreviewRequest();
+                        this.resetPreviewFrame();
+                        this.lastPath = state.currentPath;
+                        const isPdf = state.currentPath.toLowerCase().endsWith('.pdf');
+                        this.setPdfMode(isPdf);
+                        this.setBoardReadOnly(state.currentPath.toLowerCase().endsWith('.board.md'));
+                        if (isPdf) {
+                            this.updatePdfPreview(state.currentPath);
+                        } else {
+                            this.releasePdfDocument();
+                        }
                     }
+                    if (this.editor && this.editor.value !== state.markdownContent) {
+                        this.editor.value = state.markdownContent;
+                    }
+                    if (state.previewHtml !== previousState.previewHtml) {
+                        const normalizedPath = state.currentPath.toLowerCase();
+                        if (
+                            state.previewHtml &&
+                            !normalizedPath.endsWith('.pdf') &&
+                            !normalizedPath.endsWith('.board.md')
+                        ) {
+                            this.updatePreviewFrame(state.previewHtml);
+                            this.updateAudioPlayer(state.markdownContent);
+                        } else if (!pathChanged) {
+                            this.resetPreviewFrame();
+                        }
+                    }
+                },
+                {
+                    equalityFn: (current, previous) =>
+                        current.currentPath === previous.currentPath &&
+                        current.markdownContent === previous.markdownContent &&
+                        current.previewHtml === previous.previewHtml,
                 }
-                if (this.editor && this.editor.value !== state.markdownContent) {
-                    this.editor.value = state.markdownContent;
-                }
-                if (state.previewHtml && !state.currentPath.toLowerCase().endsWith('.pdf') && !state.currentPath.toLowerCase().endsWith('.board.md')) {
-                    this.updatePreviewFrame(state.previewHtml);
-                    this.updateAudioPlayer(state.markdownContent);
-                }
-            })
+            )
         );
 
         // ASR Store - 録音状態
@@ -419,6 +531,16 @@ export class EditorLayout extends BaseComponent {
         this.updateLayout(uiStore);
         if (this.editor) {
             this.editor.value = docStore.markdownContent;
+        }
+        if (
+            docStore.previewHtml &&
+            !isPdf &&
+            !docStore.currentPath.toLowerCase().endsWith('.board.md')
+        ) {
+            this.updatePreviewFrame(docStore.previewHtml);
+            this.updateAudioPlayer(docStore.markdownContent);
+        } else {
+            this.resetPreviewFrame();
         }
     }
 
@@ -508,21 +630,54 @@ export class EditorLayout extends BaseComponent {
         });
     }
 
-    private async updatePreview(content: string): Promise<void> {
-        const currentPath = useDocStore.getState().currentPath.toLowerCase();
-        if (currentPath.endsWith('.pdf') || currentPath.endsWith('.board.md')) {
+    private updatePreview(content: string): void {
+        const requestGeneration = ++this.previewRequestGeneration;
+        if (this.previewDebounceTimer !== null) {
+            clearTimeout(this.previewDebounceTimer);
+            this.previewDebounceTimer = null;
+        }
+
+        const currentPath = useDocStore.getState().currentPath;
+        const normalizedPath = currentPath.toLowerCase();
+        if (normalizedPath.endsWith('.pdf') || normalizedPath.endsWith('.board.md')) {
             return;
         }
+
+        this.previewDebounceTimer = setTimeout(() => {
+            this.previewDebounceTimer = null;
+            void this.renderPreview(content, currentPath, requestGeneration);
+        }, PREVIEW_DEBOUNCE_MS);
+    }
+
+    private cancelPendingPreviewRequest(): void {
+        this.previewRequestGeneration += 1;
+        if (this.previewDebounceTimer !== null) {
+            clearTimeout(this.previewDebounceTimer);
+            this.previewDebounceTimer = null;
+        }
+    }
+
+    private async renderPreview(content: string, currentPath: string, requestGeneration: number): Promise<void> {
         try {
             const prepared = await prepareMarkdownForPreview(content, this.api);
+            if (!this.isCurrentPreviewRequest(currentPath, requestGeneration)) {
+                return;
+            }
             const html = await this.api.PreviewMarkdown(prepared);
+            if (!this.isCurrentPreviewRequest(currentPath, requestGeneration)) {
+                return;
+            }
             const finalHtml = this.buildPreviewHtml(prepared, html);
             useDocStore.getState().setPreviewHtml(finalHtml);
-            this.updatePreviewFrame(finalHtml);
-            this.updateAudioPlayer(content);
         } catch (error) {
-            console.error('Failed to update preview:', error);
+            if (this.isCurrentPreviewRequest(currentPath, requestGeneration)) {
+                console.error('Failed to update preview:', error);
+            }
         }
+    }
+
+    private isCurrentPreviewRequest(currentPath: string, requestGeneration: number): boolean {
+        return requestGeneration === this.previewRequestGeneration && currentPath === useDocStore.getState().currentPath;
     }
 
     private updatePreviewFrame(html: string): void {
@@ -530,7 +685,31 @@ export class EditorLayout extends BaseComponent {
             return;
         }
         writePreviewFrame(this.preview, html);
+        this.previewSession?.rendered(useDocStore.getState().currentPath);
         this.setupPreviewDropHandlers();
+    }
+
+    private resetPreviewFrame(): void {
+        this.previewSession?.suspend();
+        clearPreviewFrame(this.preview);
+        this.updateAudioPlayer('');
+    }
+
+    private updatePreviewPageControls(state: PreviewSessionState): void {
+        if (this.previewPageControls) {
+            this.previewPageControls.hidden = !state.paged;
+        }
+        if (this.previewPageInfo) {
+            this.previewPageInfo.textContent = state.paged
+                ? `${state.currentPage} / ${state.pageCount}`
+                : '-';
+        }
+        if (this.previewPrevBtn) {
+            this.previewPrevBtn.disabled = !state.canGoPrevious;
+        }
+        if (this.previewNextBtn) {
+            this.previewNextBtn.disabled = !state.canGoNext;
+        }
     }
 
     private setupPreviewDropHandlers(): void {
@@ -577,6 +756,31 @@ export class EditorLayout extends BaseComponent {
         return convertTimestampsToLinks(withCss);
     }
 
+    private refreshPreviewTheme(): void {
+        const docState = useDocStore.getState();
+        const normalizedPath = docState.currentPath.toLowerCase();
+        if (
+            !docState.previewHtml ||
+            normalizedPath.endsWith('.pdf') ||
+            normalizedPath.endsWith('.board.md')
+        ) {
+            return;
+        }
+
+        // previewHtml already contains timestamp links and other enhancement
+        // output，so only replace the theme/custom-CSS layer here．The DocStore
+        // commit remains the single iframe write path．
+        const themedHtml = applyCustomCssToHtml(
+            docState.markdownContent,
+            docState.previewHtml,
+            useCustomCssStore.getState().customCss,
+            useUIStore.getState().theme
+        );
+        if (themedHtml !== docState.previewHtml) {
+            docState.setPreviewHtml(themedHtml);
+        }
+    }
+
     private setBoardReadOnly(isBoard: boolean): void {
         if (!this.editor) {
             return;
@@ -595,17 +799,19 @@ export class EditorLayout extends BaseComponent {
         if (!this.pdfCanvasContainer) {
             return;
         }
+        const documentGeneration = this.beginPdfDocumentTransition();
         try {
             const pdfUrl = await this.api.GetPdfFileURL(path);
-            const resolvedUrl = this.resolvePdfUrl(pdfUrl);
-            if (resolvedUrl !== this.pdfSourceUrl) {
-                await this.loadPdfDocument(resolvedUrl);
-            } else {
-                this.renderPdfPages();
+            if (!this.pdfLifecycle.isCurrentGeneration(documentGeneration)) {
+                return;
             }
+            const resolvedUrl = this.resolvePdfUrl(pdfUrl);
+            await this.loadPdfDocument(resolvedUrl, documentGeneration);
         } catch (error) {
-            console.error('Failed to load PDF:', error);
-            this.showPdfEmpty('PDFの読み込みに失敗しました');
+            if (this.pdfLifecycle.isCurrentGeneration(documentGeneration)) {
+                console.error('Failed to load PDF:', error);
+                this.showPdfEmpty('PDFの読み込みに失敗しました');
+            }
         }
     }
 
@@ -617,20 +823,19 @@ export class EditorLayout extends BaseComponent {
         }
     }
 
-    private async loadPdfDocument(url: string): Promise<void> {
+    private async loadPdfDocument(url: string, documentGeneration: number): Promise<void> {
         if (!this.pdfCanvasContainer) {
             return;
         }
         this.showPdfEmpty('PDFを読み込み中...');
-        const loadingTask = getDocument({
-            url,
-            cMapUrl: '/pdfjs/cmaps/',
-            cMapPacked: true,
-            standardFontDataUrl: '/pdfjs/standard_fonts/',
-        });
-        this.pdfDoc = await loadingTask.promise;
-        this.pdfSourceUrl = url;
-        this.pdfPageCount = this.pdfDoc.numPages;
+        const pdfDoc = await this.pdfLifecycle.loadDocument(
+            documentGeneration,
+            () => this.createPdfLoadingTask(url)
+        );
+        if (!pdfDoc || !this.pdfLifecycle.isCurrentGeneration(documentGeneration)) {
+            return;
+        }
+        this.pdfPageCount = pdfDoc.numPages;
         this.pdfPageNumber = 1;
         this.pdfSpreadIndex = 0;
         this.pdfViewMode = this.pdfPageCount <= 1 ? 'scroll' : 'single';
@@ -640,12 +845,49 @@ export class EditorLayout extends BaseComponent {
         this.renderPdfPages();
     }
 
+    private createPdfLoadingTask(url: string): PDFDocumentLoadingTask {
+        return getDocument({
+            url,
+            cMapUrl: '/pdfjs/cmaps/',
+            cMapPacked: true,
+            standardFontDataUrl: '/pdfjs/standard_fonts/',
+        });
+    }
+
+    private beginPdfDocumentTransition(): number {
+        this.pdfRenderRequestId++;
+        this.pdfPageCount = 0;
+        const documentGeneration = this.pdfLifecycle.beginDocumentTransition();
+        this.clearPdfCanvases();
+        this.updatePdfControlsState();
+        return documentGeneration;
+    }
+
+    private releasePdfDocument(): void {
+        this.beginPdfDocumentTransition();
+    }
+
     private renderPdfPages(): void {
+        const requestId = ++this.pdfRenderRequestId;
+        void this.renderPdfPagesForRequest(requestId).catch((error) => {
+            if (requestId !== this.pdfRenderRequestId) {
+                return;
+            }
+            console.error('Failed to render PDF:', error);
+            this.showPdfEmpty('PDFの描画に失敗しました');
+        });
+    }
+
+    private async renderPdfPagesForRequest(requestId: number): Promise<void> {
+        await this.pdfLifecycle.beginRenderCycle();
+        if (requestId !== this.pdfRenderRequestId) {
+            return;
+        }
         if (!this.pdfDoc || !this.pdfCanvasContainer || !this.pdfCanvasLeft || !this.pdfCanvasRight) {
             return;
         }
 
-        const requestId = ++this.pdfRenderRequestId;
+        this.clearPdfCanvases();
         const isSingle = this.pdfViewMode === 'single';
         const isScroll = this.pdfViewMode === 'scroll';
         const isCoverOnly = this.pdfViewMode === 'spread' && this.pdfCoverEnabled && this.pdfSpreadIndex === 0;
@@ -656,14 +898,14 @@ export class EditorLayout extends BaseComponent {
         this.hidePdfEmpty();
 
         if (isScroll) {
-            this.renderScrollPages(requestId);
+            await this.renderScrollPages(requestId);
             return;
         }
 
         if (isSingle) {
-            this.renderSinglePage(requestId);
+            await this.renderSinglePage(requestId);
         } else {
-            this.renderSpreadPages(requestId, isCoverOnly);
+            await this.renderSpreadPages(requestId, isCoverOnly);
         }
     }
 
@@ -687,20 +929,175 @@ export class EditorLayout extends BaseComponent {
             return;
         }
 
-        this.pdfScrollContainer.innerHTML = '';
-        const containerWidth = this.pdfCanvasContainer.clientWidth;
+        this.setupPdfScrollSlots();
+        await this.updatePdfScrollWindow(requestId);
+        this.updatePdfPageInfo(`全${this.pdfPageCount}ページ`);
+    }
 
+    private setupPdfScrollSlots(): void {
+        if (!this.pdfCanvasContainer || !this.pdfScrollContainer) {
+            return;
+        }
+        this.clearPdfScrollVirtualization();
+        const pageWidth = this.getPdfScrollPageWidth();
+        this.pdfScrollEstimatedPageHeight = Math.max(1, Math.round(pageWidth * Math.SQRT2));
+        const fragment = document.createDocumentFragment();
         for (let pageNumber = 1; pageNumber <= this.pdfPageCount; pageNumber += 1) {
-            if (requestId !== this.pdfRenderRequestId) {
+            const slot = document.createElement('div');
+            slot.className = 'pdf-scroll-page';
+            slot.dataset.pageNumber = String(pageNumber);
+            slot.style.minHeight = `${this.pdfScrollEstimatedPageHeight}px`;
+            slot.setAttribute('aria-label', `${pageNumber}ページ`);
+            this.pdfScrollSlots.set(pageNumber, slot);
+            fragment.appendChild(slot);
+        }
+        this.pdfScrollContainer.appendChild(fragment);
+    }
+
+    private schedulePdfScrollWindowUpdate(): void {
+        if (this.pdfScrollUpdateScheduled) {
+            return;
+        }
+        this.pdfScrollUpdateScheduled = true;
+        queueMicrotask(() => {
+            this.pdfScrollUpdateScheduled = false;
+            if (this.pdfViewMode !== 'scroll' || !this.pdfDoc) {
                 return;
+            }
+            const requestId = this.pdfRenderRequestId;
+            void this.updatePdfScrollWindow(requestId).catch((error) => {
+                if (requestId === this.pdfRenderRequestId) {
+                    console.error('Failed to render PDF scroll window:', error);
+                }
+            });
+        });
+    }
+
+    private async updatePdfScrollWindow(requestId: number): Promise<void> {
+        if (
+            requestId !== this.pdfRenderRequestId ||
+            this.pdfViewMode !== 'scroll' ||
+            !this.pdfDoc ||
+            !this.pdfCanvasContainer
+        ) {
+            return;
+        }
+        const renderToken = ++this.pdfScrollRenderToken;
+        const desiredPages = this.getPdfScrollWindowPages();
+        const desiredPageSet = new Set(desiredPages);
+
+        for (const [pageNumber, entry] of this.pdfScrollCanvases) {
+            if (!desiredPageSet.has(pageNumber) || (!entry.rendered && entry.renderToken !== renderToken)) {
+                this.evictPdfScrollCanvas(pageNumber, entry);
+            }
+        }
+
+        const pageWidth = this.getPdfScrollPageWidth();
+        for (const pageNumber of desiredPages) {
+            if (
+                requestId !== this.pdfRenderRequestId ||
+                renderToken !== this.pdfScrollRenderToken ||
+                this.pdfViewMode !== 'scroll'
+            ) {
+                return;
+            }
+            const currentEntry = this.pdfScrollCanvases.get(pageNumber);
+            if (currentEntry?.rendered) {
+                continue;
+            }
+            if (currentEntry) {
+                this.evictPdfScrollCanvas(pageNumber, currentEntry);
+            }
+            const slot = this.pdfScrollSlots.get(pageNumber);
+            if (!slot) {
+                continue;
             }
             const canvas = document.createElement('canvas');
             canvas.className = 'pdf-scroll-canvas';
-            this.pdfScrollContainer.appendChild(canvas);
-            await this.renderPdfPageToCanvas(pageNumber, canvas, containerWidth, Number.MAX_SAFE_INTEGER, requestId);
+            canvas.dataset.pageNumber = String(pageNumber);
+            const entry: PdfScrollCanvasEntry = { canvas, renderToken, rendered: false };
+            this.pdfScrollCanvases.set(pageNumber, entry);
+            slot.replaceChildren(canvas);
+
+            await this.renderPdfPageToCanvas(
+                pageNumber,
+                canvas,
+                pageWidth,
+                Number.MAX_SAFE_INTEGER,
+                requestId,
+                () =>
+                    renderToken === this.pdfScrollRenderToken &&
+                    this.pdfScrollCanvases.get(pageNumber) === entry
+            );
+            if (
+                renderToken !== this.pdfScrollRenderToken ||
+                this.pdfScrollCanvases.get(pageNumber) !== entry
+            ) {
+                return;
+            }
+            entry.rendered = true;
+            if (canvas.height > 0) {
+                slot.style.minHeight = `${canvas.height}px`;
+            }
+        }
+    }
+
+    private getPdfScrollWindowPages(): number[] {
+        if (!this.pdfCanvasContainer || this.pdfPageCount === 0) {
+            return [];
+        }
+        const viewportTop = this.pdfCanvasContainer.scrollTop;
+        const viewportHeight = this.pdfCanvasContainer.clientHeight || this.pdfScrollEstimatedPageHeight;
+        const viewportBottom = viewportTop + viewportHeight;
+        const slots = Array.from(this.pdfScrollSlots.entries());
+        const hasMeasuredSlots = slots.some(([, slot]) => slot.offsetHeight > 0);
+
+        let firstVisible: number;
+        let lastVisible: number;
+        if (hasMeasuredSlots) {
+            firstVisible = slots.find(([, slot]) => slot.offsetTop + slot.offsetHeight >= viewportTop)?.[0] || 1;
+            lastVisible = [...slots].reverse().find(([, slot]) => slot.offsetTop <= viewportBottom)?.[0] || firstVisible;
+        } else {
+            const pageStride = this.pdfScrollEstimatedPageHeight + PDF_SCROLL_PAGE_GAP;
+            firstVisible = Math.min(this.pdfPageCount, Math.max(1, Math.floor(viewportTop / pageStride) + 1));
+            const visiblePageCount = Math.max(1, Math.ceil(viewportHeight / pageStride) + 1);
+            lastVisible = Math.min(this.pdfPageCount, firstVisible + visiblePageCount - 1);
         }
 
-        this.updatePdfPageInfo(`全${this.pdfPageCount}ページ`);
+        let firstPage = Math.max(1, firstVisible - PDF_SCROLL_OVERSCAN_PAGES);
+        let lastPage = Math.min(this.pdfPageCount, lastVisible + PDF_SCROLL_OVERSCAN_PAGES);
+        if (lastPage - firstPage + 1 > PDF_SCROLL_CACHE_LIMIT) {
+            const centerPage = Math.floor((firstVisible + lastVisible) / 2);
+            firstPage = Math.max(1, centerPage - Math.floor(PDF_SCROLL_CACHE_LIMIT / 2));
+            lastPage = Math.min(this.pdfPageCount, firstPage + PDF_SCROLL_CACHE_LIMIT - 1);
+            firstPage = Math.max(1, lastPage - PDF_SCROLL_CACHE_LIMIT + 1);
+        }
+        return Array.from({ length: lastPage - firstPage + 1 }, (_, index) => firstPage + index);
+    }
+
+    private getPdfScrollPageWidth(): number {
+        const containerWidth = this.pdfCanvasContainer?.clientWidth || PDF_SCROLL_FALLBACK_WIDTH;
+        return Math.max(1, containerWidth - 24);
+    }
+
+    private evictPdfScrollCanvas(pageNumber: number, entry: PdfScrollCanvasEntry): void {
+        if (this.pdfScrollCanvases.get(pageNumber) !== entry) {
+            return;
+        }
+        this.pdfScrollCanvases.delete(pageNumber);
+        this.pdfLifecycle.releaseCanvas(entry.canvas);
+        entry.canvas.remove();
+    }
+
+    private clearPdfScrollVirtualization(): void {
+        this.pdfScrollRenderToken++;
+        this.pdfScrollUpdateScheduled = false;
+        for (const [pageNumber, entry] of this.pdfScrollCanvases) {
+            this.evictPdfScrollCanvas(pageNumber, entry);
+        }
+        this.pdfScrollCanvases.clear();
+        this.pdfScrollSlots.clear();
+        this.pdfScrollContainer?.replaceChildren();
     }
 
     private async renderSpreadPages(requestId: number, coverOnly: boolean): Promise<void> {
@@ -789,18 +1186,21 @@ export class EditorLayout extends BaseComponent {
         canvas: HTMLCanvasElement,
         maxWidth: number,
         maxHeight: number,
-        requestId: number
+        requestId: number,
+        isStillNeeded: () => boolean = () => true
     ): Promise<void> {
-        if (!this.pdfDoc) {
+        const pdfDoc = this.pdfDoc;
+        if (!pdfDoc) {
             return;
         }
-        const page = await this.pdfDoc.getPage(pageNumber);
-        if (requestId !== this.pdfRenderRequestId) {
+        const page = await pdfDoc.getPage(pageNumber);
+        if (requestId !== this.pdfRenderRequestId || pdfDoc !== this.pdfDoc || !isStillNeeded()) {
             return;
         }
         const viewport = page.getViewport({ scale: 1 });
         const scale = Math.min(maxWidth / viewport.width, maxHeight / viewport.height);
         const scaledViewport = page.getViewport({ scale: Math.max(scale, 0.1) });
+        this.pdfLifecycle.trackCanvas(canvas);
         canvas.width = Math.floor(scaledViewport.width);
         canvas.height = Math.floor(scaledViewport.height);
         const context = canvas.getContext('2d');
@@ -808,7 +1208,35 @@ export class EditorLayout extends BaseComponent {
             return;
         }
         context.clearRect(0, 0, canvas.width, canvas.height);
-        await page.render({ canvasContext: context, viewport: scaledViewport }).promise;
+        const renderTask = page.render({ canvas, canvasContext: context, viewport: scaledViewport });
+        this.pdfLifecycle.trackRenderTask(renderTask, canvas);
+        try {
+            await renderTask.promise;
+        } catch (error) {
+            if (
+                requestId !== this.pdfRenderRequestId ||
+                pdfDoc !== this.pdfDoc ||
+                !isStillNeeded() ||
+                isPdfRenderCancellation(error)
+            ) {
+                return;
+            }
+            throw error;
+        }
+    }
+
+    private clearPdfCanvases(): void {
+        this.clearPdfScrollVirtualization();
+        const canvases = [
+            this.pdfCanvasLeft,
+            this.pdfCanvasRight,
+        ];
+        canvases.forEach((canvas) => {
+            if (canvas) {
+                canvas.width = 0;
+                canvas.height = 0;
+            }
+        });
     }
 
     private handlePdfArrow(direction: 'left' | 'right'): void {
@@ -1042,9 +1470,19 @@ export class EditorLayout extends BaseComponent {
         }
 
         if (this.realtimeTranscriptContent) {
-            const finalText = transcript.final.join('\n');
-            const partialText = transcript.partial ? `<div class="transcript-partial">${transcript.partial}</div>` : '';
-            this.realtimeTranscriptContent.innerHTML = finalText + partialText;
+            this.realtimeTranscriptContent.replaceChildren();
+            transcript.final.forEach((text) => {
+                const finalLine = document.createElement('div');
+                finalLine.className = 'transcript-final';
+                finalLine.textContent = text;
+                this.realtimeTranscriptContent?.appendChild(finalLine);
+            });
+            if (transcript.partial) {
+                const partialLine = document.createElement('div');
+                partialLine.className = 'transcript-partial';
+                partialLine.textContent = transcript.partial;
+                this.realtimeTranscriptContent.appendChild(partialLine);
+            }
         }
     }
 
@@ -1062,8 +1500,7 @@ export class EditorLayout extends BaseComponent {
         this.editor.setSelectionRange(nextCursor, nextCursor);
 
         const docStore = useDocStore.getState();
-        docStore.setMarkdownContent(nextValue);
-        docStore.setHasUnsavedChanges(true);
+        docStore.setMarkdownContentAndMarkUnsaved(nextValue);
         this.updatePreview(nextValue);
     }
 
@@ -1082,8 +1519,7 @@ export class EditorLayout extends BaseComponent {
         this.editor.focus();
 
         const docStore = useDocStore.getState();
-        docStore.setMarkdownContent(nextValue);
-        docStore.setHasUnsavedChanges(true);
+        docStore.setMarkdownContentAndMarkUnsaved(nextValue);
         this.updatePreview(nextValue);
     }
 
@@ -1101,8 +1537,7 @@ export class EditorLayout extends BaseComponent {
         this.editor.setSelectionRange(nextCursor, nextCursor);
 
         const docStore = useDocStore.getState();
-        docStore.setMarkdownContent(nextValue);
-        docStore.setHasUnsavedChanges(true);
+        docStore.setMarkdownContentAndMarkUnsaved(nextValue);
         this.updatePreview(nextValue);
     }
 
@@ -1123,8 +1558,7 @@ export class EditorLayout extends BaseComponent {
         this.editor.focus();
 
         const docStore = useDocStore.getState();
-        docStore.setMarkdownContent(nextValue);
-        docStore.setHasUnsavedChanges(true);
+        docStore.setMarkdownContentAndMarkUnsaved(nextValue);
         this.updatePreview(nextValue);
     }
 
@@ -1493,7 +1927,18 @@ export class EditorLayout extends BaseComponent {
     }
 
     destroy(): void {
+        this.cancelPendingPreviewRequest();
+        this.previewSession?.destroy();
+        this.previewSession = null;
+        disposePreviewFrame(this.preview);
+        this.pdfRenderRequestId++;
+        void this.pdfLifecycle.destroy();
+        this.clearPdfCanvases();
         this.unsubscribe.forEach((unsub) => unsub());
         this.unsubscribe = [];
     }
+}
+
+function isPdfRenderCancellation(error: unknown): boolean {
+    return error instanceof Error && error.name === 'RenderingCancelledException';
 }

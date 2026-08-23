@@ -4,8 +4,52 @@ export interface FileItem {
     path: string;
     title?: string;
     modTime?: string;
+    size?: number;
+    // Legacy callers may still provide this field，but GetFileList no longer emits it．
     searchText?: string;
     [key: string]: unknown;
+}
+
+export interface FileSearchResult {
+    items: FileItem[];
+    page: number;
+    limit: number;
+    total: number;
+    hasMore: boolean;
+}
+
+export type ResourceKind = 'markdown' | 'pdf' | 'image' | 'csv';
+
+export interface ResourceSearchRequest {
+    query: string;
+    kinds: ResourceKind[];
+    excludePaths?: string[];
+    page: number;
+    limit: number;
+}
+
+export interface ResourceSearchMetadata {
+    name: string;
+    extension: string;
+    size: number;
+    modTime: string;
+}
+
+export interface ResourceSearchItem {
+    kind: ResourceKind;
+    path: string;
+    title: string;
+    metadata: ResourceSearchMetadata;
+}
+
+export interface ResourceSearchResult {
+    items: ResourceSearchItem[];
+    query: string;
+    kinds: ResourceKind[];
+    page: number;
+    limit: number;
+    total: number;
+    hasMore: boolean;
 }
 
 export interface GraphNode {
@@ -42,6 +86,14 @@ export interface ASRStatus {
     initializing: boolean;
 }
 
+export type MediaImportKind = 'audio' | 'image' | 'pdf' | 'csv';
+
+export interface MediaImportSession {
+    id: string;
+    chunkSize: number;
+    maxBytes: number;
+}
+
 export interface ImageInfo {
     path: string;
     name: string;
@@ -54,6 +106,40 @@ export interface CsvInfo {
     name: string;
     size: number;
     modTime: string;
+}
+
+export interface CsvPageRequest {
+    path: string;
+    page: number;
+    limit: number;
+}
+
+export interface CsvPageResult {
+    path: string;
+    header: string[];
+    rows: string[][];
+    page: number;
+    limit: number;
+    totalRows: number;
+    hasMore: boolean;
+    revision: string;
+    // Frontend compatibility marker．The current backend never emits it．
+    legacy?: boolean;
+}
+
+export interface CsvSavePageRequest {
+    path: string;
+    revision: string;
+    page: number;
+    limit: number;
+    header: string[];
+    rows: string[][];
+}
+
+export interface CsvSaveResult {
+    path: string;
+    revision: string;
+    totalRows: number;
 }
 
 export interface BoardCardLayout {
@@ -134,6 +220,8 @@ export interface ClipResult {
 // Wails App API
 export interface WailsAppAPI {
     GetFileList(): Promise<FileItem[]>;
+    SearchFiles?(query: string, page: number, limit: number): Promise<FileSearchResult>;
+    SearchResources?(request: ResourceSearchRequest): Promise<ResourceSearchResult>;
     LoadFile(path: string): Promise<string>;
     LoadBoard(path: string): Promise<BoardDocument>;
     SaveBoard(path: string, board: BoardDocument): Promise<BoardDocument>;
@@ -156,6 +244,10 @@ export interface WailsAppAPI {
     ImportImageBase64(name: string, data: string): Promise<string>;
     ImportPdfFile(path: string): Promise<string>;
     ImportPdfBase64(name: string, data: string): Promise<string>;
+    BeginMediaImport?(kind: MediaImportKind, filename: string, declaredSize: number): Promise<MediaImportSession>;
+    AppendMediaImportChunk?(sessionId: string, expectedOffset: number, encodedChunk: string): Promise<number>;
+    FinishMediaImport?(sessionId: string): Promise<string>;
+    AbortMediaImport?(sessionId: string): Promise<void>;
     GetASRStatus(): Promise<ASRStatus>;
     GetAudioFileURL(audioPath: string): Promise<string>;
     GetImageFileURL(imagePath: string): Promise<string>;
@@ -176,7 +268,9 @@ export interface WailsAppAPI {
     AllowClose(): Promise<boolean>;
     GetCsvList(): Promise<CsvInfo[]>;
     GetCsvFile(path: string): Promise<string[][]>;
-    SaveCsvFile(path: string, data: string[][]): Promise<boolean>;
+    SaveCsvFile(path: string, data: string[][]): Promise<boolean | void>;
+    GetCsvPage?(request: CsvPageRequest): Promise<CsvPageResult>;
+    SaveCsvPage?(request: CsvSavePageRequest): Promise<CsvSaveResult>;
     ImportCsvFile(src: string): Promise<string>;
     ImportCsvBase64(filename: string, base64Data: string): Promise<string>;
     SaveEventLogs(logsJson: string): Promise<boolean>;

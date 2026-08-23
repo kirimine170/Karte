@@ -18,10 +18,25 @@ import { eventLogger } from './utils/event-logger';
 import { applyCustomCssToHtml } from './utils/custom-css';
 import { renderMarkdownPreview } from './utils/preview-renderer';
 import { convertTimestampsToLinks } from './utils/preview-audio';
+import {
+    beginDocumentTransition,
+    cancelDocumentTransition,
+    captureDocumentPreviewGuard,
+    commitBoardDocumentTransition,
+    commitDocumentPreview,
+    commitEditorDocumentTransition,
+    commitGuardedDocumentPreview,
+    isBoardDocumentPath,
+    isDocumentTransitionActive,
+    isPdfDocumentPath,
+    invalidateDocumentTransitions,
+    type DocumentTransition,
+} from './utils/document-transition';
 
 export class App {
     private api: WailsAppAPI | null = null;
     private runtime: WailsRuntimeAPI | null = null;
+    private documentTransition: DocumentTransition | null = null;
     private components: {
         topbar: Topbar | null;
         sidebar: Sidebar | null;
@@ -57,15 +72,7 @@ export class App {
             // EventLoggerにAPIを設定
             if (this.api) {
                 eventLogger.setApi({
-                    SaveEventLogs: async (logsJson: string) => {
-                        try {
-                            await this.api!.SaveEventLogs(logsJson);
-                            return true;
-                        } catch (error) {
-                            console.error('Failed to save event logs:', error);
-                            return false;
-                        }
-                    }
+                    SaveEventLogs: (logsJson: string) => this.api!.SaveEventLogs(logsJson)
                 });
                 // 自動保存を開始（60秒ごと）
                 eventLogger.startAutoSave(60000);
@@ -178,31 +185,28 @@ export class App {
         if (!this.api) {
             return;
         }
-        if (path.toLowerCase().endsWith('.board.md')) {
-            const board = await this.api.LoadBoard(path);
-            this.applyBoardDocument(board);
-            return;
-        }
-        const content = await this.api.LoadFile(path);
-        useDocStore.getState().setCurrentPath(path);
-        if (path.toLowerCase().endsWith('.pdf')) {
-            useDocStore.getState().setMarkdownContent('');
-            useDocStore.getState().setPreviewHtml('');
-        } else {
-            useDocStore.getState().setMarkdownContent(content);
+        const transition = beginDocumentTransition(path);
+        this.documentTransition = transition;
+        try {
+            if (isBoardDocumentPath(path)) {
+                const board = await this.api.LoadBoard(path);
+                commitBoardDocumentTransition(transition, board);
+                return;
+            }
+            const content = await this.api.LoadFile(path);
+            if (!commitEditorDocumentTransition(transition, content) || isPdfDocumentPath(path)) {
+                return;
+            }
             const { prepared, html } = await renderMarkdownPreview(content, this.api, path);
-            useDocStore.getState().setPreviewHtml(this.buildPreviewHtml(prepared, html));
+            if (!isDocumentTransitionActive(transition)) {
+                return;
+            }
+            commitDocumentPreview(transition, this.buildPreviewHtml(prepared, html));
+        } finally {
+            if (this.documentTransition === transition) {
+                this.documentTransition = null;
+            }
         }
-        useDocStore.getState().clearUnsavedChanges();
-    }
-
-    private applyBoardDocument(board: BoardDocument): void {
-        useBoardStore.getState().setBoard(board);
-        useDocStore.getState().setCurrentPath(board.path);
-        useDocStore.getState().setMarkdownContent(board.rawContent);
-        useDocStore.getState().setPreviewHtml('');
-        useDocStore.getState().clearUnsavedChanges();
-        useUIStore.getState().setActiveTab('board');
     }
 
     private setupWailsEvents(): void {
@@ -262,7 +266,6 @@ export class App {
                 this.loadFileByPath(payload.transcriptPath).catch((error) => {
                     console.error('Failed to load transcript:', error);
                 });
-                useUIStore.getState().setActiveTab('editor');
             } else {
                 this.refreshFileList().catch((error) => {
                     console.error('Failed to refresh file list after transcription:', error);
@@ -283,17 +286,40 @@ export class App {
             console.log('Recording transcript final:', data);
             const payload = data as { text?: string; transcriptPath?: string };
             if (payload?.text) {
-                useASRStore.getState().appendFinalTranscript(payload.text);
+                useASRStore.getState().setRealtimeTranscript('', [payload.text]);
             }
             if (payload?.transcriptPath) {
                 useASRStore.getState().setRecordingTranscriptPath(payload.transcriptPath);
             }
         });
 
+        this.runtime.EventsOn('recording-transcript-partial', (data: unknown) => {
+            const payload = data as { text?: string; transcriptPath?: string };
+            if (typeof payload?.text === 'string') {
+                useASRStore.getState().setRealtimeTranscript(payload.text);
+            }
+            if (payload?.transcriptPath) {
+                useASRStore.getState().setRecordingTranscriptPath(payload.transcriptPath);
+            }
+        });
+
+        this.runtime.EventsOn('recording-input-level', (data: unknown) => {
+            const level = Number((data as { level?: unknown })?.level);
+            if (Number.isFinite(level)) {
+                useASRStore.getState().setMicLevel(Math.min(100, Math.max(0, level * 100)));
+            }
+        });
+
         this.runtime.EventsOn('recording-stopped', (data: unknown) => {
             console.log('Recording stopped:', data);
             const payload = data as { error?: string; audioPath?: string; transcriptPath?: string };
-            useASRStore.getState().setIsRecording(false);
+            const asrStore = useASRStore.getState();
+            asrStore.setIsRecording(false);
+            asrStore.setMicLevel(0);
+            asrStore.setRealtimeTranscript('');
+            if (payload?.transcriptPath) {
+                asrStore.setRecordingTranscriptPath(payload.transcriptPath);
+            }
 
             if (payload?.error) {
                 useUIStore.getState().setStatusMessage(`録音の停止に失敗しました: ${payload.error}`, 5000);
@@ -301,14 +327,12 @@ export class App {
             }
 
             if (payload?.transcriptPath) {
-                useASRStore.getState().setRecordingTranscriptPath(payload.transcriptPath);
                 this.refreshFileList().catch((error) => {
                     console.error('Failed to refresh file list after recording:', error);
                 });
                 this.loadFileByPath(payload.transcriptPath).catch((error) => {
                     console.error('Failed to load recording transcript:', error);
                 });
-                useUIStore.getState().setActiveTab('editor');
                 useUIStore.getState().setStatusMessage('録音と文字起こしが完了しました', 3000);
             } else {
                 this.refreshFileList().catch((error) => {
@@ -480,14 +504,15 @@ export class App {
         if (!docStore.currentPath || !this.api) {
             return;
         }
-        if (docStore.currentPath.toLowerCase().endsWith('.pdf') || docStore.currentPath.toLowerCase().endsWith('.board.md')) {
+        if (isPdfDocumentPath(docStore.currentPath) || isBoardDocumentPath(docStore.currentPath)) {
             return;
         }
 
+        const previewGuard = captureDocumentPreviewGuard(docStore.currentPath);
         try {
             const content = await this.api.LoadFile(docStore.currentPath);
             const { prepared, html } = await renderMarkdownPreview(content, this.api, docStore.currentPath);
-            useDocStore.getState().setPreviewHtml(this.buildPreviewHtml(prepared, html));
+            commitGuardedDocumentPreview(previewGuard, this.buildPreviewHtml(prepared, html));
         } catch (error) {
             console.error('Failed to refresh preview:', error);
         }
@@ -519,14 +544,10 @@ export class App {
     }
 
     destroy(): void {
-        // 最終的なログを保存
-        if (this.api) {
-            eventLogger.saveToBackend().catch(err => {
-                console.error('Failed to save logs on destroy:', err);
-            });
-        }
-
-        // 自動保存を停止
+        cancelDocumentTransition(this.documentTransition);
+        this.documentTransition = null;
+        invalidateDocumentTransitions();
+        // Stop the timer before component cleanup，then flush the final stable snapshot．
         eventLogger.stopAutoSave();
 
         // コンポーネントのクリーンアップ
@@ -535,5 +556,7 @@ export class App {
                 component.destroy();
             }
         });
+
+        void eventLogger.destroy();
     }
 }

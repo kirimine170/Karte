@@ -183,6 +183,12 @@ export interface ModalState {
         visible: boolean;
         filePath: string;
         data: string[][];
+        page?: number;
+        limit?: number;
+        totalRows?: number;
+        hasMore?: boolean;
+        revision?: string;
+        legacy?: boolean;
     };
     
     // コンフリクト解決モーダル

@@ -7,6 +7,7 @@ import { useModalStore } from '../stores/modal-store';
 export class ImageGallery extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
     private api: WailsAppAPI;
+    private destroyed = true;
     private captureScreenBtn: HTMLButtonElement | null = null;
     private imageGalleryGrid: HTMLElement | null = null;
     private imageGalleryEmpty: HTMLElement | null = null;
@@ -16,6 +17,7 @@ export class ImageGallery extends BaseComponent {
     private activeImageLoads = 0;
     private maxImageLoads = 6;
     private renderChunkSize = 36;
+    private renderAnimationFrame: number | null = null;
 
     constructor(api: WailsAppAPI) {
         super();
@@ -23,6 +25,10 @@ export class ImageGallery extends BaseComponent {
     }
 
     init(): void {
+        if (!this.destroyed) {
+            return;
+        }
+        this.destroyed = false;
         eventLogger.log('ImageGallery', 'init');
 
         this.captureScreenBtn = document.getElementById('captureScreenBtn') as HTMLButtonElement;
@@ -45,8 +51,12 @@ export class ImageGallery extends BaseComponent {
             }
         }
 
+        if (this.imageGalleryGrid) {
+            this.setupGalleryEventDelegation(this.imageGalleryGrid);
+        }
+
         // 初期ギャラリーの読み込み
-        this.loadImageGallery();
+        void this.loadImageGallery();
     }
 
     private async handleCaptureScreen(): Promise<void> {
@@ -61,6 +71,10 @@ export class ImageGallery extends BaseComponent {
 
             const path = await this.api.CaptureScreenInteractive();
 
+            if (this.destroyed) {
+                return;
+            }
+
             if (path && typeof path === 'string') {
                 eventLogger.log('ImageGallery', 'capture-screen-success', { path });
                 useUIStore.getState().setStatusMessage('スクリーンショットを保存しました', 3000);
@@ -70,37 +84,46 @@ export class ImageGallery extends BaseComponent {
                 useUIStore.getState().setStatusMessage('スクリーンショットがキャンセルされました', 2000);
             }
         } catch (error) {
+            if (this.destroyed) {
+                return;
+            }
             console.error('Failed to capture screenshot:', error);
             eventLogger.log('ImageGallery', 'capture-screen-error', { error: String(error) });
-            const msg = (error && (error as Error).message) || String(error) || 'スクリーンショットに失敗しました';
+            const msg = error instanceof Error
+                ? error.message
+                : String(error || 'スクリーンショットに失敗しました');
             useUIStore.getState().setStatusMessage(msg, 5000);
         } finally {
-            if (this.captureScreenBtn) {
+            if (!this.destroyed && this.captureScreenBtn) {
                 this.captureScreenBtn.disabled = false;
             }
         }
     }
 
     private async loadImageGallery(): Promise<void> {
-        if (!this.imageGalleryGrid || !this.api.GetImageList) {
+        if (this.destroyed || !this.imageGalleryGrid || !this.api.GetImageList) {
             return;
         }
 
         const requestId = ++this.imageGalleryRequestId;
+        this.stopRenderWork();
 
         try {
             eventLogger.log('ImageGallery', 'load-gallery-start');
             const images = await this.api.GetImageList();
 
-            if (requestId !== this.imageGalleryRequestId) {
+            if (!this.isRequestActive(requestId)) {
                 // より新しいリクエストが先に完了した場合は無視
                 return;
             }
 
             eventLogger.log('ImageGallery', 'load-gallery-success', { count: images.length });
             const dedupedImages = this.deduplicateImages(images);
-            await this.renderImageGallery(dedupedImages);
+            this.renderImageGallery(dedupedImages, requestId);
         } catch (error) {
+            if (!this.isRequestActive(requestId)) {
+                return;
+            }
             console.error('Failed to load image gallery:', error);
             eventLogger.log('ImageGallery', 'load-gallery-error', { error: String(error) });
         }
@@ -122,8 +145,8 @@ export class ImageGallery extends BaseComponent {
         return Array.from(seen.values());
     }
 
-    private async renderImageGallery(images: ImageInfo[]): Promise<void> {
-        if (!this.imageGalleryGrid || !this.imageGalleryEmpty) {
+    private renderImageGallery(images: ImageInfo[], requestId: number): void {
+        if (!this.isRequestActive(requestId) || !this.imageGalleryGrid || !this.imageGalleryEmpty) {
             return;
         }
 
@@ -132,30 +155,23 @@ export class ImageGallery extends BaseComponent {
         if (!images || images.length === 0) {
             this.imageGalleryEmpty.style.display = 'block';
             this.imageGalleryGrid.style.display = 'none';
-            if (this.imageObserver) {
-                this.imageObserver.disconnect();
-                this.imageObserver = null;
-            }
             return;
         }
 
         this.imageGalleryEmpty.style.display = 'none';
         this.imageGalleryGrid.style.display = 'grid';
 
-        const requestId = this.imageGalleryRequestId;
-        this.imageLoadQueue = [];
-        this.activeImageLoads = 0;
-        if (this.imageObserver) {
-            this.imageObserver.disconnect();
-        }
-        this.imageObserver = new IntersectionObserver(
+        const observer = new IntersectionObserver(
             (entries) => {
+                if (!this.isRequestActive(requestId) || this.imageObserver !== observer) {
+                    return;
+                }
                 for (const entry of entries) {
                     if (!entry.isIntersecting) {
                         continue;
                     }
                     const target = entry.target as HTMLImageElement;
-                    this.imageObserver?.unobserve(target);
+                    observer.unobserve(target);
                     this.enqueueImageLoad(target, requestId);
                 }
             },
@@ -165,36 +181,43 @@ export class ImageGallery extends BaseComponent {
                 threshold: 0.01,
             }
         );
+        this.imageObserver = observer;
 
         this.renderImageThumbnails(images, requestId);
     }
 
     private renderImageThumbnails(images: ImageInfo[], requestId: number): void {
-        if (!this.imageGalleryGrid || !this.imageObserver) {
+        const grid = this.imageGalleryGrid;
+        const observer = this.imageObserver;
+        if (!grid || !observer) {
             return;
         }
         const total = images.length;
         let index = 0;
 
         const renderChunk = () => {
-            if (requestId !== this.imageGalleryRequestId) {
+            this.renderAnimationFrame = null;
+            if (!this.isRequestActive(requestId) || !this.imageGalleryGrid || !this.imageObserver) {
                 return;
             }
             const fragment = document.createDocumentFragment();
             const end = Math.min(index + this.renderChunkSize, total);
             for (; index < end; index += 1) {
                 const image = images[index];
+                if (!image) {
+                    continue;
+                }
                 const thumbnail = this.createImageThumbnail(image);
                 fragment.appendChild(thumbnail);
-                this.imageObserver.observe(thumbnail);
+                observer.observe(thumbnail);
             }
-            this.imageGalleryGrid.appendChild(fragment);
+            grid.appendChild(fragment);
             if (index < total) {
-                requestAnimationFrame(renderChunk);
+                this.renderAnimationFrame = requestAnimationFrame(renderChunk);
             }
         };
 
-        requestAnimationFrame(renderChunk);
+        this.renderAnimationFrame = requestAnimationFrame(renderChunk);
     }
 
     private enqueueImageLoad(target: HTMLImageElement, requestId: number): void {
@@ -204,25 +227,30 @@ export class ImageGallery extends BaseComponent {
         }
         target.dataset.loaded = 'pending';
         this.imageLoadQueue.push(async () => {
-            if (requestId !== this.imageGalleryRequestId) {
+            if (!this.isRequestActive(requestId)) {
                 return;
             }
             try {
                 const imageURL = await this.api.GetImageFileURL(path);
-                if (requestId !== this.imageGalleryRequestId) {
+                if (!this.isRequestActive(requestId) || !target.isConnected) {
                     return;
                 }
                 target.src = imageURL;
                 target.dataset.loaded = 'true';
             } catch (error) {
-                target.dataset.loaded = 'false';
-                console.error('Failed to load image thumbnail:', path, error);
+                if (this.isRequestActive(requestId) && target.isConnected) {
+                    target.dataset.loaded = 'false';
+                    console.error('Failed to load image thumbnail:', path, error);
+                }
             }
         });
-        this.processImageQueue();
+        this.processImageQueue(requestId);
     }
 
-    private processImageQueue(): void {
+    private processImageQueue(requestId: number): void {
+        if (!this.isRequestActive(requestId)) {
+            return;
+        }
         while (this.activeImageLoads < this.maxImageLoads && this.imageLoadQueue.length > 0) {
             const task = this.imageLoadQueue.shift();
             if (!task) {
@@ -231,7 +259,7 @@ export class ImageGallery extends BaseComponent {
             this.activeImageLoads += 1;
             void task().finally(() => {
                 this.activeImageLoads -= 1;
-                this.processImageQueue();
+                this.processImageQueue(this.imageGalleryRequestId);
             });
         }
     }
@@ -249,53 +277,61 @@ export class ImageGallery extends BaseComponent {
         thumbnail.setAttribute('data-image-path', image.path);
         thumbnail.setAttribute('data-image-name', image.name);
 
-        // クリックでプレビュー表示
-        this.unsubscribe.push(
-            this.addEventListener(thumbnail, 'click', async () => {
-                await this.showImagePreview(image.path, image.name);
-            })
-        );
-
-        // ドラッグ&ドロップ対応
         thumbnail.draggable = true;
-
-        this.unsubscribe.push(
-            this.addEventListener(thumbnail, 'dragstart', (e) => {
-                const path = thumbnail.getAttribute('data-image-path');
-                const name = thumbnail.getAttribute('data-image-name');
-
-                if (!path || !name) {
-                    console.error('Missing image data attributes');
-                    return;
-                }
-
-                // グローバル変数に保存（iframeのドロップハンドラーで使用）
-                (window as any).currentDragImageData = { path, name };
-
-                e.dataTransfer.effectAllowed = 'copy';
-                e.dataTransfer.setData('text/plain', path);
-                e.dataTransfer.setData('application/json', JSON.stringify({ path, name }));
-
-                // 視覚的フィードバック
-                thumbnail.style.opacity = '0.5';
-            })
-        );
-
-        this.unsubscribe.push(
-            this.addEventListener(thumbnail, 'dragend', () => {
-                thumbnail.style.opacity = '1';
-                (window as any).currentDragImageData = null;
-            })
-        );
-
         return thumbnail;
     }
 
+    private setupGalleryEventDelegation(grid: HTMLElement): void {
+        this.unsubscribe.push(
+            this.addEventListener(grid, 'click', (event) => {
+                const thumbnail = this.thumbnailFromEvent(event);
+                const path = thumbnail?.dataset.imagePath;
+                const name = thumbnail?.dataset.imageName;
+                if (path && name) {
+                    void this.showImagePreview(path, name);
+                }
+            }),
+            this.addEventListener(grid, 'dragstart', (event) => {
+                const thumbnail = this.thumbnailFromEvent(event);
+                const path = thumbnail?.dataset.imagePath;
+                const name = thumbnail?.dataset.imageName;
+                if (!thumbnail || !path || !name || !event.dataTransfer) {
+                    return;
+                }
+                (window as any).currentDragImageData = { path, name };
+                event.dataTransfer.effectAllowed = 'copy';
+                event.dataTransfer.setData('text/plain', path);
+                event.dataTransfer.setData('application/json', JSON.stringify({ path, name }));
+                thumbnail.style.opacity = '0.5';
+            }),
+            this.addEventListener(grid, 'dragend', (event) => {
+                const thumbnail = this.thumbnailFromEvent(event);
+                if (thumbnail) {
+                    thumbnail.style.opacity = '1';
+                }
+                (window as any).currentDragImageData = null;
+            })
+        );
+    }
+
+    private thumbnailFromEvent(event: Event): HTMLImageElement | null {
+        if (!(event.target instanceof Element) || !this.imageGalleryGrid) {
+            return null;
+        }
+        const thumbnail = event.target.closest<HTMLImageElement>('img.image-thumbnail');
+        return thumbnail && this.imageGalleryGrid.contains(thumbnail) ? thumbnail : null;
+    }
+
     private async showImagePreview(imagePath: string, imageName: string, imageURL?: string): Promise<void> {
+        const requestId = this.imageGalleryRequestId;
         try {
             let finalImageURL = imageURL;
             if (!finalImageURL) {
                 finalImageURL = await this.api.GetImageFileURL(imagePath);
+            }
+
+            if (!this.isRequestActive(requestId)) {
+                return;
             }
 
             if (!finalImageURL) {
@@ -314,6 +350,9 @@ export class ImageGallery extends BaseComponent {
                 console.error('Failed to load image metadata:', error);
                 // メタデータの読み込みに失敗してもプレビューは表示する
             }
+            if (!this.isRequestActive(requestId)) {
+                return;
+            }
             let systemMetadata = '';
             try {
                 systemMetadata = await this.api.GetImageSystemMetadata(imagePath);
@@ -321,10 +360,17 @@ export class ImageGallery extends BaseComponent {
                 console.error('Failed to load image system metadata:', error);
             }
 
+            if (!this.isRequestActive(requestId)) {
+                return;
+            }
+
             // モーダルストアを使用してプレビューを表示
             const modalStore = useModalStore.getState();
             modalStore.showImagePreviewModal(imagePath, imageName, metadata, systemMetadata);
         } catch (error) {
+            if (!this.isRequestActive(requestId)) {
+                return;
+            }
             console.error('Error showing image preview:', error);
             useUIStore.getState().setStatusMessage('画像プレビューの表示に失敗しました', 3000);
         }
@@ -336,7 +382,31 @@ export class ImageGallery extends BaseComponent {
     }
 
     destroy(): void {
+        if (this.destroyed) {
+            return;
+        }
+        this.destroyed = true;
+        this.imageGalleryRequestId += 1;
+        this.stopRenderWork();
         this.unsubscribe.forEach((unsub) => unsub());
         this.unsubscribe = [];
+        this.captureScreenBtn = null;
+        this.imageGalleryGrid = null;
+        this.imageGalleryEmpty = null;
+        (window as any).currentDragImageData = null;
+    }
+
+    private isRequestActive(requestId: number): boolean {
+        return !this.destroyed && requestId === this.imageGalleryRequestId;
+    }
+
+    private stopRenderWork(): void {
+        this.imageObserver?.disconnect();
+        this.imageObserver = null;
+        if (this.renderAnimationFrame !== null) {
+            cancelAnimationFrame(this.renderAnimationFrame);
+            this.renderAnimationFrame = null;
+        }
+        this.imageLoadQueue = [];
     }
 }

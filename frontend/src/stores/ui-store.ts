@@ -78,8 +78,10 @@ export const useUIStore = createStore<UIStore>((set, get) => ({
         workspaceMode: tab === 'editor' ? false : state.workspaceMode,
     })),
     setTheme: (theme) => {
-        set({ theme });
+        // Subscribers that rebuild preview CSS must observe the new document
+        // variables during the same notification．
         applyThemeToDocument(theme);
+        set({ theme });
         try {
             localStorage.setItem(THEME_STORAGE_KEY, theme);
         } catch {

@@ -6,10 +6,17 @@ import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
 import { renderMarkdownPreview } from '../utils/preview-renderer';
 import { convertTimestampsToLinks } from '../utils/preview-audio';
+import { CsvPageClient, CSV_PAGE_LIMIT, saveCsvPage } from '../utils/csv-page';
 
 export class ModalHost extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
     private api: WailsAppAPI;
+    private readonly csvPageClient: CsvPageClient;
+    private destroyed = false;
+    private csvSaveGeneration = 0;
+    private csvSaveInFlight = false;
+    private csvPageIdentity = '';
+    private csvPageBaseline = '';
 
     // モーダル要素
     private filenameModal: HTMLElement | null = null;
@@ -47,6 +54,9 @@ export class ModalHost extends BaseComponent {
     private csvAddColBtn: HTMLButtonElement | null = null;
     private csvDeleteRowBtn: HTMLButtonElement | null = null;
     private csvDeleteColBtn: HTMLButtonElement | null = null;
+    private csvPrevPageBtn: HTMLButtonElement | null = null;
+    private csvNextPageBtn: HTMLButtonElement | null = null;
+    private csvPageLabel: HTMLElement | null = null;
     private csvSaveBtn: HTMLButtonElement | null = null;
     private csvCancelBtn: HTMLButtonElement | null = null;
     private csvSelectedRow: number | null = null;
@@ -75,9 +85,11 @@ export class ModalHost extends BaseComponent {
     constructor(api: WailsAppAPI, parent?: HTMLElement) {
         super(parent);
         this.api = api;
+        this.csvPageClient = new CsvPageClient(api);
     }
 
     init(): void {
+        this.destroyed = false;
         eventLogger.log('ModalHost', 'init');
         
         // モーダル要素の取得
@@ -116,6 +128,9 @@ export class ModalHost extends BaseComponent {
         this.csvAddColBtn = document.getElementById('csvAddColBtn') as HTMLButtonElement;
         this.csvDeleteRowBtn = document.getElementById('csvDeleteRowBtn') as HTMLButtonElement;
         this.csvDeleteColBtn = document.getElementById('csvDeleteColBtn') as HTMLButtonElement;
+        this.csvPrevPageBtn = document.getElementById('csvPrevPageBtn') as HTMLButtonElement;
+        this.csvNextPageBtn = document.getElementById('csvNextPageBtn') as HTMLButtonElement;
+        this.csvPageLabel = document.getElementById('csvPageLabel');
         this.csvSaveBtn = document.getElementById('csvSaveBtn') as HTMLButtonElement;
         this.csvCancelBtn = document.getElementById('csvCancelBtn') as HTMLButtonElement;
 
@@ -338,10 +353,25 @@ export class ModalHost extends BaseComponent {
                 })
             );
         }
+        if (this.csvPrevPageBtn) {
+            this.unsubscribe.push(
+                this.addEventListener(this.csvPrevPageBtn, 'click', () => {
+                    void this.loadCsvEditPage(-1);
+                })
+            );
+        }
+        if (this.csvNextPageBtn) {
+            this.unsubscribe.push(
+                this.addEventListener(this.csvNextPageBtn, 'click', () => {
+                    void this.loadCsvEditPage(1);
+                })
+            );
+        }
         if (this.csvCancelBtn) {
             this.unsubscribe.push(
                 this.addEventListener(this.csvCancelBtn, 'click', () => {
                     eventLogger.log('ModalHost', 'csv-edit-cancel-click');
+                    this.csvPageClient.cancel();
                     useModalStore.getState().hideCsvEditModal();
                 })
             );
@@ -511,14 +541,28 @@ export class ModalHost extends BaseComponent {
 
                 // CSV編集モーダル
                 if (this.csvEditModal) {
+                    const wasVisible = this.csvEditModal.style.display === 'flex';
                     this.csvEditModal.style.display = state.csvEditModal.visible ? 'flex' : 'none';
                     if (state.csvEditModal.visible) {
+                        const identity = this.csvModalIdentity(state.csvEditModal);
+                        if (!wasVisible || identity !== this.csvPageIdentity) {
+                            this.csvPageIdentity = identity;
+                            this.csvPageBaseline = JSON.stringify(state.csvEditModal.data);
+                        }
                         this.csvSelectedRow = null;
                         this.csvSelectedCol = null;
                         this.renderCsvEditTable(state.csvEditModal.data);
                         if (this.csvEditFileName) {
                             this.csvEditFileName.textContent = state.csvEditModal.filePath;
                         }
+                        this.updateCsvPageControls();
+                    } else {
+                        if (wasVisible) {
+                            this.csvSaveGeneration += 1;
+                        }
+                        this.csvPageIdentity = '';
+                        this.csvPageBaseline = '';
+                        this.csvPageClient.cancel();
                     }
                 }
 
@@ -817,7 +861,17 @@ export class ModalHost extends BaseComponent {
     }
 
     private handleCsvAddRow(): void {
+        const modal = useModalStore.getState().csvEditModal;
+        if (modal.hasMore) {
+            useUIStore.getState().setStatusMessage('行数は最終ページでのみ変更できます', 2500);
+            return;
+        }
         const data = this.collectCsvTableData();
+        const limit = modal.limit ?? CSV_PAGE_LIMIT;
+        if (Math.max(data.length - 1, 0) >= limit) {
+            useUIStore.getState().setStatusMessage(`1ページには${limit}行まで追加できます`, 2500);
+            return;
+        }
         const columnCount = Math.max(data[0]?.length ?? 0, 1);
         const newRow = Array.from({ length: columnCount }, () => '');
 
@@ -832,26 +886,15 @@ export class ModalHost extends BaseComponent {
     }
 
     private handleCsvAddCol(): void {
-        const data = this.collectCsvTableData();
-        if (data.length === 0) {
-            data.push(['列1']);
-        }
-        const colCount = data[0]?.length ?? 0;
-        const insertIndex = this.csvSelectedCol !== null ? this.csvSelectedCol + 1 : colCount;
-
-        data.forEach((row, rowIndex) => {
-            if (rowIndex === 0) {
-                row.splice(insertIndex, 0, `列${insertIndex + 1}`);
-            } else {
-                row.splice(insertIndex, 0, '');
-            }
-        });
-
-        this.csvSelectedCol = insertIndex;
-        useModalStore.getState().setCsvEditModalData(data);
+        useUIStore.getState().setStatusMessage('ページ編集では列数を変更できません', 2500);
     }
 
     private handleCsvDeleteRow(): void {
+        const modal = useModalStore.getState().csvEditModal;
+        if (modal.hasMore) {
+            useUIStore.getState().setStatusMessage('行数は最終ページでのみ変更できます', 2500);
+            return;
+        }
         const data = this.collectCsvTableData();
         const bodyLength = Math.max(data.length - 1, 0);
         if (this.csvSelectedRow === null || bodyLength === 0) {
@@ -868,32 +911,83 @@ export class ModalHost extends BaseComponent {
     }
 
     private handleCsvDeleteCol(): void {
-        const data = this.collectCsvTableData();
-        const colCount = data[0]?.length ?? 0;
-        if (this.csvSelectedCol === null || colCount === 0) {
-            useUIStore.getState().setStatusMessage('削除する列を選択してください', 2000);
-            return;
-        }
-        if (colCount <= 1) {
-            data[0] = ['列1'];
-            for (let i = 1; i < data.length; i += 1) {
-                data[i] = [''];
-            }
-            this.csvSelectedCol = 0;
-            useModalStore.getState().setCsvEditModalData(data);
-            return;
-        }
+        useUIStore.getState().setStatusMessage('ページ編集では列数を変更できません', 2500);
+    }
 
-        data.forEach((row) => {
-            row.splice(this.csvSelectedCol ?? 0, 1);
-        });
-        this.csvSelectedCol = null;
-        useModalStore.getState().setCsvEditModalData(data);
+    private updateCsvPageControls(): void {
+        const modal = useModalStore.getState().csvEditModal;
+        const page = modal.page ?? 1;
+        const limit = modal.limit ?? CSV_PAGE_LIMIT;
+        const totalRows = modal.totalRows ?? Math.max(modal.data.length - 1, 0);
+        const lastPage = Math.max(1, Math.ceil(totalRows / limit));
+        if (this.csvPrevPageBtn) {
+            this.csvPrevPageBtn.disabled = page <= 1;
+        }
+        if (this.csvNextPageBtn) {
+            this.csvNextPageBtn.disabled = !modal.hasMore;
+        }
+        if (this.csvPageLabel) {
+            this.csvPageLabel.textContent = `${page} / ${lastPage}（全${totalRows}行）`;
+        }
+        if (this.csvAddRowBtn) {
+            this.csvAddRowBtn.disabled = Boolean(modal.hasMore) ||
+                Math.max(modal.data.length - 1, 0) >= limit;
+        }
+        if (this.csvDeleteRowBtn) {
+            this.csvDeleteRowBtn.disabled = Boolean(modal.hasMore);
+        }
+        if (this.csvAddColBtn) {
+            this.csvAddColBtn.disabled = true;
+        }
+        if (this.csvDeleteColBtn) {
+            this.csvDeleteColBtn.disabled = true;
+        }
+    }
+
+    private async loadCsvEditPage(direction: -1 | 1): Promise<void> {
+        const modal = useModalStore.getState().csvEditModal;
+        if (!modal.visible) {
+            return;
+        }
+        if (this.csvPageIsDirty()) {
+            useUIStore.getState().setStatusMessage('ページ移動前に変更を保存または取消してください', 3000);
+            return;
+        }
+        const currentPage = modal.page ?? 1;
+        const targetPage = currentPage + direction;
+        if (targetPage < 1 || (direction > 0 && !modal.hasMore)) {
+            return;
+        }
+        try {
+            const page = await this.csvPageClient.load({
+                path: modal.filePath,
+                page: targetPage,
+                limit: modal.limit ?? CSV_PAGE_LIMIT,
+            });
+            if (!page || this.destroyed) {
+                return;
+            }
+            const current = useModalStore.getState().csvEditModal;
+            if (!current.visible || current.filePath !== modal.filePath) {
+                return;
+            }
+            useModalStore.getState().setCsvEditPage(page);
+        } catch (error) {
+            if (this.destroyed) {
+                return;
+            }
+            console.error('Failed to load CSV page:', error);
+            useUIStore.getState().setStatusMessage('CSVページの読み込みに失敗しました', 3000);
+        }
     }
 
     private async handleSaveCsv(): Promise<void> {
+        if (this.destroyed || this.csvSaveInFlight) {
+            return;
+        }
         const modalStore = useModalStore.getState();
-        const filePath = modalStore.csvEditModal.filePath;
+        const modal = modalStore.csvEditModal;
+        const filePath = modal.filePath;
 
         // テーブルからデータを取得
         const data: string[][] = [];
@@ -911,14 +1005,87 @@ export class ModalHost extends BaseComponent {
             });
         }
 
+        const inputSnapshot = JSON.stringify(data);
+        const generation = ++this.csvSaveGeneration;
+        this.csvSaveInFlight = true;
+        if (this.csvSaveBtn) {
+            this.csvSaveBtn.disabled = true;
+        }
         try {
-            await this.api.SaveCsvFile(filePath, data);
+            if (data.length === 0) {
+                throw new Error('CSV header is missing');
+            }
+            const result = await saveCsvPage(this.api, {
+                path: filePath,
+                revision: modal.revision ?? '',
+                page: modal.page ?? 1,
+                limit: modal.limit ?? CSV_PAGE_LIMIT,
+                header: data[0],
+                rows: data.slice(1),
+            }, {
+                totalRows: modal.totalRows ?? Math.max(data.length - 1, 0),
+            });
+            if (this.destroyed) {
+                return;
+            }
+            if (!this.isCsvSaveIdentityCurrent(generation, modal)) {
+                return;
+            }
+            const currentData = this.collectCsvTableData();
+            if (JSON.stringify(currentData) !== inputSnapshot) {
+                const savedRows = Math.max(data.length - 1, 0);
+                const currentRows = Math.max(currentData.length - 1, 0);
+                const adjustedTotalRows = Math.max(0, result.totalRows + currentRows - savedRows);
+                modalStore.rebaseCsvEditRevision(result.revision, adjustedTotalRows, currentData);
+                this.csvPageIdentity = this.csvModalIdentity(useModalStore.getState().csvEditModal);
+                this.csvPageBaseline = inputSnapshot;
+                return;
+            }
             modalStore.hideCsvEditModal();
             useUIStore.getState().setStatusMessage('CSVファイルを保存しました', 2000);
         } catch (error) {
+            if (!this.isCsvSaveIdentityCurrent(generation, modal)) {
+                return;
+            }
             console.error('Failed to save CSV:', error);
-            useUIStore.getState().setStatusMessage('CSVファイルの保存に失敗しました', 3000);
+            const message = String(error).toLowerCase();
+            if (message.includes('commit completed') || message.includes('durability is unconfirmed')) {
+                useUIStore.getState().setStatusMessage(
+                    'CSVは反映済みですが永続化を確認できません．自動再試行せず再読み込みしてください',
+                    6000,
+                );
+            } else {
+                useUIStore.getState().setStatusMessage('CSVファイルの保存に失敗しました', 3000);
+            }
+        } finally {
+            // A newer save cannot start while this flag is set，so the owner
+            // operation always releases it even when hide/destroy invalidated
+            // its UI generation．
+            this.csvSaveInFlight = false;
+            if (this.csvSaveBtn && !this.destroyed) {
+                this.csvSaveBtn.disabled = false;
+            }
         }
+    }
+
+    private isCsvSaveIdentityCurrent(
+        generation: number,
+        expected: ReturnType<typeof useModalStore.getState>['csvEditModal'],
+    ): boolean {
+        if (this.destroyed || generation !== this.csvSaveGeneration) {
+            return false;
+        }
+        const current = useModalStore.getState().csvEditModal;
+        return current.visible && current.filePath === expected.filePath &&
+            current.page === expected.page && current.revision === expected.revision;
+    }
+
+    private csvModalIdentity(modal: ReturnType<typeof useModalStore.getState>['csvEditModal']): string {
+        return `${modal.filePath}\n${modal.page ?? 1}\n${modal.revision ?? ''}`;
+    }
+
+    private csvPageIsDirty(): boolean {
+        return this.csvPageBaseline !== '' && JSON.stringify(this.collectCsvTableData()) !== this.csvPageBaseline;
     }
 
     private async handleResolveConflict(): Promise<void> {
@@ -1014,6 +1181,9 @@ export class ModalHost extends BaseComponent {
     }
 
     destroy(): void {
+        this.destroyed = true;
+        this.csvSaveGeneration += 1;
+        this.csvPageClient.destroy();
         this.unsubscribe.forEach((unsub) => unsub());
         this.unsubscribe = [];
     }

@@ -7,6 +7,7 @@ class GraphD3Module {
     constructor(containerId) {
         // d3 is imported via ES module bundler (Vite)
 
+        this.containerId = containerId;
         this.container = document.getElementById(containerId);
         this.data = { nodes: [], edges: [] };
         this.style = {
@@ -40,6 +41,17 @@ class GraphD3Module {
         this.tooltip = null;
         this.resizeObserver = null;
         this.handleResize = null;
+        this.windowResizeHandler = null;
+        this.visibilityChangeHandler = null;
+        this.resizeTimer = null;
+        this.renderCenterTimer = null;
+        this.focusCenterTimer = null;
+        this.viewActive = true;
+        this.simulationRunning = false;
+        this.simulationNeedsRestart = false;
+        this.centerViewPending = false;
+        this.resizePending = false;
+        this.destroyed = false;
 
         this.init();
     }
@@ -89,7 +101,7 @@ class GraphD3Module {
 
     updateSimulationSize() {
         // viewBoxなしの実装：コンテナサイズを直接取得してシミュレーションに反映
-        if (!this.container) return;
+        if (this.destroyed || !this.container) return;
 
         const rect = this.container.getBoundingClientRect();
         if (!rect || rect.width <= 0 || rect.height <= 0) return;
@@ -108,26 +120,58 @@ class GraphD3Module {
 
     setupEventListeners() {
         // リサイズイベント（viewBoxなしなので、シミュレーションサイズのみ更新）
-        let resizeTimeout;
-        this.handleResize = (entries) => {
-            clearTimeout(resizeTimeout);
-            resizeTimeout = setTimeout(() => {
+        this.handleResize = () => {
+            if (this.destroyed) return;
+            if (!this.canRunSimulation()) {
+                this.resizePending = true;
+                return;
+            }
+            this.clearTimer('resizeTimer');
+            this.resizeTimer = window.setTimeout(() => {
+                this.resizeTimer = null;
+                if (this.destroyed) return;
                 // シミュレーションサイズを更新（SVGはCSSで自動的に追従）
                 this.updateSimulationSize();
 
-                // シミュレーションを再起動
+                // hidden／非active中はalphaだけを更新し，復帰までtimerを開始しない．
                 if (this.simulation) {
-                    this.simulation.alpha(0.3).restart();
+                    this.simulation.alpha(0.3);
+                    this.simulationNeedsRestart = true;
+                    this.resumeSimulationIfNeeded();
                 }
             }, 50);
         };
 
-        window.addEventListener('resize', () => this.handleResize([]));
+        this.windowResizeHandler = () => {
+            if (this.destroyed || !this.handleResize) return;
+            this.handleResize();
+        };
+        window.addEventListener('resize', this.windowResizeHandler);
+
+        this.visibilityChangeHandler = () => {
+            if (this.destroyed) return;
+            if (document.hidden) {
+                this.pauseSimulation();
+            } else {
+                this.resumeSimulationIfNeeded();
+            }
+        };
+        document.addEventListener('visibilitychange', this.visibilityChangeHandler);
 
         // ResizeObserverでコンテナサイズの変化を監視
         if (typeof ResizeObserver !== 'undefined') {
             this.resizeObserver = new ResizeObserver(this.handleResize);
             this.resizeObserver.observe(this.container);
+        }
+    }
+
+    setActive(active) {
+        if (this.destroyed) return;
+        this.viewActive = Boolean(active);
+        if (this.viewActive) {
+            this.resumeSimulationIfNeeded();
+        } else {
+            this.pauseSimulation();
         }
     }
 
@@ -186,15 +230,17 @@ class GraphD3Module {
             return edge;
         });
         console.log('Normalized data:', this.data);
-        if (this.data.nodes.length > 0 || this.data.edges.length > 0) {
-            this.render();
-        }
+        this.render();
     }
 
     // Toggle tag nodes visibility
     toggleTagNodes() {
         this.showTagNodes = !this.showTagNodes;
         this.render();
+    }
+
+    areTagNodesVisible() {
+        return this.showTagNodes;
     }
 
     mergeData(patch) {
@@ -238,6 +284,7 @@ class GraphD3Module {
     }
 
     on(event, handler) {
+        if (this.destroyed) return;
         if (!this.eventHandlers[event]) {
             this.eventHandlers[event] = [];
         }
@@ -245,6 +292,7 @@ class GraphD3Module {
     }
 
     emit(event, data) {
+        if (this.destroyed) return;
         if (this.eventHandlers[event]) {
             this.eventHandlers[event].forEach(handler => handler(data));
         }
@@ -253,6 +301,13 @@ class GraphD3Module {
     // 内部メソッド
 
     render() {
+        if (this.destroyed) return;
+        this.stopCurrentSimulation();
+        this.clearTimer('resizeTimer');
+        this.clearTimer('renderCenterTimer');
+        this.clearTimer('focusCenterTimer');
+        this.centerViewPending = false;
+        this.resizePending = false;
         console.log('render() called');
         console.log('SVG exists:', !!this.svg);
         console.log('Data nodes:', this.data.nodes?.length || 0);
@@ -269,6 +324,24 @@ class GraphD3Module {
 
         if (!this.data.nodes || !this.data.nodes.length) {
             console.warn('No nodes to render');
+            return;
+        }
+
+        // 非表示tag nodeとそれに接続するedgeはDOMだけでなくsimulationからも除外する．
+        const visibleNodes = this.data.nodes.filter(d => {
+            const kind = d.kind || d.Kind;
+            return kind !== 'tag' || this.showTagNodes;
+        });
+        const visibleNodeIds = new Set(visibleNodes.map(node => node.id || node.ID));
+        const visibleEdges = this.data.edges.filter(edge => {
+            const kind = edge.kind || edge.Kind;
+            if (kind === 'tag' && !this.showTagNodes) return false;
+            const sourceId = getEdgeEndpointId(edge.source || edge.Source);
+            const targetId = getEdgeEndpointId(edge.target || edge.Target);
+            return visibleNodeIds.has(sourceId) && visibleNodeIds.has(targetId);
+        });
+        if (visibleNodes.length === 0) {
+            console.warn('No visible nodes to render');
             return;
         }
 
@@ -293,10 +366,8 @@ class GraphD3Module {
             const currentWidth = Math.floor(rect.width);
             const currentHeight = Math.floor(rect.height);
 
-            if (!self.data || !self.data.nodes) return;
-
-            for (let i = 0; i < self.data.nodes.length; i++) {
-                const node = self.data.nodes[i];
+            for (let i = 0; i < visibleNodes.length; i++) {
+                const node = visibleNodes[i];
                 if (node.x == null || node.y == null) continue;
 
                 // ノードの半径を取得
@@ -325,9 +396,9 @@ class GraphD3Module {
             }
         }
 
-        // Force simulationを作成（全ノードを使用）
-        this.simulation = d3.forceSimulation(this.data.nodes)
-            .force('link', d3.forceLink(this.data.edges)
+        // Force simulationを作成（表示対象だけを使用）
+        this.simulation = d3.forceSimulation(visibleNodes)
+            .force('link', d3.forceLink(visibleEdges)
                 .id(d => d.id || d.ID)
                 .distance(100)
             )
@@ -335,15 +406,9 @@ class GraphD3Module {
             .force('center', d3.forceCenter(width / 2, height / 2).strength(0.1))
             .force('collision', d3.forceCollide().radius(30))
             .force('boundary', forceBoundary);
-
-        // エッジを描画（タグエッジの表示/非表示を制御）
-        const visibleEdges = this.data.edges.filter(d => {
-            const kind = d.kind || d.Kind;
-            if (kind === 'tag') {
-                return this.showTagNodes;
-            }
-            return true;
-        });
+        this.simulation.stop();
+        this.simulationRunning = false;
+        this.simulationNeedsRestart = true;
 
         this.edgeElements = this.scene.append('g')
             .selectAll('line')
@@ -362,15 +427,6 @@ class GraphD3Module {
             .on('mouseout', () => {
                 this.hideTooltip();
             });
-
-        // ノードを描画（タグノードの表示/非表示を制御）
-        const visibleNodes = this.data.nodes.filter(d => {
-            const kind = d.kind || d.Kind;
-            if (kind === 'tag') {
-                return this.showTagNodes;
-            }
-            return true;
-        });
 
         this.nodeElements = this.scene.append('g')
             .selectAll('circle')
@@ -426,24 +482,26 @@ class GraphD3Module {
                 this.hideTooltip();
             });
 
-        // シミュレーションを開始
-        this.simulation.on('tick', () => {
+        // lifecycle外の旧tickがDOMを書き換えないようsimulation identityも検証する．
+        const simulation = this.simulation;
+        simulation.on('tick', () => {
+            if (this.destroyed || this.simulation !== simulation || !this.canRunSimulation()) return;
             this.edgeElements
                 .attr('x1', d => {
                     // D3 forceLink converts source/target to node objects, but we may have IDs
-                    const source = typeof d.source === 'object' ? d.source : this.data.nodes.find(n => (n.id || n.ID) === (d.source || d.Source));
+                    const source = typeof d.source === 'object' ? d.source : visibleNodes.find(n => (n.id || n.ID) === (d.source || d.Source));
                     return source ? (source.x || 0) : 0;
                 })
                 .attr('y1', d => {
-                    const source = typeof d.source === 'object' ? d.source : this.data.nodes.find(n => (n.id || n.ID) === (d.source || d.Source));
+                    const source = typeof d.source === 'object' ? d.source : visibleNodes.find(n => (n.id || n.ID) === (d.source || d.Source));
                     return source ? (source.y || 0) : 0;
                 })
                 .attr('x2', d => {
-                    const target = typeof d.target === 'object' ? d.target : this.data.nodes.find(n => (n.id || n.ID) === (d.target || d.Target));
+                    const target = typeof d.target === 'object' ? d.target : visibleNodes.find(n => (n.id || n.ID) === (d.target || d.Target));
                     return target ? (target.x || 0) : 0;
                 })
                 .attr('y2', d => {
-                    const target = typeof d.target === 'object' ? d.target : this.data.nodes.find(n => (n.id || n.ID) === (d.target || d.Target));
+                    const target = typeof d.target === 'object' ? d.target : visibleNodes.find(n => (n.id || n.ID) === (d.target || d.Target));
                     return target ? (target.y || 0) : 0;
                 });
 
@@ -455,29 +513,48 @@ class GraphD3Module {
                 .attr('x', d => d.x)
                 .attr('y', d => d.y);
         });
+        simulation.on('end.lifecycle', () => {
+            if (this.destroyed || this.simulation !== simulation) return;
+            this.simulationRunning = false;
+            this.simulationNeedsRestart = false;
+        });
+        this.resumeSimulationIfNeeded();
 
         // シミュレーション開始後にビューを調整
-        setTimeout(() => {
-            this.centerView();
-            // シミュレーションサイズを更新（SVGはCSSで自動的に追従）
-            this.updateSimulationSize();
-        }, 500);
+        if (this.canRunSimulation()) {
+            this.renderCenterTimer = window.setTimeout(() => {
+                this.renderCenterTimer = null;
+                if (this.destroyed || this.simulation !== simulation) return;
+                this.centerViewWhenActive();
+                // シミュレーションサイズを更新（SVGはCSSで自動的に追従）
+                this.updateSimulationSize();
+            }, 500);
+        } else {
+            this.centerViewPending = true;
+        }
     }
 
     drag() {
         const drag = d3.drag()
             .on('start', (event, d) => {
-                if (!event.active) this.simulation.alphaTarget(0.3).restart();
+                if (this.destroyed || !this.simulation) return;
+                if (!event.active) {
+                    this.simulation.alphaTarget(0.3);
+                    this.simulationNeedsRestart = true;
+                    this.resumeSimulationIfNeeded();
+                }
                 d.fx = d.x;
                 d.fy = d.y;
             })
             .on('drag', (event, d) => {
+                if (this.destroyed) return;
                 d.fx = event.x;
                 d.fy = event.y;
                 // リアルタイム斥力を適用
                 this.applyRealTimeRepulsion(d);
             })
             .on('end', (event, d) => {
+                if (this.destroyed || !this.simulation) return;
                 if (!event.active) this.simulation.alphaTarget(0);
                 d.fx = null;
                 d.fy = null;
@@ -486,10 +563,11 @@ class GraphD3Module {
     }
 
     applyRealTimeRepulsion(draggedNode) {
+        if (this.destroyed) return;
         const repulsionStrength = 1000;
         const repulsionRadius = 150;
 
-        this.data.nodes.forEach(node => {
+        this.getSimulationNodes().forEach(node => {
             if (node.id === draggedNode.id) return;
 
             const dx = draggedNode.x - node.x;
@@ -508,13 +586,15 @@ class GraphD3Module {
     }
 
     centerView() {
-        if (this.data.nodes.length === 0) return;
+        if (this.destroyed) return;
+        const nodes = this.getSimulationNodes();
+        if (nodes.length === 0) return;
 
         // すべてのノードの重心を計算
-        const sumX = this.data.nodes.reduce((sum, d) => sum + (d.x || 0), 0);
-        const sumY = this.data.nodes.reduce((sum, d) => sum + (d.y || 0), 0);
-        const centerX = sumX / this.data.nodes.length;
-        const centerY = sumY / this.data.nodes.length;
+        const sumX = nodes.reduce((sum, d) => sum + (d.x || 0), 0);
+        const sumY = nodes.reduce((sum, d) => sum + (d.y || 0), 0);
+        const centerX = sumX / nodes.length;
+        const centerY = sumY / nodes.length;
 
         console.log(`Centering view on centroid: (${centerX.toFixed(2)}, ${centerY.toFixed(2)})`);
 
@@ -528,22 +608,32 @@ class GraphD3Module {
     }
 
     applyFocus() {
+        if (this.destroyed) return;
+        this.clearTimer('focusCenterTimer');
         // フォーカス機能の実装（簡易版）
         if (!this.focus.roots || this.focus.roots.length === 0) {
             return;
         }
 
         // フォーカスされたノードを強調
+        if (!this.nodeElements) return;
         this.nodeElements
             .attr('opacity', d => this.focus.roots.includes(d.id) ? 1 : 0.3)
             .attr('stroke-width', d => this.focus.roots.includes(d.id) ? 3 : 2);
 
-        setTimeout(() => {
-            this.centerView();
-        }, 100);
+        if (this.canRunSimulation()) {
+            this.focusCenterTimer = window.setTimeout(() => {
+                this.focusCenterTimer = null;
+                if (this.destroyed) return;
+                this.centerViewWhenActive();
+            }, 100);
+        } else {
+            this.centerViewPending = true;
+        }
     }
 
     showTooltip(event, data) {
+        if (this.destroyed || !this.tooltip) return;
         let content = '';
 
         const kind = data.kind || data.Kind;
@@ -585,6 +675,7 @@ class GraphD3Module {
     }
 
     hideTooltip() {
+        if (this.destroyed || !this.tooltip) return;
         this.tooltip.style('opacity', 0);
     }
 
@@ -648,20 +739,115 @@ class GraphD3Module {
         console.log('center() called');
     }
 
-    destroy() {
-        if (this.simulation) {
-            this.simulation.stop();
+    canRunSimulation() {
+        return !this.destroyed && this.viewActive && !document.hidden;
+    }
+
+    pauseSimulation() {
+        if (this.destroyed) return;
+        if (this.renderCenterTimer !== null || this.focusCenterTimer !== null) {
+            this.centerViewPending = true;
         }
+        if (this.resizeTimer !== null) {
+            this.resizePending = true;
+        }
+        this.clearTimer('resizeTimer');
+        this.clearTimer('renderCenterTimer');
+        this.clearTimer('focusCenterTimer');
+        if (!this.simulation) return;
+        if (this.simulationRunning) {
+            this.simulationNeedsRestart = true;
+        }
+        this.simulation.stop();
+        this.simulationRunning = false;
+    }
+
+    resumeSimulationIfNeeded() {
+        if (!this.canRunSimulation()) return;
+        if (this.resizePending) {
+            this.resizePending = false;
+            this.updateSimulationSize();
+            if (this.simulation) {
+                this.simulation.alpha(0.3);
+                this.simulationNeedsRestart = true;
+            }
+        }
+        if (this.centerViewPending) {
+            this.centerViewPending = false;
+            this.centerView();
+        }
+        if (!this.simulation || !this.simulationNeedsRestart) return;
+        this.simulation.restart();
+        this.simulationRunning = true;
+        this.simulationNeedsRestart = false;
+    }
+
+    centerViewWhenActive() {
+        if (!this.canRunSimulation()) {
+            this.centerViewPending = true;
+            return;
+        }
+        this.centerViewPending = false;
+        this.centerView();
+    }
+
+    getSimulationNodes() {
+        if (!this.simulation || typeof this.simulation.nodes !== 'function') return [];
+        return this.simulation.nodes();
+    }
+
+    stopCurrentSimulation() {
+        const simulation = this.simulation;
+        if (simulation) {
+            simulation.on('tick', null);
+            simulation.on('end.lifecycle', null);
+            simulation.stop();
+        }
+        this.simulation = null;
+        this.simulationRunning = false;
+        this.simulationNeedsRestart = false;
+    }
+
+    clearTimer(field) {
+        const timer = this[field];
+        if (timer !== null) {
+            window.clearTimeout(timer);
+            this[field] = null;
+        }
+    }
+
+    destroy() {
+        if (this.destroyed) return;
+        this.destroyed = true;
+        this.clearTimer('resizeTimer');
+        this.clearTimer('renderCenterTimer');
+        this.clearTimer('focusCenterTimer');
+        this.stopCurrentSimulation();
         if (this.tooltip) {
             this.tooltip.remove();
+            this.tooltip = null;
         }
-        if (this.handleResize) {
-            window.removeEventListener('resize', this.handleResize);
+        if (this.windowResizeHandler) {
+            window.removeEventListener('resize', this.windowResizeHandler);
+            this.windowResizeHandler = null;
+        }
+        if (this.visibilityChangeHandler) {
+            document.removeEventListener('visibilitychange', this.visibilityChangeHandler);
+            this.visibilityChangeHandler = null;
         }
         if (this.resizeObserver) {
             this.resizeObserver.disconnect();
             this.resizeObserver = null;
         }
+        this.svg?.remove();
+        this.svg = null;
+        this.scene = null;
+        this.nodeElements = null;
+        this.edgeElements = null;
+        this.labelElements = null;
+        this.zoomBehavior = null;
+        this.handleResize = null;
+        this.eventHandlers = {};
     }
 
     setupZoomBehavior() {
@@ -697,11 +883,18 @@ class GraphD3Module {
     }
 
     applyZoomTransform() {
-        if (!this.scene) {
+        if (this.destroyed || !this.scene) {
             return;
         }
         this.scene.attr('transform', this.zoomTransform.toString());
     }
+}
+
+function getEdgeEndpointId(endpoint) {
+    if (endpoint && typeof endpoint === 'object') {
+        return endpoint.id || endpoint.ID;
+    }
+    return endpoint;
 }
 
 export default GraphD3Module;

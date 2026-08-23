@@ -1,6 +1,7 @@
 import { BaseComponent } from './component-base';
 import { useUIStore } from '../stores/index';
 import { eventLogger } from '../utils/event-logger';
+import { activateDocumentTab } from '../utils/document-transition';
 
 export class MainTabs extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
@@ -32,8 +33,6 @@ export class MainTabs extends BaseComponent {
     }
 
     private setupEventListeners(): void {
-        const uiStore = useUIStore.getState();
-
         // タブボタンのクリックイベント
         this.tabButtons.forEach((button) => {
             const tabName = button.dataset.tab;
@@ -41,7 +40,7 @@ export class MainTabs extends BaseComponent {
                 this.unsubscribe.push(
                     this.addEventListener(button, 'click', () => {
                         eventLogger.log('MainTabs', 'tab-switch', { tab: tabName });
-                        uiStore.setActiveTab(tabName as 'editor' | 'graph' | 'board');
+                        activateDocumentTab(tabName as 'editor' | 'graph' | 'board');
                     })
                 );
             }

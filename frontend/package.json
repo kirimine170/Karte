@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "postbuild": "npm run verify:preview-assets",
     "build:printout-runtime": "tsc -p tsconfig.printout-runtime.json",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
@@ -15,7 +16,8 @@
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
     "test:watch": "vitest --watch",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "verify:preview-assets": "node scripts/verify-preview-assets.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.0",
@@ -28,7 +30,9 @@
   },
   "dependencies": {
     "d3": "^7.9.0",
+    "katex": "0.18.4",
     "marked": "^18.0.9",
+    "mermaid": "11.17.0",
     "pdfjs-dist": "^6.2.108",
     "zustand": "^5.0.14"
   }

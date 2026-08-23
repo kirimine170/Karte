@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MainTabs } from '../main-tabs';
 import { useUIStore } from '../../stores/ui-store';
+import { useDocStore } from '../../stores/doc-store';
 import { clearLogs, expectLogSequence } from '../../test-support/log-verifier';
 
 describe('MainTabs', () => {
@@ -17,6 +18,14 @@ describe('MainTabs', () => {
             hardWrap: false,
             statusMessage: '',
             statusClearTimer: null,
+        });
+        useDocStore.setState({
+            currentPath: '',
+            markdownContent: '',
+            previewHtml: '',
+            hasUnsavedChanges: false,
+            files: [],
+            searchQuery: '',
         });
 
         document.body.innerHTML = `
@@ -58,5 +67,28 @@ describe('MainTabs', () => {
         expectLogSequence([
             { component: 'MainTabs', action: 'tab-switch' }
         ]);
+    });
+
+    it('switches from Board source to Editor without retaining a Markdown preview', () => {
+        useUIStore.setState({ activeTab: 'board' });
+        useDocStore.setState({
+            currentPath: 'content/example.board.md',
+            markdownContent: '---\ntype: karte-board\n---',
+            previewHtml: '<p>stale Markdown preview</p>',
+        });
+        const mainTabs = new MainTabs();
+        mainTabs.init();
+
+        const editorTab = document.querySelector<HTMLButtonElement>('.tab[data-tab="editor"]');
+        editorTab?.click();
+
+        expect(useUIStore.getState().activeTab).toBe('editor');
+        expect(useDocStore.getState()).toMatchObject({
+            currentPath: 'content/example.board.md',
+            markdownContent: '---\ntype: karte-board\n---',
+            previewHtml: '',
+        });
+        expect(document.getElementById('editor-tab')?.classList.contains('active')).toBe(true);
+        mainTabs.destroy();
     });
 });
