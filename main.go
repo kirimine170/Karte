@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"os"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -15,12 +16,25 @@ var assets embed.FS
 func main() {
 	// Create an instance of the app structure
 	app := NewApp()
+	err := wails.Run(newWailsAppOptions(app))
+	if err != nil {
+		println("Error:", err.Error())
+	}
+	smokeErr := app.startupSmoke.result()
+	if smokeErr != nil {
+		println("Startup smoke error:", smokeErr.Error())
+	}
+	if startupSmokeExitCode(app.startupSmoke.isEnabled(), err, smokeErr) != 0 {
+		os.Exit(1)
+	}
+}
 
+func newWailsAppOptions(app *App) *options.App {
 	// Create custom HTTP handler for media files
 	assetHandler := app.createAssetHandler()
 
 	// Create application with options
-	err := wails.Run(&options.App{
+	return &options.App{
 		Title:  "Karte",
 		Width:  1400,
 		Height: 900,
@@ -30,6 +44,8 @@ func main() {
 		},
 		BackgroundColour: &options.RGBA{R: 255, G: 255, B: 255, A: 1},
 		OnStartup:        app.startup,
+		OnDomReady:       app.domReady,
+		OnShutdown:       app.shutdown,
 		OnBeforeClose: func(ctx context.Context) (prevent bool) {
 			app.ctx = ctx
 
@@ -54,9 +70,5 @@ func main() {
 		Bind: []interface{}{
 			app,
 		},
-	})
-
-	if err != nil {
-		println("Error:", err.Error())
 	}
 }
