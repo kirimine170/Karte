@@ -1093,6 +1093,7 @@ func buildMarkdown(doc clipDocument, sourceURL string, clippedAt time.Time, asse
 	if strings.TrimSpace(title) == "" {
 		title = "Untitled Web Clip"
 	}
+	headingTitle := escapeMarkdownText(title)
 	fields := []struct {
 		key   string
 		value string
@@ -1116,14 +1117,45 @@ func buildMarkdown(doc clipDocument, sourceURL string, clippedAt time.Time, asse
 		b.WriteString("\n")
 	}
 	b.WriteString("---\n\n")
-	if !hasLeadingHeading(body, title) {
+	if !hasLeadingHeading(body, headingTitle) {
 		b.WriteString("# ")
-		b.WriteString(title)
+		b.WriteString(headingTitle)
 		b.WriteString("\n\n")
 	}
 	b.WriteString(body)
 	b.WriteString("\n")
 	return b.String()
+}
+
+func escapeMarkdownText(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, value)
+	value = strings.Join(strings.Fields(value), " ")
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		"`", "\\`",
+		"*", "\\*",
+		"_", "\\_",
+		"{", "\\{",
+		"}", "\\}",
+		"[", "\\[",
+		"]", "\\]",
+		"<", "\\<",
+		">", "\\>",
+		"(", "\\(",
+		")", "\\)",
+		"#", "\\#",
+		"+", "\\+",
+		"-", "\\-",
+		".", "\\.",
+		"!", "\\!",
+		"|", "\\|",
+	)
+	return replacer.Replace(value)
 }
 
 func uniqueMarkdownPath(dir, base string) (string, string, error) {

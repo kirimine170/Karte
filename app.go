@@ -5,8 +5,8 @@ import (
 	"context"
 	_ "embed"
 	"encoding/base64"
-	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -15,7 +15,6 @@ import (
 	"io"
 	"io/fs"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -36,11 +35,9 @@ import (
 	gitvcs "karte/internal/git"
 	"karte/internal/markdown"
 	"karte/internal/printout"
-	"karte/internal/runtimepath"
 	"karte/internal/screenshot"
 	syncpkg "karte/internal/sync"
 	"karte/internal/webpchunk"
-	"karte/internal/webputil"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -65,6 +62,7 @@ var (
 var kartePrintoutPaginationRuntime string
 
 var exportRendererHTMLPDF = karterenderer.ExportHTMLPDF
+var emitPDFExportEvent = runtime.EventsEmit
 
 const maxImageSizeForPDF = 10 * 1024 * 1024 // 10MB
 const maxImageWidthForPDF = 800             // PDF表示用に最大横幅800px（Previewで開く速度を改善）
@@ -73,25 +71,35 @@ const maxImageFileSizeForPDF = 300 * 1024   // 各画像の目標サイズ300KB
 // App struct
 type App struct {
 	ctx             context.Context
+	lifecycle       appLifecycle
+	startupSmoke    *startupSmokeState
 	root            string
 	dataDir         string
 	logFilePath     string
 	fs              FileSystem
 	syncManager     *syncpkg.SyncManager
 	vcs             *gitvcs.VCS
-	asrService      *asr.Service
-	realtimeService *asr.RealtimeService // For real-time ASR with partial text support
-	asrInitDone     chan struct{}
+	asrResource     appASRResourceState
+	realtimeService appRealtimeASRService // For real-time ASR with partial text support
 	// Recording fields
-	recorder                *audio.Recorder
+	recorder                appAudioRecorder
+	recordingControlMu      sync.Mutex
 	recordingMu             sync.Mutex
+	recordingASRLease       *asrResourceLease
+	recordingNewRealtime    func(*asr.Config, asr.LogFunc) (appRealtimeASRService, error)
+	recordingNewRecorder    func() (appAudioRecorder, error)
+	recordingNewVAD         func() *audio.SimpleVAD
+	recordingNewWAVWriter   func(string, int) (appRecordingWAVWriter, error)
+	recordingNow            func() time.Time
+	recordingLstat          func(string) (os.FileInfo, error)
 	isRecording             bool
-	recordingSamples        []float32 // Buffer for recording samples
-	recordingVAD            *audio.SimpleVAD
-	recordingSegment        *recordingSegment
+	recordingPipeline       *appRecordingPipeline
+	recordingSequence       recordingSequence
+	recordingFinalizeRun    func(context.Context, int, []float32)
 	recordingWg             sync.WaitGroup // WaitGroup for recording processing goroutine
 	recordingStopCh         chan struct{}  // Channel to stop recording processing
-	recordingTranscriptPath string         // Path to transcript file (created at start)
+	recordingStopOnce       sync.Once
+	recordingTranscriptPath string // Path to transcript file (created at start)
 	// NOTE: Multi-window support requires Wails v3 (currently in development)
 	// Uncomment when upgrading to Wails v3:
 	// presenter windows keyed by document id (e.g., "content/xxx.md")
@@ -101,10 +109,27 @@ type App struct {
 	allowCloseMu   sync.Mutex
 	allowCloseFlag bool
 
-	webClipConversionMu      sync.Mutex
-	webClipConversionQueue   []webClipConversionJob
-	webClipConversionRunning bool
-	webClipConversionClosing bool
+	jobs         appJobState
+	siteBuild    appSiteBuildState
+	transcripts  appTranscriptState
+	mediaImports appMediaImportState
+	csvStore     appCSVStoreState
+
+	fileSearchMu          sync.Mutex
+	fileSearchReadFile    func(string) ([]byte, error)
+	fileSearchChangeToken func(string, os.FileInfo) string
+	documentMapMu         sync.Mutex
+	documentMapStore      documentMapStore
+	documentRenameFile    func(string, string) error
+
+	graphRefreshMu      sync.Mutex
+	graphSnapshotMu     sync.RWMutex
+	graphCacheState     graphCache
+	graphCacheLoaded    bool
+	graphReadFile       func(string) ([]byte, error)
+	graphPersistFile    func(string, []byte, fs.FileMode) error
+	graphParseDocument  func(string, []byte) graphParsedDocument
+	graphMigrationParse func([]byte) *fm.FrontMatter
 }
 
 type webClipConversionJob struct {
@@ -219,10 +244,10 @@ func (a *App) appendLog(level, msg string) {
 
 // FileItem represents a markdown file in the content directory
 type FileItem struct {
-	Path       string    `json:"path"`
-	Title      string    `json:"title"`
-	ModTime    time.Time `json:"modTime"`
-	SearchText string    `json:"searchText,omitempty"`
+	Path    string    `json:"path"`
+	Title   string    `json:"title"`
+	ModTime time.Time `json:"modTime"`
+	Size    int64     `json:"size"`
 }
 
 // ImageItem represents an image file in the gallery
@@ -233,14 +258,6 @@ type ImageItem struct {
 	ModTime      time.Time `json:"modTime"`
 	MetadataPath string    `json:"metadataPath,omitempty"`
 	OriginalPath string    `json:"originalPath,omitempty"`
-}
-
-// CSVItem represents a CSV file in the gallery
-type CSVItem struct {
-	Path    string    `json:"path"`
-	Name    string    `json:"name"`
-	Size    int64     `json:"size"`
-	ModTime time.Time `json:"modTime"`
 }
 
 func (a *App) LoadBoard(path string) (*boardpkg.Document, error) {
@@ -257,15 +274,6 @@ func (a *App) LoadBoard(path string) (*boardpkg.Document, error) {
 	doc, err := boardpkg.Parse(path, string(content))
 	if err != nil {
 		return nil, err
-	}
-
-	if doc.DocID == "" {
-		contentWithDocID, docID, ensureErr := a.ensureDocID(string(content))
-		if ensureErr == nil && docID != "" {
-			doc.DocID = docID
-			doc.RawContent = contentWithDocID
-			_ = os.WriteFile(absPath, []byte(contentWithDocID), 0o644)
-		}
 	}
 
 	return doc, nil
@@ -460,13 +468,22 @@ func NewApp() *App {
 
 // NewAppWithFileSystem creates a new App with the provided FileSystem.
 func NewAppWithFileSystem(fs FileSystem) *App {
-	return &App{fs: fs}
+	app := &App{
+		fs:           fs,
+		startupSmoke: newStartupSmokeState(os.Getenv(startupSmokeReadyFileEnv)),
+	}
+	app.lifecycle.start(context.Background())
+	return app
 }
 
 // startup is called when the app starts. The context is saved
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.lifecycle.start(ctx)
+	a.resetJobManager()
+	a.resetSiteBuildCoordinator()
+	a.resetASRResourceManager()
 	// NOTE: Multi-window support requires Wails v3 (currently in development)
 	// Uncomment when upgrading to Wails v3:
 	// if a.presenters == nil {
@@ -475,92 +492,74 @@ func (a *App) startup(ctx context.Context) {
 	// Determine base directory from executable location
 	exePath, err := os.Executable()
 	if err != nil {
-		runtime.LogError(ctx, fmt.Sprintf("Failed to get executable path: %v", err))
+		startupErr := fmt.Errorf("failed to get executable path: %w", err)
+		runtime.LogError(ctx, startupErr.Error())
+		a.finishStartup(ctx, startupErr)
 		return
 	}
 	exeDir := filepath.Dir(exePath)
-
-	// If running inside a macOS .app bundle, place data next to the app bundle
-	// exeDir: .../Karte.app/Contents/MacOS
-	// appBundleDir := .../Karte.app, appPlacedDir := parent directory of app bundle
-	appPlacedDir := exeDir
-	// Detect .app bundle structure
-	if strings.HasSuffix(filepath.ToSlash(exeDir), "/Contents/MacOS") {
-		contentsDir := filepath.Dir(exeDir)       // .../Contents
-		appBundleDir := filepath.Dir(contentsDir) // .../Karte.app
-		appPlacedDir = filepath.Dir(appBundleDir) // directory containing Karte.app
+	dataResolution, err := resolveRuntimeDataDirectory(exePath)
+	if err != nil {
+		startupErr := fmt.Errorf("failed to resolve data directory: %w", err)
+		runtime.LogError(ctx, startupErr.Error())
+		a.finishStartup(ctx, startupErr)
+		return
+	}
+	a.root = dataResolution.RootDirectory
+	a.dataDir = dataResolution.DataDirectory
+	switch dataResolution.Kind {
+	case dataDirectoryOverride:
+		a.logInfo(fmt.Sprintf("Using KARTE_DATA_DIR override: %s", a.dataDir))
+	case dataDirectoryDev:
+		a.logInfo(fmt.Sprintf("Using development karte_data: %s", a.dataDir))
+	case dataDirectoryUser:
+		a.logInfo(fmt.Sprintf("Using macOS user data directory: %s", a.dataDir))
 	}
 
-	a.root = appPlacedDir
-
-	// Allow explicitly overriding the runtime data directory for local development.
-	if override := strings.TrimSpace(os.Getenv("KARTE_DATA_DIR")); override != "" {
-		if absOverride, err := filepath.Abs(override); err == nil {
-			a.root = filepath.Dir(absOverride)
-			a.dataDir = absOverride
-			a.logInfo(fmt.Sprintf("Using KARTE_DATA_DIR override: %s", a.dataDir))
-		} else {
-			a.logError(fmt.Sprintf("Invalid KARTE_DATA_DIR %q: %v", override, err))
+	if dataResolution.LegacyDataDirectory != "" {
+		report, err := migrateLegacyDataDirectory(dataResolution.LegacyDataDirectory, a.dataDir)
+		if err != nil {
+			startupErr := fmt.Errorf("failed to migrate legacy data directory: %w", err)
+			runtime.LogError(ctx, startupErr.Error())
+			a.finishStartup(ctx, startupErr)
 			return
 		}
-	} else {
-		// When running `wails dev`, the generated app lives under build/bin.
-		// In that case prefer the repo-local karte_data so development uses real project data.
-		if cwd, err := os.Getwd(); err == nil {
-			devDataDir := filepath.Join(cwd, "karte_data")
-			if strings.HasSuffix(filepath.ToSlash(appPlacedDir), "/build/bin") {
-				if info, statErr := os.Stat(devDataDir); statErr == nil && info.IsDir() {
-					a.root = cwd
-					a.dataDir = devDataDir
-					a.logInfo(fmt.Sprintf("Using development karte_data: %s", a.dataDir))
-				}
-			}
+		if report.Copied > 0 || report.Preserved > 0 {
+			a.logInfo(fmt.Sprintf(
+				"Legacy data migration completed: source=%s destination=%s copied=%d preserved=%d",
+				dataResolution.LegacyDataDirectory,
+				a.dataDir,
+				report.Copied,
+				report.Preserved,
+			))
 		}
 	}
 
-	// Initialize the runtime data directory unless it was explicitly overridden
-	// or resolved to the development workspace above.
-	if a.dataDir == "" {
-		defaultRoot, defaultDataDir, pathErr := runtimepath.DefaultDataDir(
-			goruntime.GOOS,
-			appPlacedDir,
-			os.Getenv("LOCALAPPDATA"),
-		)
-		if pathErr != nil {
-			runtime.LogError(ctx, fmt.Sprintf("Failed to resolve data directory: %v", pathErr))
-			return
-		}
-		a.root = defaultRoot
-		a.dataDir = defaultDataDir
-
-		if goruntime.GOOS == "windows" {
-			legacyDataDir := filepath.Join(appPlacedDir, "karte_data")
-			migrated, migrationErr := runtimepath.MigrateLegacyDataDir(legacyDataDir, a.dataDir)
-			if migrationErr != nil {
-				runtime.LogError(ctx, fmt.Sprintf("Failed to migrate legacy data directory: %v", migrationErr))
-				return
-			}
-			if migrated {
-				a.logInfo(fmt.Sprintf("Copied legacy data directory from %s to %s; source was preserved", legacyDataDir, a.dataDir))
-			}
-		}
-	}
 	if err := a.initializeDataDirectory(); err != nil {
-		runtime.LogError(ctx, fmt.Sprintf("Failed to initialize data directory: %v", err))
+		startupErr := fmt.Errorf("failed to initialize data directory: %w", err)
+		runtime.LogError(ctx, startupErr.Error())
+		a.finishStartup(ctx, startupErr)
+		return
+	}
+	if migrated, err := a.MigrateLegacyGraphDocumentIDs(); err != nil {
+		runtime.LogError(ctx, fmt.Sprintf("Failed to migrate legacy document IDs: %v", err))
+	} else if migrated > 0 {
+		a.logInfo(fmt.Sprintf("Assigned doc_id to %d legacy Markdown documents", migrated))
+	}
+	if err := a.RefreshGraphData(); err != nil {
+		// The graph cache is derived data. Keep the application usable and retry
+		// at the next explicit mutation boundary if startup rebuilding fails.
+		runtime.LogError(ctx, fmt.Sprintf("Failed to initialize graph cache: %v", err))
+	}
+	if a.getJobManager() == nil {
+		startupErr := errors.New("failed to initialize background job manager")
+		runtime.LogError(ctx, startupErr.Error())
+		a.finishStartup(ctx, startupErr)
 		return
 	}
 
-	a.asrInitDone = make(chan struct{})
-	go func() {
-		if err := a.initASRService(); err != nil {
-			runtime.LogError(ctx, fmt.Sprintf("Failed to initialize ASR service: %v", err))
-		} else if a.asrService != nil || a.realtimeService != nil {
-			a.logInfo("ASR service initialized")
-		}
-		close(a.asrInitDone)
-	}()
-
 	a.logInfo(fmt.Sprintf("Karte started. root=%s dataDir=%s exeDir=%s", a.root, a.dataDir, exeDir))
+	a.finishStartup(ctx, nil)
 
 	// Initialize sync manager (disabled for now - will be implemented with git integration)
 	// a.syncManager = syncpkg.NewSyncManager(ctx, a.root)
@@ -571,21 +570,90 @@ func (a *App) startup(ctx context.Context) {
 
 // shutdown is invoked by Wails when the app is closing.
 func (a *App) shutdown(ctx context.Context) {
-	a.webClipConversionMu.Lock()
-	a.webClipConversionClosing = true
-	a.webClipConversionMu.Unlock()
+	if a == nil {
+		return
+	}
+	// Seal public job creation first，but keep the existing manager and lifecycle
+	// context alive until an accepted recording has submitted and drained its
+	// final ASR segment．
+	jobManager := a.sealJobAdmission()
+	asrManager := a.closeASRAdmission()
+	if !a.lifecycle.beginShutdownDrain() {
+		return
+	}
+	// StartRecording and StopRecording own the complete recording session under
+	// this lock．Shutdown waits at the same boundary，so Realtime Flush／Close and
+	// offline lease release cannot overlap or run twice．
+	a.recordingControlMu.Lock()
+	defer a.recordingControlMu.Unlock()
+	// Free the bounded worker/category budget before the recording processor
+	// submits its final offline segment．The recording group remains admitted
+	// through recordingJobManager until its consistency boundary completes．
+	cancelNonRecordingJobsForShutdown(jobManager)
 
-	if a.asrService != nil {
-		a.asrService.Close()
-		a.asrService = nil
+	a.recordingMu.Lock()
+	recordingActive := a.isRecording
+	a.recordingMu.Unlock()
+	if recordingActive {
+		if audioPath, err := a.finishRecordingSession(false); err != nil {
+			a.logError(fmt.Sprintf("Failed to finalize recording during shutdown: %v", err))
+		} else {
+			a.logInfo(fmt.Sprintf("Finalized recording during shutdown: %s", audioPath))
+		}
 	}
-	if a.realtimeService != nil {
-		a.realtimeService.Close()
-		a.realtimeService = nil
+
+	if jobManager != nil {
+		jobManager.Close()
 	}
-	// Cleanup recording if active
-	if a.isRecording {
-		a.cleanupRecording()
+	a.lifecycle.cancelShutdownWorkers()
+
+	if a.syncManager != nil {
+		if err := a.syncManager.Stop(); err != nil {
+			a.logError(fmt.Sprintf("Failed to stop sync manager during shutdown: %v", err))
+		}
+	}
+
+	if jobManager != nil {
+		jobWaitCtx, cancelJobWait := context.WithTimeout(context.Background(), 10*time.Second)
+		if !jobManager.Shutdown(jobWaitCtx) {
+			a.logError("Timeout waiting for managed background jobs during shutdown")
+		}
+		cancelJobWait()
+	}
+
+	workerWaitCtx, cancelWorkerWait := context.WithTimeout(context.Background(), 10*time.Second)
+	if !a.lifecycle.wait(workerWaitCtx) {
+		a.logError("Timeout waiting for background workers during shutdown")
+	}
+	cancelWorkerWait()
+
+	// Workers no longer use the recognizers，so native handles can be released
+	// without racing an in-flight transcription or recording callback．
+	a.recordingMu.Lock()
+	a.recorder = nil
+	realtimeService, recordingASRLease := a.takeRecordingASRResourcesLocked()
+	recordingPipeline := a.recordingPipeline
+	a.recordingPipeline = nil
+	a.recordingTranscriptPath = ""
+	a.recordingStopCh = nil
+	a.isRecording = false
+	a.recordingMu.Unlock()
+	if recordingPipeline != nil {
+		recordingPipeline.stopProcessing()
+		if err := recordingPipeline.transcript.Abort(); err != nil {
+			a.logError(fmt.Sprintf("Failed to close incomplete transcript during shutdown: %v", err))
+		}
+		if err := recordingPipeline.wav.Abort(); err != nil {
+			a.logError(fmt.Sprintf("Failed to abort incomplete recording during shutdown: %v", err))
+		}
+	}
+	closeRecordingASRResources(realtimeService, recordingASRLease)
+	if !a.shutdownASRResource(asrManager) {
+		a.logError("Timeout waiting for ASR resource leases during shutdown")
+	}
+
+	if err := audio.Terminate(); err != nil {
+		a.logError(fmt.Sprintf("Failed to terminate audio runtime during shutdown: %v", err))
 	}
 }
 
@@ -660,8 +728,9 @@ func (a *App) initializeDataDirectory() error {
     "method": "greedy_search"
   },
   "runtime": {
-    "threads": 4,
-    "provider": "cpu"
+    "threads": 2,
+    "provider": "cpu",
+    "idleTimeoutSeconds": 300
   }
 }`,
 	}
@@ -677,7 +746,7 @@ func (a *App) initializeDataDirectory() error {
 	return a.initializeGitRepository()
 }
 
-// findTemplatePath finds the packaged karte_data_template directory.
+// findTemplatePath finds the karte_data_template path in .app bundle
 func (a *App) findTemplatePath() string {
 	exePath, err := os.Executable()
 	if err != nil {
@@ -691,15 +760,6 @@ func (a *App) findTemplatePath() string {
 		appBundleDir := filepath.Dir(contentsDir) // .../Karte.app
 		templatePath := filepath.Join(appBundleDir, "Contents", "Resources", "karte_data_template")
 		if _, err := os.Stat(templatePath); err == nil {
-			return templatePath
-		}
-	}
-
-	for _, templatePath := range []string{
-		filepath.Join(exeDir, "karte_data_template"),
-		filepath.Join(exeDir, "resources", "karte_data_template"),
-	} {
-		if info, err := os.Stat(templatePath); err == nil && info.IsDir() {
 			return templatePath
 		}
 	}
@@ -808,76 +868,15 @@ func (a *App) initializeGitRepository() error {
 	return nil
 }
 
-// GetFileList returns a list of markdown files in the content directory
+// GetFileList returns metadata for markdown and PDF files in the content directory.
+// Markdown bodies remain in the backend search index and are never returned over IPC.
 func (a *App) GetFileList() []FileItem {
-	var files []FileItem
-	contentDir := filepath.Join(a.dataDir, "content")
-
-	a.logInfo(fmt.Sprintf("GetFileList: contentDir=%s", contentDir))
-
-	// Check if content directory exists
-	if _, err := os.Stat(contentDir); os.IsNotExist(err) {
-		a.logError(fmt.Sprintf("Content directory does not exist: %s", contentDir))
-		return []FileItem{}
-	}
-
-	err := filepath.Walk(contentDir, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			a.logError(fmt.Sprintf("Error walking path %s: %v", p, err))
-			return nil
-		}
-		if info.IsDir() {
-			return nil
-		}
-		lowerName := strings.ToLower(info.Name())
-		isMarkdown := strings.HasSuffix(lowerName, ".md")
-		isPdf := strings.HasSuffix(lowerName, ".pdf")
-		if isMarkdown || isPdf {
-			// Generate path relative to dataDir so that it starts with "content/..."
-			rel, err := filepath.Rel(a.dataDir, p)
-			if err != nil {
-				a.logError(fmt.Sprintf("Failed to get relative path for %s: %v", p, err))
-				return nil
-			}
-			title := info.Name()
-			searchText := title
-
-			// Try to extract title from frontmatter for markdown files
-			if isMarkdown {
-				if b, err := os.ReadFile(p); err == nil {
-					content := string(b)
-					title = fm.ExtractTitle(content, title)
-					searchText = content
-				} else {
-					a.logError(fmt.Sprintf("Failed to read file %s: %v", p, err))
-					// Continue with filename as title if read fails
-				}
-			} else if isPdf {
-				// For PDF files, use filename without extension as title
-				title = strings.TrimSuffix(title, filepath.Ext(title))
-			}
-			fileItem := FileItem{
-				Path:       filepath.ToSlash(rel),
-				Title:      title,
-				ModTime:    info.ModTime(),
-				SearchText: searchText,
-			}
-			files = append(files, fileItem)
-			a.logInfo(fmt.Sprintf("Found file: %s -> %s", fileItem.Path, fileItem.Title))
-		}
-		return nil
-	})
-
+	_, files, err := a.refreshFileSearchIndex()
 	if err != nil {
-		a.logError(fmt.Sprintf("Error walking content directory: %v", err))
+		a.logError(fmt.Sprintf("GetFileList failed: %v", err))
 		return []FileItem{}
 	}
-
 	a.logInfo(fmt.Sprintf("GetFileList completed: Found %d files (markdown and PDF)", len(files)))
-	if len(files) > 0 {
-		a.logInfo(fmt.Sprintf("First file: %s", files[0].Path))
-	}
-	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files
 }
 
@@ -998,57 +997,6 @@ func isGalleryImageExt(ext string) bool {
 	default:
 		return false
 	}
-}
-
-// GetCsvList returns a list of CSV files in the data/csv directory
-func (a *App) GetCsvList() []CSVItem {
-	var csvs []CSVItem
-	csvDir := filepath.Join(a.dataDir, "data", "csv")
-
-	a.logInfo(fmt.Sprintf("GetCsvList: csvDir=%s", csvDir))
-
-	// Check if csv directory exists
-	if _, err := os.Stat(csvDir); os.IsNotExist(err) {
-		a.logInfo(fmt.Sprintf("CSV directory does not exist: %s", csvDir))
-		return []CSVItem{}
-	}
-
-	err := filepath.Walk(csvDir, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			a.logError(fmt.Sprintf("Error walking path %s: %v", p, err))
-			return nil
-		}
-		if info.IsDir() {
-			return nil
-		}
-		if strings.ToLower(filepath.Ext(info.Name())) != ".csv" {
-			return nil
-		}
-
-		rel, _ := filepath.Rel(a.dataDir, p)
-		rel = filepath.ToSlash(rel)
-		csvItem := CSVItem{
-			Path:    rel,
-			Name:    info.Name(),
-			Size:    info.Size(),
-			ModTime: info.ModTime(),
-		}
-		csvs = append(csvs, csvItem)
-		a.logInfo(fmt.Sprintf("Found CSV: %s", csvItem.Path))
-		return nil
-	})
-
-	if err != nil {
-		a.logError(fmt.Sprintf("Error walking CSV directory: %v", err))
-		return []CSVItem{}
-	}
-
-	// Sort by modification time (newest first)
-	sort.Slice(csvs, func(i, j int) bool {
-		return csvs[i].ModTime.After(csvs[j].ModTime)
-	})
-
-	return csvs
 }
 
 // GetImageMetadata returns the YAML metadata associated with the provided image.
@@ -1248,6 +1196,7 @@ func (a *App) SaveImageMetadata(imagePath, yamlContent string) (bool, error) {
 	}
 
 	a.logInfo(fmt.Sprintf("Saved image metadata: %s", metaRelPath))
+	a.refreshGraphAfterMutation("image metadata save")
 	return true, nil
 }
 
@@ -1286,6 +1235,7 @@ func (a *App) SaveImageSystemMetadata(imagePath, metadataContent string) (bool, 
 		return false, fmt.Errorf("write system metadata chunk: %w", err)
 	}
 	a.logInfo(fmt.Sprintf("Saved image system metadata to KMTD chunk: %s", relImagePath))
+	a.refreshGraphAfterMutation("image system metadata save")
 	return true, nil
 }
 
@@ -1350,6 +1300,10 @@ func (a *App) CreateNewFile(filename string) (bool, error) {
 
 	// Create default content
 	defaultContent := fmt.Sprintf("# %s\n\nStart writing your content here...\n", strings.TrimSuffix(filename, ".md"))
+	defaultContent, documentID, err := a.ensureDocID(defaultContent)
+	if err != nil {
+		return false, fmt.Errorf("failed to assign doc_id: %v", err)
+	}
 
 	// Ensure directory exists and write the file
 	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
@@ -1358,8 +1312,16 @@ func (a *App) CreateNewFile(filename string) (bool, error) {
 	if err := os.WriteFile(filePath, []byte(defaultContent), 0644); err != nil {
 		return false, fmt.Errorf("failed to create file: %v", err)
 	}
+	if _, err := a.updateDocumentMapping(documentID, filepath.ToSlash(filepath.Join("content", filename))); err != nil {
+		if rollbackErr := os.Remove(filePath); rollbackErr != nil && !errors.Is(rollbackErr, os.ErrNotExist) {
+			return false, fmt.Errorf("failed to update document map: %w; created file rollback failed: %v", err, rollbackErr)
+		}
+		return false, fmt.Errorf("failed to update document map; created file was rolled back: %w", err)
+	}
 
 	a.logInfo(fmt.Sprintf("Created new file: %s", filePath))
+	a.scheduleSiteBuild(filepath.ToSlash(filepath.Join("content", filename)))
+	a.refreshGraphAfterMutation("file creation")
 	return true, nil
 }
 
@@ -1378,11 +1340,13 @@ func (a *App) ClipURL(req clip.ClipRequest) (clip.ClipResult, error) {
 		a.logError(fmt.Sprintf("ClipURL failed for %s: %v", req.URL, err))
 		return clip.ClipResult{}, err
 	}
+	if _, err := a.ensureDocumentIDAtMutation(result.MarkdownPath); err != nil {
+		return result, fmt.Errorf("assign doc_id to clipped Markdown: %w", err)
+	}
 
 	a.logInfo(fmt.Sprintf("ClipURL: imported %s to %s", result.SourceURL, result.MarkdownPath))
-	if err := a.BuildSite(); err != nil {
-		runtime.LogError(a.ctx, fmt.Sprintf("Failed to build site after web clip: %v", err))
-	}
+	a.scheduleSiteBuild(result.MarkdownPath)
+	a.refreshGraphAfterMutation("web clip import")
 	a.emitEvent("file-changed", result.MarkdownPath)
 	a.enqueueWebClipAssetConversion(result.MarkdownPath, result.AssetDir)
 	return result, nil
@@ -1401,39 +1365,48 @@ func (a *App) enqueueWebClipAssetConversion(markdownPath, assetDir string) {
 	if !isWebClipMarkdownPath(markdownPath) || !isWebClipAssetDir(assetDir) {
 		return
 	}
-
-	a.webClipConversionMu.Lock()
-	defer a.webClipConversionMu.Unlock()
-	if a.webClipConversionClosing {
+	manager := a.getJobManager()
+	if manager == nil {
+		a.logInfo(fmt.Sprintf("Web Clip image conversion was not queued during shutdown: %s", assetDir))
 		return
 	}
-	a.webClipConversionQueue = append(a.webClipConversionQueue, webClipConversionJob{
+	job := webClipConversionJob{
 		MarkdownPath: filepath.ToSlash(markdownPath),
 		AssetDir:     filepath.ToSlash(assetDir),
-	})
-	if a.webClipConversionRunning {
-		return
 	}
-	a.webClipConversionRunning = true
-	go a.runWebClipConversionQueue()
-}
-
-func (a *App) runWebClipConversionQueue() {
-	time.Sleep(3 * time.Second)
-	for {
-		a.webClipConversionMu.Lock()
-		if len(a.webClipConversionQueue) == 0 {
-			a.webClipConversionRunning = false
-			a.webClipConversionMu.Unlock()
-			return
-		}
-		job := a.webClipConversionQueue[0]
-		a.webClipConversionQueue = a.webClipConversionQueue[1:]
-		a.webClipConversionMu.Unlock()
-
-		if err := a.processWebClipConversionJob(job, 250*time.Millisecond); err != nil {
-			a.logError(fmt.Sprintf("Web Clip image conversion failed for %s: %v", job.AssetDir, err))
-		}
+	submission := manager.Submit(managedJob{
+		Category: appJobCategoryWebClip,
+		Group:    appJobGroupWebClip,
+		Key:      job.AssetDir,
+		Priority: jobPriorityLow,
+		Coalesce: jobReplacePending,
+		Run: func(ctx context.Context) error {
+			startupDelay := time.NewTimer(3 * time.Second)
+			defer startupDelay.Stop()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-startupDelay.C:
+			}
+			err := a.processWebClipConversionJobContext(ctx, job, 250*time.Millisecond)
+			if err != nil && ctx.Err() == nil {
+				a.logError(fmt.Sprintf("Web Clip image conversion failed for %s: %v", job.AssetDir, err))
+			}
+			return err
+		},
+	})
+	switch submission.Status {
+	case jobAccepted, jobDeduplicated, jobReplacedPending:
+		return
+	case jobRejectedFull:
+		a.logError(fmt.Sprintf(
+			"Web Clip image conversion queue is full for %s; original assets were preserved and conversion can be retried by importing the clip again",
+			job.AssetDir,
+		))
+	case jobRejectedClosed, jobRejectedCanceled:
+		a.logInfo(fmt.Sprintf("Web Clip image conversion was canceled during shutdown: %s", job.AssetDir))
+	default:
+		a.logError(fmt.Sprintf("Web Clip image conversion was rejected for %s: %v", job.AssetDir, submission.Err))
 	}
 }
 
@@ -1443,8 +1416,18 @@ type imagePathReplacement struct {
 }
 
 func (a *App) processWebClipConversionJob(job webClipConversionJob, interImageDelay time.Duration) error {
+	return a.processWebClipConversionJobContext(context.Background(), job, interImageDelay)
+}
+
+func (a *App) processWebClipConversionJobContext(ctx context.Context, job webClipConversionJob, interImageDelay time.Duration) error {
 	if a == nil || a.dataDir == "" {
 		return fmt.Errorf("app dataDir is not initialized")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if !isWebClipMarkdownPath(job.MarkdownPath) || !isWebClipAssetDir(job.AssetDir) {
 		return fmt.Errorf("invalid web clip conversion job: markdown=%s assetDir=%s", job.MarkdownPath, job.AssetDir)
@@ -1462,6 +1445,9 @@ func (a *App) processWebClipConversionJob(job webClipConversionJob, interImageDe
 	replacements := []imagePathReplacement{}
 	imageManifest := a.loadWebClipImageManifest(assetAbs)
 	err := filepath.Walk(assetAbs, func(p string, info os.FileInfo, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
 			a.logError(fmt.Sprintf("Error walking web clip conversion path %s: %v", p, err))
 			return nil
@@ -1500,7 +1486,7 @@ func (a *App) processWebClipConversionJob(job webClipConversionJob, interImageDe
 			}
 			return nil
 		}
-		if err := a.convertImageFileToWebP(p, webpAbs, ext); err != nil {
+		if err := a.convertImageFileToWebPContext(ctx, p, webpAbs, ext); err != nil {
 			a.logError(fmt.Sprintf("Failed to convert Web Clip image to WebP: %s -> %s: %v", p, webpAbs, err))
 			return nil
 		}
@@ -1528,14 +1514,24 @@ func (a *App) processWebClipConversionJob(job webClipConversionJob, interImageDe
 			"source":        "web_clip",
 		})
 		if interImageDelay > 0 {
-			time.Sleep(interImageDelay)
+			delay := time.NewTimer(interImageDelay)
+			defer delay.Stop()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-delay.C:
+			}
 		}
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("walk web clip assets: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(replacements) == 0 {
+		a.refreshGraphAfterMutation("web clip image conversion")
 		return nil
 	}
 
@@ -1543,45 +1539,9 @@ func (a *App) processWebClipConversionJob(job webClipConversionJob, interImageDe
 		return err
 	} else if updated {
 		a.emitEvent("file-changed", job.MarkdownPath)
-		if err := a.BuildSite(); err != nil {
-			a.logError(fmt.Sprintf("Failed to build site after Web Clip image conversion: %v", err))
-		}
+		a.scheduleSiteBuild(job.MarkdownPath)
 	}
-	return nil
-}
-
-func (a *App) convertImageFileToWebP(sourceAbs, webpAbs, sourceExt string) error {
-	sourceFile, err := os.Open(sourceAbs)
-	if err != nil {
-		return fmt.Errorf("open source image: %w", err)
-	}
-	defer sourceFile.Close()
-
-	img, _, err := image.Decode(sourceFile)
-	if err != nil {
-		return fmt.Errorf("decode source image: %w", err)
-	}
-
-	tmpAbs := webpAbs + ".tmp"
-	webpFile, err := os.OpenFile(tmpAbs, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		return fmt.Errorf("create webp temp file: %w", err)
-	}
-	lossless := sourceExt == ".png" || sourceExt == ".gif"
-	encodeErr := webputil.EncodeWebP(webpFile, img, lossless)
-	closeErr := webpFile.Close()
-	if encodeErr != nil {
-		_ = os.Remove(tmpAbs)
-		return fmt.Errorf("encode webp: %w", encodeErr)
-	}
-	if closeErr != nil {
-		_ = os.Remove(tmpAbs)
-		return fmt.Errorf("close webp temp file: %w", closeErr)
-	}
-	if err := os.Rename(tmpAbs, webpAbs); err != nil {
-		_ = os.Remove(tmpAbs)
-		return fmt.Errorf("replace webp file: %w", err)
-	}
+	a.refreshGraphAfterMutation("web clip image conversion")
 	return nil
 }
 
@@ -1848,6 +1808,11 @@ func (a *App) saveBoardDocument(doc *boardpkg.Document) (*boardpkg.Document, err
 	if !ok {
 		return nil, fmt.Errorf("invalid board path: %s", doc.Path)
 	}
+	releaseTranscriptMutation, err := a.reserveTranscriptPathMutation(doc.Path)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseTranscriptMutation()
 
 	now := time.Now().Format("2006-01-02")
 	if doc.Type == "" {
@@ -1885,9 +1850,10 @@ func (a *App) saveBoardDocument(doc *boardpkg.Document) (*boardpkg.Document, err
 		return nil, err
 	}
 
+	previous := captureDocumentFileSnapshot(absPath)
 	var oldHash string
-	if existing, err := os.ReadFile(absPath); err == nil {
-		oldHash = gitvcs.CalculateHash(string(existing))
+	if previous.existed {
+		oldHash = gitvcs.CalculateHash(string(previous.content))
 	}
 
 	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
@@ -1895,6 +1861,9 @@ func (a *App) saveBoardDocument(doc *boardpkg.Document) (*boardpkg.Document, err
 	}
 	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
 		return nil, fmt.Errorf("failed to save board file: %w", err)
+	}
+	if _, err := a.updateDocumentMapping(doc.DocID, doc.Path); err != nil {
+		return nil, documentMappingFailure("save board", absPath, previous, err)
 	}
 
 	newHash := gitvcs.CalculateHash(content)
@@ -1908,10 +1877,9 @@ func (a *App) saveBoardDocument(doc *boardpkg.Document) (*boardpkg.Document, err
 		}
 	}
 
-	if err := a.BuildSite(); err != nil {
-		runtime.LogError(a.ctx, fmt.Sprintf("Failed to build site after board save: %v", err))
-	}
-	runtime.EventsEmit(a.ctx, "file-changed", doc.Path)
+	a.scheduleSiteBuild(doc.Path)
+	a.refreshGraphAfterMutation("board save")
+	a.emitEvent("file-changed", doc.Path)
 
 	saved, err := boardpkg.Parse(doc.Path, content)
 	if err != nil {
@@ -1923,47 +1891,126 @@ func (a *App) saveBoardDocument(doc *boardpkg.Document) (*boardpkg.Document, err
 // LoadFile loads the content of a markdown file
 // For PDF files, returns an empty string since PDFs are not editable
 func (a *App) LoadFile(path string) (string, error) {
-	runtime.LogInfo(a.ctx, fmt.Sprintf("LoadFile called with path: %s", path))
+	a.logInfo(fmt.Sprintf("LoadFile called with path: %s", path))
 
 	absPath, ok := a.resolveContentPath(path)
 	if !ok {
-		runtime.LogError(a.ctx, fmt.Sprintf("Invalid path: %s", path))
+		a.logError(fmt.Sprintf("Invalid path: %s", path))
 		return "", fmt.Errorf("invalid path: %s", path)
 	}
 
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Resolved path: %s", absPath))
+	a.logInfo(fmt.Sprintf("Resolved path: %s", absPath))
 
 	// Check if this is a PDF file
 	if strings.HasSuffix(strings.ToLower(path), ".pdf") {
-		runtime.LogInfo(a.ctx, fmt.Sprintf("PDF file detected, returning empty string"))
+		a.logInfo("PDF file detected, returning empty string")
 		return "", nil
 	}
 
 	content, err := os.ReadFile(absPath)
 	if err != nil {
-		runtime.LogError(a.ctx, fmt.Sprintf("Failed to read file %s: %v", absPath, err))
+		a.logError(fmt.Sprintf("Failed to read file %s: %v", absPath, err))
 		return "", fmt.Errorf("failed to read file: %v", err)
 	}
 
 	contentStr := string(content)
+	a.logInfo(fmt.Sprintf("Successfully loaded file, content length: %d", len(contentStr)))
+	return contentStr, nil
+}
 
-	// Ensure doc_id exists (lazy assignment)
-	contentWithDocID, docID, err := a.ensureDocID(contentStr)
-	if err != nil {
-		a.logError(fmt.Sprintf("Failed to ensure doc_id for %s: %v", path, err))
-		// Continue with original content if doc_id generation fails
-	} else if docID != "" && contentWithDocID != contentStr {
-		// Save the updated content with doc_id if it was added
-		if err := os.WriteFile(absPath, []byte(contentWithDocID), 0644); err != nil {
-			a.logError(fmt.Sprintf("Failed to save file with doc_id: %v", err))
-		} else {
-			contentStr = contentWithDocID
-			a.logInfo(fmt.Sprintf("Assigned doc_id to file: %s -> %s", path, docID))
-		}
+var saveFileAtomicReplace = atomicReplaceFile
+
+func atomicWriteSaveFile(path string, data []byte, defaultPerm fs.FileMode) error {
+	return atomicWriteFileWithReplace(path, data, defaultPerm, saveFileAtomicReplace)
+}
+
+func atomicWriteDerivedFile(path string, data []byte, defaultPerm fs.FileMode) error {
+	return atomicWriteFileWithReplace(path, data, defaultPerm, atomicReplaceFile)
+}
+
+func atomicWriteFileWithReplace(path string, data []byte, defaultPerm fs.FileMode, replace func(string, string) error) (err error) {
+	perm := defaultPerm
+	if info, statErr := os.Stat(path); statErr == nil {
+		perm = info.Mode().Perm()
 	}
 
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Successfully loaded file, content length: %d", len(contentStr)))
-	return contentStr, nil
+	tempFile, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary save file: %w", err)
+	}
+	tempPath := tempFile.Name()
+	replaced := false
+	defer func() {
+		_ = tempFile.Close()
+		if !replaced {
+			_ = os.Remove(tempPath)
+		}
+	}()
+
+	if err := tempFile.Chmod(perm); err != nil {
+		return fmt.Errorf("failed to set temporary save file permissions: %w", err)
+	}
+	if _, err := tempFile.Write(data); err != nil {
+		return fmt.Errorf("failed to write temporary save file: %w", err)
+	}
+	if err := tempFile.Sync(); err != nil {
+		return fmt.Errorf("failed to sync temporary save file: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("failed to close temporary save file: %w", err)
+	}
+	if err := replace(tempPath, path); err != nil {
+		return fmt.Errorf("failed to replace save file atomically: %w", err)
+	}
+	replaced = true
+	return nil
+}
+
+type documentFileSnapshot struct {
+	captured bool
+	existed  bool
+	content  []byte
+	perm     fs.FileMode
+}
+
+func captureDocumentFileSnapshot(path string) documentFileSnapshot {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return documentFileSnapshot{captured: true}
+	}
+	if err != nil || !info.Mode().IsRegular() {
+		return documentFileSnapshot{}
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return documentFileSnapshot{}
+	}
+	return documentFileSnapshot{
+		captured: true,
+		existed:  true,
+		content:  content,
+		perm:     info.Mode().Perm(),
+	}
+}
+
+func rollbackDocumentFile(path string, snapshot documentFileSnapshot) error {
+	if !snapshot.captured {
+		return errors.New("prior document state was not captured")
+	}
+	if snapshot.existed {
+		return atomicWriteDerivedFile(path, snapshot.content, snapshot.perm)
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func documentMappingFailure(operation string, path string, snapshot documentFileSnapshot, mappingErr error) error {
+	if rollbackErr := rollbackDocumentFile(path, snapshot); rollbackErr != nil {
+		return fmt.Errorf("%s document map update failed: %w; document rollback failed: %v", operation, mappingErr, rollbackErr)
+	}
+	return fmt.Errorf("%s document map update failed and document change was rolled back: %w", operation, mappingErr)
 }
 
 // SaveFile saves content to a markdown file
@@ -1975,12 +2022,19 @@ func (a *App) SaveFile(path, content string) error {
 		a.logError(fmt.Sprintf("SaveFile: invalid path: %s", path))
 		return fmt.Errorf("invalid path: %s", path)
 	}
+	releaseTranscriptMutation, err := a.reserveTranscriptPathMutation(path)
+	if err != nil {
+		return err
+	}
+	defer releaseTranscriptMutation()
 
-	// Calculate hash before saving (but don't read file content here to avoid conflicts)
+	// Capture the prior state for hashing and rollback if the document-map
+	// transaction cannot be committed after the file replacement.
+	previous := captureDocumentFileSnapshot(absPath)
 	var oldHash string
-	if existingContent, err := os.ReadFile(absPath); err == nil {
-		oldHash = gitvcs.CalculateHash(string(existingContent))
-		a.logInfo(fmt.Sprintf("SaveFile: existing file hash: %s (length: %d)", oldHash[:8], len(existingContent)))
+	if previous.existed {
+		oldHash = gitvcs.CalculateHash(string(previous.content))
+		a.logInfo(fmt.Sprintf("SaveFile: existing file hash: %s (length: %d)", oldHash[:8], len(previous.content)))
 	} else {
 		a.logInfo(fmt.Sprintf("SaveFile: file does not exist yet or cannot be read"))
 	}
@@ -1989,8 +2043,7 @@ func (a *App) SaveFile(path, content string) error {
 	contentWithDocID, docID, err := a.ensureDocID(content)
 	if err != nil {
 		a.logError(fmt.Sprintf("Failed to ensure doc_id for %s: %v", path, err))
-		// Continue with original content if doc_id generation fails
-		contentWithDocID = content
+		return fmt.Errorf("failed to ensure doc_id for %s: %w", path, err)
 	} else {
 		if docID != "" {
 			a.logInfo(fmt.Sprintf("File %s has doc_id: %s", path, docID))
@@ -2012,63 +2065,67 @@ func (a *App) SaveFile(path, content string) error {
 		a.logInfo(fmt.Sprintf("SaveFile: no frontmatter for %s, using content as-is (length: %d)", path, len(content)))
 	}
 
-	// Detect conflict before saving
-	// IMPORTANT: Use the content from frontend (with user edits) as LocalContent
-	// We need to temporarily write it to disk so DetectConflict can read it
+	// Detect conflicts without changing the working-tree file. HEAD is the
+	// merge base, content is the editor's local version, and the current file is
+	// the potentially external version.
 	if a.vcs != nil {
 		relPath, err := filepath.Rel(a.dataDir, absPath)
-		if err == nil {
-			// Temporarily write the frontend content to disk for conflict detection
-			// This ensures DetectConflict uses the user's edited content, not the old file content
-			tempContent := content
-			if err := os.WriteFile(absPath, []byte(tempContent), 0644); err != nil {
-				a.logError(fmt.Sprintf("Failed to write temp content for conflict detection: %v", err))
-			} else {
-				// Now detect conflict - it will use the content we just wrote
-				conflict, err := gitvcs.DetectConflict(a.vcs, a.dataDir, relPath)
-				if err != nil {
-					a.logError(fmt.Sprintf("Failed to detect conflict: %v", err))
-				} else if conflict != nil {
-					// Create backup before handling conflict
-					if err := a.createBackup(path, content); err != nil {
-						a.logError(fmt.Sprintf("Failed to create backup: %v", err))
-					}
+		if err != nil {
+			return fmt.Errorf("failed to get relative save path: %w", err)
+		}
+		conflict, err := gitvcs.DetectConflictWithContent(a.vcs, a.dataDir, relPath, content)
+		if err != nil {
+			a.logError(fmt.Sprintf("Failed to detect conflict: %v", err))
+			return fmt.Errorf("failed to detect conflict: %w", err)
+		}
+		if conflict != nil {
+			// Create backup before handling conflict
+			if err := a.createBackup(path, content); err != nil {
+				a.logError(fmt.Sprintf("Failed to create backup: %v", err))
+			}
 
-					// Try auto-merge for auto-resolvable or warning conflicts
-					// Use the frontend content as LocalContent (user's current edits)
-					if conflict.Severity == gitvcs.ConflictAutoResolvable || conflict.Severity == gitvcs.ConflictWarning {
-						// Use content (from frontend) as LocalContent instead of conflict.LocalContent
-						merged, severity, err := gitvcs.AutoMergeMarkdown(conflict.BaseContent, content, conflict.RemoteContent)
-						if err == nil && severity != gitvcs.ConflictCritical {
-							// Auto-merge successful - use merged content
-							content = merged
-							runtime.EventsEmit(a.ctx, "auto-merge-success", map[string]interface{}{
-								"path":        path,
-								"merged_hash": gitvcs.CalculateHash(merged),
-							})
-							a.logInfo(fmt.Sprintf("Auto-merged conflict for file: %s (using frontend content as LocalContent)", path))
-						} else {
-							// Auto-merge failed or still has conflicts - notify user
-							runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
-							if conflict.Severity == gitvcs.ConflictCritical {
-								return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
-							}
-						}
-					} else {
-						// Critical conflict - require manual resolution
-						runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
-						return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
+			// Try auto-merge for auto-resolvable or warning conflicts.
+			if conflict.Severity == gitvcs.ConflictAutoResolvable || conflict.Severity == gitvcs.ConflictWarning {
+				merged, severity, mergeErr := gitvcs.AutoMergeMarkdown(conflict.BaseContent, conflict.LocalContent, conflict.RemoteContent)
+				if mergeErr == nil && severity != gitvcs.ConflictCritical {
+					content = merged
+					if a.ctx != nil {
+						runtime.EventsEmit(a.ctx, "auto-merge-success", map[string]interface{}{
+							"path":        path,
+							"merged_hash": gitvcs.CalculateHash(merged),
+						})
 					}
+					a.logInfo(fmt.Sprintf("Auto-merged conflict for file: %s", path))
+				} else {
+					if a.ctx != nil {
+						runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
+					}
+					return fmt.Errorf("conflict detected: automatic merge requires manual resolution")
 				}
+			} else {
+				// Critical conflict - require manual resolution.
+				if a.ctx != nil {
+					runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
+				}
+				return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
 			}
 		}
 	}
 
-	// Save file
+	// Save via a same-directory temporary file and atomic replacement.
 	a.logInfo(fmt.Sprintf("SaveFile: writing file %s (content length: %d)", absPath, len(content)))
-	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
+	if err := atomicWriteSaveFile(absPath, []byte(content), 0o644); err != nil {
 		a.logError(fmt.Sprintf("SaveFile: failed to write file %s: %v", absPath, err))
 		return fmt.Errorf("failed to write file: %v", err)
+	}
+	savedDocumentID := docID
+	if savedFrontMatter, _ := fm.ParseFrontMatter(content); savedFrontMatter != nil && savedFrontMatter.DocID != "" {
+		savedDocumentID = savedFrontMatter.DocID
+	}
+	if savedDocumentID != "" {
+		if _, err := a.updateDocumentMapping(savedDocumentID, path); err != nil {
+			return documentMappingFailure("save file", absPath, previous, err)
+		}
 	}
 	a.logInfo(fmt.Sprintf("SaveFile: successfully wrote file %s", absPath))
 
@@ -2097,13 +2154,14 @@ func (a *App) SaveFile(path, content string) error {
 		}
 	}
 
-	// Build the site after saving
-	if err := a.BuildSite(); err != nil {
-		runtime.LogError(a.ctx, fmt.Sprintf("Failed to build site after save: %v", err))
-	}
+	// Queue an incremental build without blocking the editor save path.
+	a.scheduleSiteBuild(path)
+	a.refreshGraphAfterMutation("file save")
 
 	// Emit file changed event
-	runtime.EventsEmit(a.ctx, "file-changed", path)
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "file-changed", path)
+	}
 
 	return nil
 }
@@ -2172,6 +2230,11 @@ func (a *App) ResolveConflict(path, strategy string) error {
 	if !ok {
 		return fmt.Errorf("invalid path: %s", path)
 	}
+	releaseTranscriptMutation, err := a.reserveTranscriptPathMutation(path)
+	if err != nil {
+		return err
+	}
+	defer releaseTranscriptMutation()
 
 	if a.vcs == nil {
 		return fmt.Errorf("git repository not initialized")
@@ -2209,10 +2272,19 @@ func (a *App) ResolveConflict(path, strategy string) error {
 	default:
 		return fmt.Errorf("unknown strategy: %s", strategy)
 	}
+	resolvedContent, resolvedDocumentID, err := a.ensureDocID(resolvedContent)
+	if err != nil {
+		return fmt.Errorf("ensure resolved document ID: %w", err)
+	}
 
-	// Save resolved content
-	if err := os.WriteFile(absPath, []byte(resolvedContent), 0644); err != nil {
+	// Save resolved content and keep the document-map mutation in the same
+	// failure domain as the file replacement.
+	previous := captureDocumentFileSnapshot(absPath)
+	if err := atomicWriteDerivedFile(absPath, []byte(resolvedContent), 0o644); err != nil {
 		return fmt.Errorf("failed to write resolved file: %v", err)
+	}
+	if _, err := a.updateDocumentMapping(resolvedDocumentID, path); err != nil {
+		return documentMappingFailure("resolve conflict", absPath, previous, err)
 	}
 
 	// Commit the resolution
@@ -2221,6 +2293,8 @@ func (a *App) ResolveConflict(path, strategy string) error {
 		a.logError(fmt.Sprintf("Failed to commit conflict resolution: %v", err))
 	}
 
+	a.scheduleSiteBuild(path)
+	a.refreshGraphAfterMutation("conflict resolution")
 	a.logInfo(fmt.Sprintf("Resolved conflict for %s using strategy: %s", path, strategy))
 	return nil
 }
@@ -2322,19 +2396,14 @@ func (a *App) PreviewMarkdownForPath(currentPath, content string) (string, error
 				a.logError(fmt.Sprintf("PreviewMarkdown [Marp]: failed to get graph data: %v", err))
 			} else {
 				a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: got graph data with %d edges", len(graphData.Edges)))
-				// Get the actual file path from doc_id using doc_map.json
-				actualFilePath := ""
-				docMapPath := filepath.Join(a.dataDir, ".mdsys", "doc_map.json")
-				if docMapData, err := os.ReadFile(docMapPath); err == nil {
-					var docMap map[string]string
-					if err := json.Unmarshal(docMapData, &docMap); err == nil {
-						if path, exists := docMap[sourceDocID]; exists {
-							actualFilePath = path
-							a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: found file path for doc_id %s: %s", sourceDocID, actualFilePath))
-						} else {
-							a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: no file path found for doc_id %s in doc_map", sourceDocID))
-						}
-					}
+				// Resolve doc_id paths from the graph's immutable in-memory snapshot.
+				// Preview must never read doc_map.json or trigger graph rebuilding.
+				docMap := a.graphDocMapSnapshot()
+				actualFilePath := docMap[sourceDocID]
+				if actualFilePath != "" {
+					a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: found file path for doc_id %s: %s", sourceDocID, actualFilePath))
+				} else {
+					a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: no file path found for doc_id %s in graph snapshot", sourceDocID))
 				}
 
 				// Extract links from markdown body to build a mapping
@@ -2369,19 +2438,12 @@ func (a *App) PreviewMarkdownForPath(currentPath, content string) (string, error
 						// This link references a pinned version that has been updated
 						// Find the corresponding HTML link and add warning
 
-						// Get the current target path from doc_map.json using TargetDocID (handles renames)
+						// Get the current target path from the in-memory doc map using TargetDocID.
 						targetPath := strings.TrimPrefix(edge.Target, "doc:/")
 						if edge.TargetDocID != "" {
-							// Try to get the current path from doc_map.json
-							if docMapData, err := os.ReadFile(docMapPath); err == nil {
-								var targetDocMap map[string]string
-								if err := json.Unmarshal(docMapData, &targetDocMap); err == nil {
-									if currentPath, exists := targetDocMap[edge.TargetDocID]; exists {
-										// Use the current path from doc_map (handles renames)
-										targetPath = strings.TrimPrefix(currentPath, "content/")
-										a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: resolved target path from doc_map: %s -> %s (doc_id: %s)", edge.Target, targetPath, edge.TargetDocID))
-									}
-								}
+							if currentPath, exists := docMap[edge.TargetDocID]; exists {
+								targetPath = strings.TrimPrefix(currentPath, "content/")
+								a.logInfo(fmt.Sprintf("PreviewMarkdown [Marp]: resolved target path from graph snapshot: %s -> %s (doc_id: %s)", edge.Target, targetPath, edge.TargetDocID))
 							}
 						}
 
@@ -2517,19 +2579,13 @@ func (a *App) PreviewMarkdownForPath(currentPath, content string) (string, error
 			a.logError(fmt.Sprintf("PreviewMarkdown: failed to get graph data: %v", err))
 		} else {
 			a.logInfo(fmt.Sprintf("PreviewMarkdown: got graph data with %d edges", len(graphData.Edges)))
-			// Get the actual file path from doc_id using doc_map.json
-			actualFilePath := ""
-			docMapPath := filepath.Join(a.dataDir, ".mdsys", "doc_map.json")
-			if docMapData, err := os.ReadFile(docMapPath); err == nil {
-				var docMap map[string]string
-				if err := json.Unmarshal(docMapData, &docMap); err == nil {
-					if path, exists := docMap[sourceDocID]; exists {
-						actualFilePath = path
-						a.logInfo(fmt.Sprintf("PreviewMarkdown: found file path for doc_id %s: %s", sourceDocID, actualFilePath))
-					} else {
-						a.logInfo(fmt.Sprintf("PreviewMarkdown: no file path found for doc_id %s in doc_map", sourceDocID))
-					}
-				}
+			// Resolve doc_id paths from the graph's immutable in-memory snapshot.
+			docMap := a.graphDocMapSnapshot()
+			actualFilePath := docMap[sourceDocID]
+			if actualFilePath != "" {
+				a.logInfo(fmt.Sprintf("PreviewMarkdown: found file path for doc_id %s: %s", sourceDocID, actualFilePath))
+			} else {
+				a.logInfo(fmt.Sprintf("PreviewMarkdown: no file path found for doc_id %s in graph snapshot", sourceDocID))
 			}
 
 			// Extract links from markdown body to build a mapping
@@ -2564,19 +2620,12 @@ func (a *App) PreviewMarkdownForPath(currentPath, content string) (string, error
 					// This link references a pinned version that has been updated
 					// Find the corresponding HTML link and add warning
 
-					// Get the current target path from doc_map.json using TargetDocID (handles renames)
+					// Get the current target path from the in-memory doc map using TargetDocID.
 					targetPath := strings.TrimPrefix(edge.Target, "doc:/")
 					if edge.TargetDocID != "" {
-						// Try to get the current path from doc_map.json
-						if docMapData, err := os.ReadFile(docMapPath); err == nil {
-							var targetDocMap map[string]string
-							if err := json.Unmarshal(docMapData, &targetDocMap); err == nil {
-								if currentPath, exists := targetDocMap[edge.TargetDocID]; exists {
-									// Use the current path from doc_map (handles renames)
-									targetPath = strings.TrimPrefix(currentPath, "content/")
-									a.logInfo(fmt.Sprintf("PreviewMarkdown: resolved target path from doc_map: %s -> %s (doc_id: %s)", edge.Target, targetPath, edge.TargetDocID))
-								}
-							}
+						if currentPath, exists := docMap[edge.TargetDocID]; exists {
+							targetPath = strings.TrimPrefix(currentPath, "content/")
+							a.logInfo(fmt.Sprintf("PreviewMarkdown: resolved target path from graph snapshot: %s -> %s (doc_id: %s)", edge.Target, targetPath, edge.TargetDocID))
 						}
 					}
 
@@ -2798,7 +2847,7 @@ func (a *App) resolvePreviewImageURL(imagePath, currentPath string) (string, boo
 
 // BuildSite builds the static site
 func (a *App) BuildSite() error {
-	return a.build(a.root)
+	return a.build(a.siteBuildRoot())
 }
 
 // InitProject initializes a new Karte project
@@ -2857,66 +2906,8 @@ func resourceCardTitle(path string) string {
 
 // build implements the Build function from runner package
 func (a *App) build(root string) error {
-	// ensure root is absolute
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return err
-	}
-	root = absRoot
-
-	pub := filepath.Join(root, "public")
-	tmp := filepath.Join(root, ".mdsys", "_public_tmp")
-	_ = os.RemoveAll(tmp)
-	if err := os.MkdirAll(tmp, 0o755); err != nil {
-		return err
-	}
-
-	type IndexEntry struct {
-		ID   string `json:"id"`
-		Path string `json:"path"`
-	}
-	type Index struct {
-		Items []IndexEntry `json:"items"`
-	}
-	idx := Index{}
-
-	contentDir := filepath.Join(root, "content")
-	fs.WalkDir(os.DirFS(contentDir), ".", func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if filepath.Ext(p) != ".md" {
-			return nil
-		}
-		src := filepath.Join(contentDir, p)
-		dst := filepath.Join(tmp, p[:len(p)-3]+".html")
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
-		}
-		html, _, err := karterenderer.RenderMarkdown(root, src)
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(dst, []byte(html), 0o644); err != nil {
-			return err
-		}
-		id := filepath.ToSlash(p)
-		idx.Items = append(idx.Items, IndexEntry{ID: id, Path: id})
-		return nil
-	})
-	b, _ := json.MarshalIndent(idx, "", "  ")
-	_ = os.WriteFile(filepath.Join(root, ".mdsys", "index.json"), b, 0o644)
-	// ここで原子的入れ替え（旧publicを消してからrename）
-	_ = os.RemoveAll(pub)
-	if err := os.Rename(tmp, pub); err != nil {
-		// 失敗時は tmp を消しておく（次回ビルドに影響しないように）
-		_ = os.RemoveAll(tmp)
-		return err
-	}
-	return nil
+	_, err := a.getSiteBuilder().BuildFull(context.Background(), root)
+	return err
 }
 
 // initProject implements the InitProject function from runner package
@@ -3033,602 +3024,199 @@ func (a *App) extractTagsFromMetadata(metadataMap map[string]interface{}) []stri
 	return fm.NormalizeTags(tagsStr)
 }
 
-// ImportAudioFile copies an audio file into karte_data/data/audio and triggers transcription.
-func (a *App) ImportAudioFile(src string) (string, error) {
-	if src == "" {
-		return "", fmt.Errorf("source path is required")
-	}
-	info, err := os.Stat(src)
-	if err != nil {
-		return "", fmt.Errorf("stat audio: %w", err)
-	}
-	if info.IsDir() {
-		return "", fmt.Errorf("audio path must be a file")
-	}
-	f, err := os.Open(src)
-	if err != nil {
-		return "", fmt.Errorf("open audio: %w", err)
-	}
-	defer f.Close()
-	return a.importAudioFromReader(info.Name(), f)
-}
-
-// ImportImageFile copies an image file into karte_data/data/image.
-func (a *App) ImportImageFile(src string) (string, error) {
-	if src == "" {
-		return "", fmt.Errorf("source path is required")
-	}
-	info, err := os.Stat(src)
-	if err != nil {
-		return "", fmt.Errorf("stat image: %w", err)
-	}
-	if info.IsDir() {
-		return "", fmt.Errorf("image path must be a file")
-	}
-	f, err := os.Open(src)
-	if err != nil {
-		return "", fmt.Errorf("open image: %w", err)
-	}
-	defer f.Close()
-	return a.importImageFromReader(info.Name(), f)
-}
-
-// ImportImageBase64 saves image content provided as base64 (used when native paths are not available).
-func (a *App) ImportImageBase64(filename, base64Data string) (string, error) {
-	if filename == "" {
-		return "", fmt.Errorf("filename is required")
-	}
-	if base64Data == "" {
-		return "", fmt.Errorf("image data is empty")
-	}
-	data, err := base64.StdEncoding.DecodeString(base64Data)
-	if err != nil {
-		return "", fmt.Errorf("decode image data: %w", err)
-	}
-	return a.importImageFromReader(filename, bytes.NewReader(data))
-}
-
-func (a *App) importImageFromReader(originalName string, src io.Reader) (string, error) {
-	if originalName == "" {
-		return "", fmt.Errorf("original name is required")
-	}
-	if !isSupportedImageExt(originalName) {
-		return "", fmt.Errorf("unsupported image format: %s", filepath.Ext(originalName))
-	}
-
-	destDir := filepath.Join(a.dataDir, "data", "image")
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
-		return "", fmt.Errorf("prepare image dir: %w", err)
-	}
-
-	ext := strings.ToLower(filepath.Ext(originalName))
-	base := sanitizeImageBaseName(strings.TrimSuffix(originalName, ext))
-	timestamp := time.Now().Format("20060102-150405")
-	prefix := fmt.Sprintf("%s_%s", timestamp, base)
-
-	data, err := io.ReadAll(src)
-	if err != nil {
-		return "", fmt.Errorf("read image data: %w", err)
-	}
-
-	baseIndex := 1
-	originalSuffix := ""
-	if ext == ".webp" {
-		originalSuffix = "_source"
-	}
-
-	var originalFilename, webpFilename string
-	for {
-		baseName := prefix
-		if baseIndex > 1 {
-			baseName = fmt.Sprintf("%s_%02d", prefix, baseIndex)
-		}
-		originalFilename = baseName + originalSuffix + ext
-		webpFilename = baseName + ".webp"
-		if !fileExists(filepath.Join(destDir, originalFilename)) && !fileExists(filepath.Join(destDir, webpFilename)) {
-			break
-		}
-		baseIndex++
-	}
-
-	originalDestPath := filepath.Join(destDir, originalFilename)
-	if err := os.WriteFile(originalDestPath, data, 0o644); err != nil {
-		return "", fmt.Errorf("write original image file: %w", err)
-	}
-
-	img, format, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return "", fmt.Errorf("decode image for webp conversion: %w", err)
-	}
-
-	webpDestPath := filepath.Join(destDir, webpFilename)
-	webpFile, err := os.OpenFile(webpDestPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		return "", fmt.Errorf("create webp image file: %w", err)
-	}
-
-	lossless := format == "png" || format == "gif"
-	if err := webputil.EncodeWebP(webpFile, img, lossless); err != nil {
-		webpFile.Close()
-		return "", fmt.Errorf("encode webp image: %w", err)
-	}
-	if err := webpFile.Close(); err != nil {
-		return "", fmt.Errorf("close webp file: %w", err)
-	}
-
-	relOriginalPath, err := filepath.Rel(a.dataDir, originalDestPath)
-	if err != nil {
-		relOriginalPath = originalDestPath
-	}
-	relOriginalPath = filepath.ToSlash(relOriginalPath)
-
-	relWebPPath, err := filepath.Rel(a.dataDir, webpDestPath)
-	if err != nil {
-		relWebPPath = webpDestPath
-	}
-	relWebPPath = filepath.ToSlash(relWebPPath)
-
-	payload := map[string]interface{}{
-		"path":          relWebPPath,
-		"original_name": originalName,
-		"saved_name":    webpFilename,
-		"webp_path":     relWebPPath,
-		"original_path": relOriginalPath,
-	}
-	runtime.EventsEmit(a.ctx, "image-imported", payload)
-	a.logInfo(fmt.Sprintf("Image imported: %s -> webp=%s (original=%s)", originalName, relWebPPath, relOriginalPath))
-
-	return relWebPPath, nil
-}
-
-// ImportCsvFile copies a CSV file into karte_data/data/csv
-func (a *App) ImportCsvFile(src string) (string, error) {
-	if src == "" {
-		return "", fmt.Errorf("source path is required")
-	}
-	info, err := os.Stat(src)
-	if err != nil {
-		return "", fmt.Errorf("stat csv: %w", err)
-	}
-	if info.IsDir() {
-		return "", fmt.Errorf("csv path must be a file")
-	}
-	ext := strings.ToLower(filepath.Ext(src))
-	if ext != ".csv" {
-		return "", fmt.Errorf("file is not a CSV: %s", ext)
-	}
-
-	f, err := os.Open(src)
-	if err != nil {
-		return "", fmt.Errorf("open csv: %w", err)
-	}
-	defer f.Close()
-
-	return a.importCsvFromReader(info.Name(), f)
-}
-
-// ImportCsvBase64 saves CSV content provided as base64 (used when native paths are not available).
-func (a *App) ImportCsvBase64(filename, base64Data string) (string, error) {
-	if filename == "" {
-		return "", fmt.Errorf("filename is required")
-	}
-	if base64Data == "" {
-		return "", fmt.Errorf("csv data is empty")
-	}
-	data, err := base64.StdEncoding.DecodeString(base64Data)
-	if err != nil {
-		return "", fmt.Errorf("decode csv data: %w", err)
-	}
-	return a.importCsvFromReader(filename, bytes.NewReader(data))
-}
-
-func (a *App) importCsvFromReader(originalName string, src io.Reader) (string, error) {
-	if originalName == "" {
-		return "", fmt.Errorf("original name is required")
-	}
-
-	destDir := filepath.Join(a.dataDir, "data", "csv")
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
-		return "", fmt.Errorf("prepare csv dir: %w", err)
-	}
-
-	ext := strings.ToLower(filepath.Ext(originalName))
-	base := audio.SanitizeFileName(strings.TrimSuffix(originalName, ext))
-	if base == "" {
-		base = "data"
-	}
-	filename := base + ".csv"
-
-	// Check if file already exists, add number suffix if needed
-	baseIndex := 1
-	for {
-		destPath := filepath.Join(destDir, filename)
-		if _, err := os.Stat(destPath); os.IsNotExist(err) {
-			break
-		}
-		filename = fmt.Sprintf("%s_%02d.csv", base, baseIndex)
-		baseIndex++
-	}
-
-	destPath := filepath.Join(destDir, filename)
-	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return "", fmt.Errorf("create csv file: %w", err)
-	}
-	if _, err := io.Copy(out, src); err != nil {
-		out.Close()
-		return "", fmt.Errorf("write csv file: %w", err)
-	}
-	if err := out.Close(); err != nil {
-		return "", fmt.Errorf("close csv file: %w", err)
-	}
-
-	relPath, err := filepath.Rel(a.dataDir, destPath)
-	if err != nil {
-		relPath = destPath
-	}
-	relPath = filepath.ToSlash(relPath)
-
-	payload := map[string]interface{}{
-		"path": relPath,
-		"name": filename,
-	}
-	runtime.EventsEmit(a.ctx, "csv-imported", payload)
-	a.logInfo(fmt.Sprintf("CSV imported: %s -> %s", originalName, relPath))
-
-	return relPath, nil
-}
-
-// GetCsvFile reads a CSV file and returns its content as a 2D array
-func (a *App) GetCsvFile(path string) ([][]string, error) {
-	absPath := filepath.Join(a.dataDir, filepath.FromSlash(path))
-	f, err := os.Open(absPath)
-	if err != nil {
-		return nil, fmt.Errorf("open csv: %w", err)
-	}
-	defer f.Close()
-
-	r := csv.NewReader(f)
-	records, err := r.ReadAll()
-	if err != nil {
-		return nil, fmt.Errorf("read csv: %w", err)
-	}
-
-	return records, nil
-}
-
-// SaveCsvFile saves CSV content to a file
-func (a *App) SaveCsvFile(path string, data [][]string) error {
-	absPath := filepath.Join(a.dataDir, filepath.FromSlash(path))
-
-	f, err := os.OpenFile(absPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return fmt.Errorf("create csv file: %w", err)
-	}
-	defer f.Close()
-
-	w := csv.NewWriter(f)
-	if err := w.WriteAll(data); err != nil {
-		return fmt.Errorf("write csv: %w", err)
-	}
-	w.Flush()
-
-	if err := w.Error(); err != nil {
-		return fmt.Errorf("flush csv: %w", err)
-	}
-
-	return nil
-}
-
-// SaveEventLogs saves event logs from the frontend to a JSON file
+// SaveEventLogs validates and appends a frontend event log snapshot．
 func (a *App) SaveEventLogs(logsJson string) (bool, error) {
-	if logsJson == "" {
-		return false, fmt.Errorf("logs data is empty")
+	if a == nil {
+		return false, fmt.Errorf("app is nil")
 	}
-
-	// Create .mdsys directory if it doesn't exist
-	mdsysDir := filepath.Join(a.dataDir, ".mdsys")
-	if err := os.MkdirAll(mdsysDir, 0755); err != nil {
-		return false, fmt.Errorf("failed to create .mdsys directory: %w", err)
+	if err := defaultEventLogStore.append(a.dataDir, logsJson); err != nil {
+		return false, err
 	}
-
-	// Generate filename with timestamp
-	timestamp := time.Now().Format("20060102_150405")
-	logFilePath := filepath.Join(mdsysDir, fmt.Sprintf("event-logs_%s.json", timestamp))
-
-	// Write logs to file
-	if err := os.WriteFile(logFilePath, []byte(logsJson), 0644); err != nil {
-		return false, fmt.Errorf("failed to write event logs file: %w", err)
-	}
-
-	a.logInfo(fmt.Sprintf("Saved event logs to: %s", logFilePath))
 	return true, nil
 }
 
-// ImportAudioBase64 saves audio content provided as base64 (used when native paths are not available).
-func (a *App) ImportAudioBase64(filename, base64Data string) (string, error) {
-	if filename == "" {
-		return "", fmt.Errorf("filename is required")
-	}
-	if base64Data == "" {
-		return "", fmt.Errorf("audio data is empty")
-	}
-	data, err := base64.StdEncoding.DecodeString(base64Data)
-	if err != nil {
-		return "", fmt.Errorf("decode audio data: %w", err)
-	}
-	return a.importAudioFromReader(filename, bytes.NewReader(data))
-}
-
-func (a *App) importAudioFromReader(originalName string, src io.Reader) (string, error) {
-	if originalName == "" {
-		return "", fmt.Errorf("original name is required")
-	}
-	if !audio.IsSupportedImportExt(originalName) {
-		return "", fmt.Errorf("unsupported audio format: %s", filepath.Ext(originalName))
-	}
-
-	destDir := filepath.Join(a.dataDir, "data", "audio")
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return "", fmt.Errorf("prepare audio dir: %w", err)
-	}
-
-	base := audio.SanitizeFileName(strings.TrimSuffix(originalName, filepath.Ext(originalName)))
-	if base == "" {
-		base = "audio"
-	}
-	ext := strings.ToLower(filepath.Ext(originalName))
-	timestamp := time.Now().Format("20060102-150405")
-	prefix := fmt.Sprintf("%s_%s", timestamp, base)
-	filename := prefix + ext
-	for i := 2; ; i++ {
-		_, err := os.Stat(filepath.Join(destDir, filename))
-		if os.IsNotExist(err) {
-			break
-		}
-		filename = fmt.Sprintf("%s_%02d%s", prefix, i, ext)
-	}
-
-	destPath := filepath.Join(destDir, filename)
-	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return "", fmt.Errorf("create audio file: %w", err)
-	}
-	if _, err := io.Copy(out, src); err != nil {
-		out.Close()
-		return "", fmt.Errorf("write audio file: %w", err)
-	}
-	if err := out.Close(); err != nil {
-		return "", fmt.Errorf("close audio file: %w", err)
-	}
-
-	relPath, err := filepath.Rel(a.dataDir, destPath)
-	if err != nil {
-		relPath = destPath
-	}
-	relPath = filepath.ToSlash(relPath)
-
-	payload := map[string]interface{}{
-		"path":          relPath,
-		"original_name": originalName,
-		"saved_name":    filename,
-	}
-	runtime.EventsEmit(a.ctx, "audio-imported", payload)
-	a.logInfo(fmt.Sprintf("Audio imported: %s -> %s", originalName, relPath))
-
-	a.startTranscriptionJob(destPath, relPath)
-	return relPath, nil
-}
-
-// ImportPdfFile copies a PDF file into karte_data/content.
-func (a *App) ImportPdfFile(src string) (string, error) {
-	if src == "" {
-		return "", fmt.Errorf("source path is required")
-	}
-	info, err := os.Stat(src)
-	if err != nil {
-		return "", fmt.Errorf("stat pdf: %w", err)
-	}
-	if info.IsDir() {
-		return "", fmt.Errorf("pdf path must be a file")
-	}
-	ext := strings.ToLower(filepath.Ext(src))
-	if ext != ".pdf" {
-		return "", fmt.Errorf("file is not a PDF: %s", ext)
-	}
-	f, err := os.Open(src)
-	if err != nil {
-		return "", fmt.Errorf("open pdf: %w", err)
-	}
-	defer f.Close()
-	return a.importPdfFromReader(info.Name(), f)
-}
-
-// ImportPdfBase64 saves PDF content provided as base64 (used when native paths are not available).
-func (a *App) ImportPdfBase64(filename, base64Data string) (string, error) {
-	if filename == "" {
-		return "", fmt.Errorf("filename is required")
-	}
-	if base64Data == "" {
-		return "", fmt.Errorf("pdf data is empty")
-	}
-	data, err := base64.StdEncoding.DecodeString(base64Data)
-	if err != nil {
-		return "", fmt.Errorf("decode pdf data: %w", err)
-	}
-	return a.importPdfFromReader(filename, bytes.NewReader(data))
-}
-
-func (a *App) importPdfFromReader(originalName string, src io.Reader) (string, error) {
-	if originalName == "" {
-		return "", fmt.Errorf("original name is required")
-	}
-	ext := strings.ToLower(filepath.Ext(originalName))
-	if ext != ".pdf" {
-		return "", fmt.Errorf("unsupported file format: %s", ext)
-	}
-
-	// Save PDF to content directory
-	contentDir := filepath.Join(a.dataDir, "content")
-	if err := os.MkdirAll(contentDir, 0o755); err != nil {
-		return "", fmt.Errorf("prepare content dir: %w", err)
-	}
-
-	base := strings.TrimSuffix(originalName, ext)
-	base = audio.SanitizeFileName(base)
-	if base == "" {
-		base = "document"
-	}
-	filename := base + ext
-
-	// Check if file already exists, add number suffix if needed
-	baseIndex := 1
-	for {
-		destPath := filepath.Join(contentDir, filename)
-		if _, err := os.Stat(destPath); os.IsNotExist(err) {
-			break
-		}
-		filename = fmt.Sprintf("%s_%02d%s", base, baseIndex, ext)
-		baseIndex++
-	}
-
-	destPath := filepath.Join(contentDir, filename)
-	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return "", fmt.Errorf("create pdf file: %w", err)
-	}
-	if _, err := io.Copy(out, src); err != nil {
-		out.Close()
-		return "", fmt.Errorf("write pdf file: %w", err)
-	}
-	if err := out.Close(); err != nil {
-		return "", fmt.Errorf("close pdf file: %w", err)
-	}
-
-	relPath, err := filepath.Rel(a.dataDir, destPath)
-	if err != nil {
-		relPath = destPath
-	}
-	relPath = filepath.ToSlash(relPath)
-
-	payload := map[string]interface{}{
-		"path":          relPath,
-		"original_name": originalName,
-		"saved_name":    filename,
-	}
-	runtime.EventsEmit(a.ctx, "pdf-imported", payload)
-	a.logInfo(fmt.Sprintf("PDF imported: %s -> %s", originalName, relPath))
-
-	return relPath, nil
-}
-
 func (a *App) startTranscriptionJob(absAudioPath, relAudioPath string) {
-	if ready := a.waitForASRReady(); !ready {
-		a.logInfo("ASR service not configured; skipping transcription")
+	manager := a.getJobManager()
+	if manager == nil {
+		a.logInfo(fmt.Sprintf("ASR transcription was not queued during shutdown: %s", relAudioPath))
 		return
 	}
-	if a.asrService == nil {
-		a.logInfo("Offline ASR service not configured; skipping file transcription for streaming model")
-		return
-	}
+	submission := manager.Submit(managedJob{
+		Category: appJobCategoryASRHeavy,
+		Group:    appJobGroupAudioImport,
+		Key:      filepath.ToSlash(relAudioPath),
+		Priority: jobPriorityHigh,
+		Coalesce: jobKeepExisting,
+		Run: func(jobContext context.Context) error {
+			ctx, cancel := context.WithTimeout(jobContext, 15*time.Minute)
+			defer cancel()
+			lease, err := a.acquireASRResource(ctx)
+			if errors.Is(err, errASRResourceDisabled) {
+				a.logInfo("ASR service not configured; skipping transcription")
+				return nil
+			}
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				a.logError(fmt.Sprintf("ASR failed to initialize for %s: %v", relAudioPath, err))
+				a.emitEvent("audio-transcribed", map[string]interface{}{
+					"audioPath": relAudioPath,
+					"error":     err.Error(),
+				})
+				return err
+			}
+			defer lease.Release()
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-		defer cancel()
+			transcriptPath, err := a.startStreamingTranscription(ctx, lease.Service(), absAudioPath, relAudioPath)
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				a.logError(fmt.Sprintf("ASR failed for %s: %v", relAudioPath, err))
+				a.emitEvent("audio-transcribed", map[string]interface{}{
+					"audioPath": relAudioPath,
+					"error":     err.Error(),
+				})
+				return err
+			}
 
-		transcriptPath, err := a.startStreamingTranscription(ctx, absAudioPath, relAudioPath)
-		if err != nil {
-			a.logError(fmt.Sprintf("ASR failed for %s: %v", relAudioPath, err))
-			runtime.EventsEmit(a.ctx, "audio-transcribed", map[string]interface{}{
-				"audioPath": relAudioPath,
-				"error":     err.Error(),
+			a.emitEvent("audio-transcribed", map[string]interface{}{
+				"audioPath":      relAudioPath,
+				"transcriptPath": transcriptPath,
 			})
+			return nil
+		},
+	})
+	switch submission.Status {
+	case jobAccepted, jobDeduplicated:
+		return
+	case jobRejectedFull:
+		err := "ASR transcription queue is full; retry the audio import after current transcription finishes"
+		a.logError(fmt.Sprintf("%s: %s", err, relAudioPath))
+		a.emitEvent("audio-transcribed", map[string]interface{}{
+			"audioPath": relAudioPath,
+			"error":     err,
+		})
+	case jobRejectedClosed, jobRejectedCanceled:
+		a.logInfo(fmt.Sprintf("ASR transcription was canceled during shutdown: %s", relAudioPath))
+	default:
+		a.logError(fmt.Sprintf("ASR transcription was rejected for %s: %v", relAudioPath, submission.Err))
+	}
+}
+
+func (a *App) startStreamingTranscription(ctx context.Context, svc appASRService, absAudioPath, relAudioPath string) (transcriptPath string, resultErr error) {
+	transcriptionCtx, cancelTranscription := context.WithCancel(ctx)
+	defer cancelTranscription()
+	var transcriptFailureMu sync.Mutex
+	var transcriptFailure error
+	recordTranscriptFailure := func(err error) {
+		if err == nil {
 			return
 		}
-
-		runtime.EventsEmit(a.ctx, "audio-transcribed", map[string]interface{}{
-			"audioPath":      relAudioPath,
-			"transcriptPath": transcriptPath,
-		})
-	}()
-}
-
-func (a *App) startStreamingTranscription(ctx context.Context, absAudioPath, relAudioPath string) (string, error) {
-	transcriptPath, err := a.writeTranscriptDocument(relAudioPath, "")
+		transcriptFailureMu.Lock()
+		firstFailure := transcriptFailure == nil
+		if firstFailure {
+			transcriptFailure = err
+		}
+		transcriptFailureMu.Unlock()
+		if firstFailure {
+			cancelTranscription()
+		}
+	}
+	currentTranscriptFailure := func() error {
+		transcriptFailureMu.Lock()
+		defer transcriptFailureMu.Unlock()
+		return transcriptFailure
+	}
+	transcriptPath, buffer, err := a.writeTranscriptDocument(relAudioPath, "", nil, recordTranscriptFailure)
 	if err != nil {
 		return "", err
 	}
+	defer func() {
+		resultErr = errors.Join(resultErr, currentTranscriptFailure(), a.completeTranscriptBuffer(buffer))
+	}()
 
 	progressHandler := func(line string, segmentIndex, totalSegments int, timestamp float64) {
+		if transcriptionCtx.Err() != nil {
+			return
+		}
 		// Format timestamp as [HH:MM:SS] or [MM:SS]
 		timestampStr := formatTimestamp(timestamp)
 		timestampedLine := fmt.Sprintf("%s %s", timestampStr, line)
 
-		a.appendTranscriptLine(transcriptPath, timestampedLine)
-		runtime.EventsEmit(a.ctx, "audio-transcribe-progress", map[string]interface{}{
-			"audioPath":      relAudioPath,
-			"transcriptPath": transcriptPath,
-			"text":           line,
-			"segmentIndex":   segmentIndex,
-			"totalSegments":  totalSegments,
-			"timestamp":      timestamp,
-		})
+		if err := buffer.AppendFinalAndEmit(timestampedLine, func() {
+			a.emitEvent("audio-transcribe-progress", map[string]interface{}{
+				"audioPath":      relAudioPath,
+				"transcriptPath": transcriptPath,
+				"text":           line,
+				"segmentIndex":   segmentIndex,
+				"totalSegments":  totalSegments,
+				"timestamp":      timestamp,
+			})
+		}); err != nil {
+			recordTranscriptFailure(err)
+		}
 	}
 
-	text, err := a.asrService.TranscribeFile(ctx, absAudioPath, progressHandler)
+	if svc == nil {
+		return transcriptPath, fmt.Errorf("ASR service is not initialized")
+	}
+	text, err := svc.TranscribeFile(transcriptionCtx, absAudioPath, progressHandler)
 	if err != nil {
-		return "", err
+		return transcriptPath, err
+	}
+	if failure := currentTranscriptFailure(); failure != nil {
+		return transcriptPath, failure
+	}
+	if ctx.Err() != nil {
+		return transcriptPath, ctx.Err()
 	}
 
 	if strings.TrimSpace(text) == "" {
-		a.appendTranscriptLine(transcriptPath, "_（ASRから有効な結果が得られませんでした）_")
+		if err := buffer.AppendFinal("_（ASRから有効な結果が得られませんでした）_"); err != nil {
+			return transcriptPath, err
+		}
 	}
 	return transcriptPath, nil
 }
 
-func (a *App) writeTranscriptDocument(audioRelPath, transcript string) (string, error) {
+func (a *App) writeTranscriptDocument(
+	audioRelPath string,
+	transcript string,
+	partialEmit func(transcriptPartialPayload),
+	onError func(error),
+) (string, *transcriptBuffer, error) {
 	baseName := audio.SanitizeFileName(strings.TrimSuffix(filepath.Base(audioRelPath), filepath.Ext(audioRelPath)))
 	if baseName == "" {
 		baseName = fmt.Sprintf("audio-%s", time.Now().Format("20060102-150405"))
 	}
 
 	dirRel := filepath.ToSlash(filepath.Join("content", "transcripts"))
-	filename := baseName + ".md"
-	contentRel := filepath.ToSlash(filepath.Join(dirRel, filename))
-
-	makeAbs := func(rel string) (string, error) {
-		abs, ok := a.resolveContentPath(rel)
-		if !ok {
-			return "", fmt.Errorf("invalid transcript path: %s", rel)
-		}
-		return abs, nil
-	}
-
-	absPath, err := makeAbs(contentRel)
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
-		return "", fmt.Errorf("prepare transcript dir: %w", err)
-	}
-
-	for i := 2; ; i++ {
-		if _, err := os.Stat(absPath); os.IsNotExist(err) {
-			break
-		}
-		filename = fmt.Sprintf("%s-%d.md", baseName, i)
-		contentRel = filepath.ToSlash(filepath.Join(dirRel, filename))
-		absPath, err = makeAbs(contentRel)
-		if err != nil {
-			return "", err
-		}
-	}
-
 	body := a.composeTranscriptMarkdown(audioRelPath, transcript)
-	if err := a.SaveFile(contentRel, body); err != nil {
-		return "", err
+	for suffix := 1; suffix <= 10_000; suffix++ {
+		filename := baseName + ".md"
+		if suffix > 1 {
+			filename = fmt.Sprintf("%s-%d.md", baseName, suffix)
+		}
+		contentRel := filepath.ToSlash(filepath.Join(dirRel, filename))
+		absPath, ok := a.resolveContentPath(contentRel)
+		if !ok {
+			return "", nil, fmt.Errorf("invalid transcript path: %s", contentRel)
+		}
+		if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+			return "", nil, fmt.Errorf("prepare transcript dir: %w", err)
+		}
+		buffer, err := a.createTranscriptDocumentAndBuffer(contentRel, body, partialEmit, onError)
+		if errors.Is(err, errTranscriptPathExists) {
+			continue
+		}
+		if err != nil {
+			return "", nil, err
+		}
+		return contentRel, buffer, nil
 	}
-	return contentRel, nil
+	return "", nil, fmt.Errorf("transcript identity space exhausted for %s", baseName)
 }
 
 func (a *App) composeTranscriptMarkdown(audioRelPath, transcript string) string {
@@ -3648,231 +3236,6 @@ audio_path: %q
 `, fmt.Sprintf("Transcript %s", filepath.Base(audioRelPath)), now, audioRelPath, strings.TrimSpace(transcript))
 }
 
-// appendTranscriptPartial updates the partial text marker in the transcript file
-func (a *App) appendTranscriptPartial(contentRel, partialText string) {
-	absPath, ok := a.resolveContentPath(contentRel)
-	if !ok {
-		a.logError(fmt.Sprintf("Failed to resolve transcript path: %s", contentRel))
-		return
-	}
-
-	// Read existing content
-	content, err := os.ReadFile(absPath)
-	if err != nil {
-		a.logError(fmt.Sprintf("Failed to read transcript file: %v", err))
-		return
-	}
-
-	contentStr := string(content)
-	partialMarkerStart := "<!-- ASR_PARTIAL -->"
-	partialMarkerEnd := "<!-- /ASR_PARTIAL -->"
-
-	// Find the "## Transcript" section
-	transcriptHeader := "## Transcript"
-	headerIndex := strings.Index(contentStr, transcriptHeader)
-
-	if headerIndex == -1 {
-		// If "## Transcript" not found, create it with partial text
-		contentStr = strings.TrimRight(contentStr, "\n") + "\n\n" + transcriptHeader + "\n\n" + partialMarkerStart + partialText + partialMarkerEnd + "\n"
-	} else {
-		// Find existing partial marker
-		afterHeader := contentStr[headerIndex+len(transcriptHeader):]
-		partialStartIndex := strings.Index(afterHeader, partialMarkerStart)
-		partialEndIndex := strings.Index(afterHeader, partialMarkerEnd)
-
-		if partialStartIndex != -1 && partialEndIndex != -1 && partialEndIndex > partialStartIndex {
-			// Replace existing partial text
-			beforePartial := contentStr[:headerIndex+len(transcriptHeader)+partialStartIndex+len(partialMarkerStart)]
-			afterPartial := contentStr[headerIndex+len(transcriptHeader)+partialEndIndex+len(partialMarkerEnd):]
-			contentStr = beforePartial + partialText + partialMarkerEnd + afterPartial
-		} else {
-			// Add new partial text marker at the end of Transcript section
-			// Find the end of the section (next ## header or end of file)
-			nextHeaderMatch := strings.Index(afterHeader, "\n## ")
-			sectionEnd := len(afterHeader)
-			if nextHeaderMatch != -1 {
-				sectionEnd = nextHeaderMatch
-			}
-			sectionContent := strings.TrimRight(afterHeader[:sectionEnd], "\n")
-			newSectionContent := sectionContent
-			if sectionContent != "" {
-				newSectionContent += "\n"
-			}
-			newSectionContent += partialMarkerStart + partialText + partialMarkerEnd + "\n"
-			contentStr = contentStr[:headerIndex+len(transcriptHeader)] + "\n" + newSectionContent + strings.TrimLeft(afterHeader[sectionEnd:], "\n")
-		}
-	}
-
-	// Write back to file
-	if err := os.WriteFile(absPath, []byte(contentStr), 0644); err != nil {
-		a.logError(fmt.Sprintf("Failed to write transcript: %v", err))
-		return
-	}
-
-	// Sync to ensure data is written immediately
-	f, err := os.OpenFile(absPath, os.O_RDONLY, 0644)
-	if err == nil {
-		f.Sync()
-		f.Close()
-	}
-}
-
-func (a *App) appendTranscriptLine(contentRel, line string) {
-	absPath, ok := a.resolveContentPath(contentRel)
-	if !ok {
-		a.logError(fmt.Sprintf("Failed to resolve transcript path: %s", contentRel))
-		return
-	}
-
-	// Read existing content
-	content, err := os.ReadFile(absPath)
-	if err != nil {
-		a.logError(fmt.Sprintf("Failed to read transcript file: %v", err))
-		return
-	}
-
-	contentStr := string(content)
-	partialMarkerStart := "<!-- ASR_PARTIAL -->"
-	partialMarkerEnd := "<!-- /ASR_PARTIAL -->"
-	lineWithBreak := strings.TrimRight(line, " ") + "  "
-
-	// Find the "## Transcript" section
-	transcriptHeader := "## Transcript"
-	headerIndex := strings.Index(contentStr, transcriptHeader)
-
-	if headerIndex == -1 {
-		// If "## Transcript" not found, append at the end
-		contentStr = strings.TrimRight(contentStr, "\n") + "\n\n" + transcriptHeader + "\n\n" + lineWithBreak + "\n"
-	} else {
-		// Check if there's a partial text marker to replace
-		afterHeader := contentStr[headerIndex+len(transcriptHeader):]
-		partialStartIndex := strings.Index(afterHeader, partialMarkerStart)
-		partialEndIndex := strings.Index(afterHeader, partialMarkerEnd)
-
-		if partialStartIndex != -1 && partialEndIndex != -1 && partialEndIndex > partialStartIndex {
-			// Replace partial marker with final text
-			beforePartial := contentStr[:headerIndex+len(transcriptHeader)+partialStartIndex]
-			afterPartial := contentStr[headerIndex+len(transcriptHeader)+partialEndIndex+len(partialMarkerEnd):]
-			contentStr = strings.TrimRight(beforePartial, "\n") + "\n" + lineWithBreak + "\n" + strings.TrimLeft(afterPartial, "\n")
-		} else {
-			// Always append at the end of the file to maintain chronological order
-			// This ensures new transcript segments are added in the correct time order
-			contentStr = strings.TrimRight(contentStr, "\n") + "\n" + lineWithBreak + "\n"
-		}
-	}
-
-	// Write back to file
-	if err := os.WriteFile(absPath, []byte(contentStr), 0644); err != nil {
-		a.logError(fmt.Sprintf("Failed to write transcript: %v", err))
-		return
-	}
-
-	// Sync to ensure data is written immediately
-	f, err := os.OpenFile(absPath, os.O_RDONLY, 0644)
-	if err == nil {
-		f.Sync()
-		f.Close()
-	}
-}
-
-// updateTranscriptAudioPath updates the audio_path in the transcript file's frontmatter
-func (a *App) updateTranscriptAudioPath(transcriptPath, audioRelPath string) error {
-	absPath, ok := a.resolveContentPath(transcriptPath)
-	if !ok {
-		return fmt.Errorf("invalid transcript path: %s", transcriptPath)
-	}
-
-	// Read existing content
-	content, err := os.ReadFile(absPath)
-	if err != nil {
-		return fmt.Errorf("failed to read transcript file: %w", err)
-	}
-
-	// Parse frontmatter
-	frontMatter, markdownBody := fm.ParseFrontMatter(string(content))
-	if frontMatter == nil {
-		return fmt.Errorf("no frontmatter found in transcript file")
-	}
-
-	// Update audio_path in Raw map (since it's a custom field)
-	if frontMatter.Raw == nil {
-		frontMatter.Raw = make(map[string]any)
-	}
-	frontMatter.Raw["audio_path"] = audioRelPath
-	// Preserve existing created_at if present, otherwise set it
-	if _, exists := frontMatter.Raw["created_at"]; !exists {
-		frontMatter.Raw["created_at"] = time.Now().Format(time.RFC3339)
-	}
-
-	// Format frontmatter and combine with body
-	formattedFM := fm.FormatFrontMatter(frontMatter)
-	updatedContent := formattedFM + markdownBody
-
-	// Write directly to file to avoid SaveFile's ParseFrontMatter which might overwrite our changes
-	// We still need to handle git operations, so we'll use SaveFile but ensure the content is correct
-	// Actually, let's write directly and then commit via git if needed
-	if err := os.WriteFile(absPath, []byte(updatedContent), 0644); err != nil {
-		return fmt.Errorf("failed to write updated transcript: %w", err)
-	}
-
-	// Commit the change via git if VCS is available
-	if a.vcs != nil {
-		relPath, err := filepath.Rel(a.dataDir, absPath)
-		if err == nil {
-			if err := a.vcs.CommitFile(relPath, fmt.Sprintf("Update audio_path to %s", audioRelPath)); err != nil {
-				// Log but don't fail - the file is already updated
-				a.logError(fmt.Sprintf("Failed to commit audio_path update: %v", err))
-			}
-		}
-	}
-
-	return nil
-}
-
-func (a *App) initASRService() error {
-	cfgPath := filepath.Join(a.dataDir, "data", "asr", "config.json")
-	cfg, err := asr.LoadConfigFromFile(cfgPath)
-	if err != nil {
-		return err
-	}
-	if cfg == nil || !cfg.Enabled {
-		a.logInfo("ASR disabled (config missing or enabled=false)")
-		return nil
-	}
-	cfg.EnsureModelPathsAbsolute(a.dataDir)
-	if cfg.IsStreamingModel() {
-		svc, err := asr.NewRealtimeServiceWithLogger(cfg, func(format string, args ...interface{}) {
-			a.logInfo(fmt.Sprintf("[RealtimeASR] "+format, args...))
-		})
-		if err != nil {
-			return err
-		}
-		a.realtimeService = svc
-		return nil
-	}
-	svc, err := asr.NewService(cfg)
-	if err != nil {
-		return err
-	}
-	a.asrService = svc
-	return nil
-}
-
-func (a *App) waitForASRReady() bool {
-	if a.asrService != nil || a.realtimeService != nil {
-		return true
-	}
-	if a.asrInitDone == nil {
-		return false
-	}
-	select {
-	case <-a.asrInitDone:
-		return a.asrService != nil || a.realtimeService != nil
-	case <-time.After(30 * time.Second):
-		return a.asrService != nil || a.realtimeService != nil
-	}
-}
-
 // ASRStatus represents the current status of the ASR service
 type ASRStatus struct {
 	Initialized  bool `json:"initialized"`
@@ -3881,23 +3244,10 @@ type ASRStatus struct {
 
 // GetASRStatus returns the current initialization status of the ASR service
 func (a *App) GetASRStatus() ASRStatus {
-	initialized := a.asrService != nil || a.realtimeService != nil
-
-	initializing := false
-	if a.asrInitDone != nil {
-		select {
-		case <-a.asrInitDone:
-			// Initialization is complete (either succeeded or failed)
-			initializing = false
-		default:
-			// Still initializing
-			initializing = true
-		}
-	}
-
+	status := a.currentASRResourceManager().Status()
 	return ASRStatus{
-		Initialized:  initialized,
-		Initializing: initializing,
+		Initialized:  status.Loaded,
+		Initializing: status.Loading,
 	}
 }
 
@@ -3936,585 +3286,6 @@ func (a *App) ConnectToPeer(address string, port int) error {
 func (a *App) DisconnectFromPeer(peerID string) error {
 	// TODO: Implement with git integration
 	return fmt.Errorf("file sharing not implemented yet - will be available with git integration")
-}
-
-// GetGraphData generates graph data from markdown files
-func (a *App) GetGraphData() (*GraphData, error) {
-	a.logInfo("Generating graph data...")
-
-	contentDir := filepath.Join(a.dataDir, "content")
-	if _, err := os.Stat(contentDir); os.IsNotExist(err) {
-		return &GraphData{
-			Nodes: []GraphNode{},
-			Edges: []GraphEdge{},
-			Meta:  GraphMeta{Directed: true},
-		}, nil
-	}
-
-	// ファイル一覧を取得
-	var files []string
-	err := filepath.Walk(contentDir, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
-			// Store path relative to dataDir so it begins with "content/..."
-			rel, _ := filepath.Rel(a.dataDir, p)
-			files = append(files, filepath.ToSlash(rel))
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to walk content directory: %v", err)
-	}
-
-	// ノードとエッジを生成
-	nodes := make(map[string]*GraphNode)
-	edges := make(map[string]*GraphEdge)
-	edgeCounts := make(map[string]int) // source-target の参照回数
-
-	// 各ファイルを処理
-	for _, filePath := range files {
-		nodeID := "doc:/" + strings.TrimPrefix(filePath, "content/")
-		title := graphNodeDefaultTitleForPath(filePath)
-
-		var fileHash string
-		var fileContent string
-		var frontMatter *fm.FrontMatter
-		var docIDFromEnsure string // ensureDocIDで取得したdocIDを保持
-
-		// ファイル内容を読み込み
-		var tags []string
-		var markdownBody string
-		if content, err := os.ReadFile(filepath.Join(a.dataDir, filePath)); err == nil {
-			fileContent = string(content)
-
-			// Ensure doc_id exists (lazy assignment)
-			contentWithDocID, docID, err := a.ensureDocID(fileContent)
-			if err != nil {
-				a.logError(fmt.Sprintf("Failed to ensure doc_id for %s: %v", filePath, err))
-				// Continue with original content if doc_id generation fails
-			} else {
-				docIDFromEnsure = docID // ensureDocIDで取得したdocIDを保持
-				if docID != "" && contentWithDocID != fileContent {
-					// Save the updated content with doc_id if it was added
-					absPath := filepath.Join(a.dataDir, filePath)
-					if err := os.WriteFile(absPath, []byte(contentWithDocID), 0644); err != nil {
-						a.logError(fmt.Sprintf("Failed to save file with doc_id: %v", err))
-					} else {
-						fileContent = contentWithDocID
-						a.logInfo(fmt.Sprintf("Assigned doc_id to file: %s -> %s", filePath, docID))
-					}
-				}
-			}
-
-			title = a.extractTitleFromContent(fileContent, title)
-			// タグを抽出
-			tags = fm.ExtractTags(fileContent)
-			// デバッグ: フロントマターのパース結果を確認
-			frontMatter, body := fm.ParseFrontMatter(fileContent)
-			if frontMatter != nil {
-				a.logInfo(fmt.Sprintf("File %s: frontmatter parsed - title: %q, tags: %q, theme: %q, doc_id: %q", filePath, frontMatter.Title, frontMatter.Tags, frontMatter.Theme, frontMatter.DocID))
-				a.logInfo(fmt.Sprintf("File %s: extracted tags: %v", filePath, tags))
-			} else {
-				a.logInfo(fmt.Sprintf("File %s: no frontmatter found", filePath))
-			}
-			markdownBody = body
-			if markdownBody == "" {
-				markdownBody = fileContent // フロントマターがない場合
-			}
-			// ハッシュを計算（フルコンテンツ）
-			fileHash = gitvcs.CalculateHash(fileContent)
-		}
-
-		// doc_idを取得（frontMatterから取得、なければensureDocIDで取得したdocIDを使用）
-		var docID string
-		if frontMatter != nil && frontMatter.DocID != "" {
-			docID = frontMatter.DocID
-		} else if docIDFromEnsure != "" {
-			// frontMatterにdocIDがない場合、ensureDocIDで取得したdocIDを使用
-			docID = docIDFromEnsure
-		}
-
-		// ノードを作成
-		nodes[nodeID] = &GraphNode{
-			ID:     nodeID,
-			DocID:  docID,
-			Label:  title,
-			Kind:   graphNodeKindForPath(filePath),
-			Exists: true,
-			DegIn:  0,
-			DegOut: 0,
-			Tags:   tags,
-			Hash:   fileHash,
-		}
-
-		// ファイル内容を解析してリンクを抽出（フロントマターを除いた本文を使用）
-		if markdownBody != "" {
-			links := a.extractLinks(markdownBody)
-			a.logInfo(fmt.Sprintf("File %s: found %d links", filePath, len(links)))
-			for i, link := range links {
-				targetID := a.resolveLinkTarget(link, filePath)
-				a.logInfo(fmt.Sprintf("  Link %d: %s -> %s (kind: %s)", i+1, link.Target, targetID, link.Kind))
-				if targetID != "" {
-					// エッジの重みをカウント
-					edgeKey := nodeID + "->" + targetID
-					edgeCounts[edgeKey]++
-
-					// ターゲットファイルのハッシュを取得（現在のバージョン）
-					currentTargetHash := ""
-					if targetNode, exists := nodes[targetID]; exists {
-						currentTargetHash = targetNode.Hash
-					} else {
-						// ターゲットファイルがまだ処理されていない場合、ファイルを読み込んでハッシュを計算
-						if strings.HasPrefix(targetID, "doc:/") {
-							targetPath := strings.TrimPrefix(targetID, "doc:/")
-							targetFilePath := filepath.Join(a.dataDir, "content", targetPath)
-							if targetContent, err := os.ReadFile(targetFilePath); err == nil {
-								currentTargetHash = gitvcs.CalculateHash(string(targetContent))
-							}
-						}
-					}
-
-					// エッジIDを生成
-					edgeID := fmt.Sprintf("e_%s_%s", strings.ReplaceAll(nodeID, "/", "_"), strings.ReplaceAll(targetID, "/", "_"))
-
-					// ターゲットノードのdoc_idを取得
-					var targetDocID string
-					if targetNode, exists := nodes[targetID]; exists {
-						targetDocID = targetNode.DocID
-					} else if strings.HasPrefix(targetID, "doc:/") {
-						// ターゲットファイルがまだ処理されていない場合、ファイルを読み込んでdoc_idを取得
-						targetPath := strings.TrimPrefix(targetID, "doc:/")
-						targetFilePath := filepath.Join(a.dataDir, "content", targetPath)
-						if targetContent, err := os.ReadFile(targetFilePath); err == nil {
-							if targetFM, _ := fm.ParseFrontMatter(string(targetContent)); targetFM != nil {
-								targetDocID = targetFM.DocID
-							}
-						}
-					}
-
-					// 既存のエッジがあるかチェックして、ターゲットの更新状況を判定
-					targetUpdated := false
-					storedTargetHash := currentTargetHash // デフォルトは現在のハッシュ
-
-					if existingEdge, exists := edges[edgeID]; exists && existingEdge.TargetHash != "" {
-						// 既存のエッジがあり、以前のターゲットハッシュが記録されている場合
-						storedTargetHash = existingEdge.TargetHash // 以前記録されたハッシュを保持
-
-						// 現在のターゲットハッシュと以前のハッシュを比較
-						if currentTargetHash != "" && storedTargetHash != "" && currentTargetHash != storedTargetHash {
-							targetUpdated = true
-						}
-					}
-
-					// エッジを作成または更新
-					// リンク作成時は常にpinnedバージョンとして記録（リンク作成時のターゲットのバージョンを固定）
-					toVersionMode := "pinned"
-					toVersionID := storedTargetHash // リンク作成時のターゲットのハッシュをバージョンIDとして保存
-					if toVersionID == "" {
-						// 初回リンク作成時は現在のハッシュを使用
-						toVersionID = currentTargetHash
-						toVersionMode = "pinned"
-					}
-
-					edges[edgeID] = &GraphEdge{
-						ID:            edgeID,
-						Source:        nodeID,
-						Target:        targetID,
-						SourceDocID:   docID,
-						TargetDocID:   targetDocID,
-						Kind:          link.Kind,
-						Weight:        edgeCounts[edgeKey],
-						SourceHash:    fileHash,
-						TargetHash:    storedTargetHash, // 以前のハッシュを保持（初回は現在のハッシュ）
-						TargetUpdated: targetUpdated,
-						ToVersionMode: toVersionMode,
-						ToVersionID:   toVersionID,
-					}
-					a.logInfo(fmt.Sprintf("    Created edge with SourceDocID=%s, TargetDocID=%s, ToVersionMode=%s, TargetUpdated=%v", docID, targetDocID, toVersionMode, targetUpdated))
-					sourceHashShort := ""
-					if len(fileHash) >= 8 {
-						sourceHashShort = fileHash[:8]
-					}
-					targetHashShort := ""
-					if len(storedTargetHash) >= 8 {
-						targetHashShort = storedTargetHash[:8]
-					}
-					updateStatus := ""
-					if targetUpdated {
-						updateStatus = " [TARGET UPDATED]"
-					}
-					a.logInfo(fmt.Sprintf("    Created edge: %s -> %s (weight: %d, sourceHash: %s, targetHash: %s)%s", nodeID, targetID, edgeCounts[edgeKey], sourceHashShort, targetHashShort, updateStatus))
-				}
-			}
-		} else {
-			a.logError(fmt.Sprintf("Failed to read file %s: %v", filePath, err))
-		}
-	}
-
-	// 存在しないファイルのノードを作成（エッジの作成後）
-	for _, edge := range edges {
-		// ターゲットノードが存在しない場合
-		if _, exists := nodes[edge.Target]; !exists {
-			if strings.HasPrefix(edge.Target, "doc:/") {
-				path := strings.TrimPrefix(edge.Target, "doc:/")
-				title := graphNodeDefaultTitleForPath(path)
-
-				// ファイルが存在する場合はフロントマターからタイトルとタグを取得
-				var tags []string
-				filePath := filepath.Join(a.dataDir, "content", path)
-				if content, err := os.ReadFile(filePath); err == nil {
-					fileContent := string(content)
-					title = a.extractTitleFromContent(fileContent, title)
-					tags = fm.ExtractTags(fileContent)
-					nodes[edge.Target] = &GraphNode{
-						ID:     edge.Target,
-						Label:  title,
-						Kind:   graphNodeKindForPath(filepath.Join("content", path)),
-						Exists: true, // ファイルが存在する
-						DegIn:  0,
-						DegOut: 0,
-						Tags:   tags,
-					}
-				} else {
-					nodes[edge.Target] = &GraphNode{
-						ID:     edge.Target,
-						Label:  title,
-						Kind:   graphNodeKindForPath(filepath.Join("content", path)),
-						Exists: false,
-						DegIn:  0,
-						DegOut: 0,
-						Tags:   []string{},
-					}
-				}
-				a.logInfo(fmt.Sprintf("Created missing target node: %s", edge.Target))
-			} else if strings.HasPrefix(edge.Target, "img:/") {
-				path := strings.TrimPrefix(edge.Target, "img:/")
-				title := filepath.Base(path)
-
-				// Read tags from WebP file if it's a WebP image
-				var tags []string
-				imageAbsPath := filepath.Join(a.dataDir, filepath.FromSlash(path))
-				if strings.ToLower(filepath.Ext(path)) == ".webp" {
-					webpTags, err := webpchunk.ReadTagsFromWebP(imageAbsPath)
-					if err != nil {
-						a.logError(fmt.Sprintf("Failed to read tags from WebP chunk for %s: %v", path, err))
-					} else {
-						tags = webpTags
-					}
-				}
-
-				nodes[edge.Target] = &GraphNode{
-					ID:     edge.Target,
-					Label:  title,
-					Kind:   "asset:image",
-					Exists: true, // 画像は存在すると仮定
-					DegIn:  0,
-					DegOut: 0,
-					Tags:   tags,
-				}
-				a.logInfo(fmt.Sprintf("Created missing image node: %s (tags: %v)", edge.Target, tags))
-			}
-		}
-
-		// ソースノードが存在しない場合（念のため）
-		if _, exists := nodes[edge.Source]; !exists && strings.HasPrefix(edge.Source, "doc:/") {
-			path := strings.TrimPrefix(edge.Source, "doc:/")
-			title := graphNodeDefaultTitleForPath(path)
-
-			// ファイルが存在する場合はフロントマターからタイトルとタグを取得
-			var tags []string
-			filePath := filepath.Join(a.dataDir, "content", path)
-			if content, err := os.ReadFile(filePath); err == nil {
-				fileContent := string(content)
-				title = a.extractTitleFromContent(fileContent, title)
-				tags = fm.ExtractTags(fileContent)
-				nodes[edge.Source] = &GraphNode{
-					ID:     edge.Source,
-					Label:  title,
-					Kind:   graphNodeKindForPath(filepath.Join("content", path)),
-					Exists: true, // ファイルが存在する
-					DegIn:  0,
-					DegOut: 0,
-					Tags:   tags,
-				}
-			} else {
-				nodes[edge.Source] = &GraphNode{
-					ID:     edge.Source,
-					Label:  title,
-					Kind:   graphNodeKindForPath(filepath.Join("content", path)),
-					Exists: false,
-					DegIn:  0,
-					DegOut: 0,
-					Tags:   []string{},
-				}
-			}
-			a.logInfo(fmt.Sprintf("Created missing source node: %s", edge.Source))
-		}
-	}
-
-	// 入出次数を計算
-	for _, edge := range edges {
-		if sourceNode, exists := nodes[edge.Source]; exists {
-			sourceNode.DegOut++
-		}
-		if targetNode, exists := nodes[edge.Target]; exists {
-			targetNode.DegIn++
-		}
-	}
-
-	// 永続化されたリンク情報を読み込む
-	linkInfoPath := filepath.Join(a.dataDir, ".mdsys", "links.json")
-	persistedLinks := make(map[string]*GraphEdge)
-	if linkData, err := os.ReadFile(linkInfoPath); err == nil {
-		var persistedEdges []GraphEdge
-		if err := json.Unmarshal(linkData, &persistedEdges); err == nil {
-			for i := range persistedEdges {
-				persistedLinks[persistedEdges[i].ID] = &persistedEdges[i]
-			}
-			a.logInfo(fmt.Sprintf("Loaded %d persisted link records", len(persistedLinks)))
-		}
-	}
-
-	// 永続化された情報とマージして、ターゲット更新を検出
-	for edgeID, edge := range edges {
-		if persistedEdge, exists := persistedLinks[edgeID]; exists && persistedEdge.TargetHash != "" {
-			// 永続化されたハッシュがある場合、それと比較
-			currentHash := ""
-
-			// まず、edge.Target（古いパス）で試す
-			if targetNode, exists := nodes[edge.Target]; exists {
-				currentHash = targetNode.Hash
-				a.logInfo(fmt.Sprintf("Target updated check for edge %s: found hash from nodes[%s]: %s", edgeID, edge.Target, currentHash[:8]))
-			} else if strings.HasPrefix(edge.Target, "doc:/") {
-				targetPath := strings.TrimPrefix(edge.Target, "doc:/")
-				targetFilePath := filepath.Join(a.dataDir, "content", targetPath)
-				if targetContent, err := os.ReadFile(targetFilePath); err == nil {
-					currentHash = gitvcs.CalculateHash(string(targetContent))
-					a.logInfo(fmt.Sprintf("Target updated check for edge %s: found hash from file %s: %s", edgeID, targetPath, currentHash[:8]))
-				} else {
-					a.logInfo(fmt.Sprintf("Target updated check for edge %s: file not found at %s (may be renamed)", edgeID, targetPath))
-				}
-			}
-
-			// edge.Targetでファイルが見つからない場合（リネーム後）、TargetDocIDを使って現在のパスを取得
-			if currentHash == "" && edge.TargetDocID != "" {
-				a.logInfo(fmt.Sprintf("Target updated check for edge %s: trying to resolve via TargetDocID %s", edgeID, edge.TargetDocID))
-				docMapPath := filepath.Join(a.dataDir, ".mdsys", "doc_map.json")
-				if docMapData, err := os.ReadFile(docMapPath); err == nil {
-					var docMap map[string]string
-					if err := json.Unmarshal(docMapData, &docMap); err == nil {
-						if currentPath, exists := docMap[edge.TargetDocID]; exists {
-							// doc_mapから取得したパスでファイルを読み込む
-							// currentPathは "content/..." 形式なので、filepath.FromSlashで正規化してから結合
-							normalizedPath := filepath.FromSlash(currentPath)
-							targetFilePath := filepath.Join(a.dataDir, normalizedPath)
-							a.logInfo(fmt.Sprintf("Target updated check: attempting to read file at resolved path (doc_id=%s): %s -> %s", edge.TargetDocID, currentPath, targetFilePath))
-							if targetContent, err := os.ReadFile(targetFilePath); err == nil {
-								currentHash = gitvcs.CalculateHash(string(targetContent))
-								a.logInfo(fmt.Sprintf("Target updated check: resolved path via doc_map for doc_id %s: %s (hash: %s)", edge.TargetDocID, currentPath, currentHash[:8]))
-							} else {
-								a.logError(fmt.Sprintf("Target updated check: failed to read file at resolved path %s (normalized: %s): %v", currentPath, targetFilePath, err))
-								// フォールバック: 直接パスを試す（マルチバイト文字の問題の可能性）
-								if targetContent2, err2 := os.ReadFile(filepath.Join(a.dataDir, currentPath)); err2 == nil {
-									currentHash = gitvcs.CalculateHash(string(targetContent2))
-									a.logInfo(fmt.Sprintf("Target updated check: succeeded with direct path join for doc_id %s: %s (hash: %s)", edge.TargetDocID, currentPath, currentHash[:8]))
-								} else {
-									a.logError(fmt.Sprintf("Target updated check: fallback also failed for %s: %v", currentPath, err2))
-								}
-							}
-						} else {
-							a.logInfo(fmt.Sprintf("Target updated check: doc_id %s not found in doc_map", edge.TargetDocID))
-						}
-					} else {
-						a.logError(fmt.Sprintf("Target updated check: failed to parse doc_map.json: %v", err))
-					}
-				} else {
-					a.logError(fmt.Sprintf("Target updated check: failed to read doc_map.json: %v", err))
-				}
-			}
-
-			if currentHash != "" && persistedEdge.TargetHash != currentHash {
-				edge.TargetUpdated = true
-				a.logInfo(fmt.Sprintf("Target updated detected for edge %s: old=%s, new=%s", edgeID, persistedEdge.TargetHash[:8], currentHash[:8]))
-			} else if currentHash == "" {
-				a.logInfo(fmt.Sprintf("Target updated check for edge %s: currentHash is empty, cannot determine if updated", edgeID))
-			} else {
-				a.logInfo(fmt.Sprintf("Target updated check for edge %s: hash unchanged (old=%s, new=%s)", edgeID, persistedEdge.TargetHash[:8], currentHash[:8]))
-			}
-			// 永続化されたハッシュを保持（リンク作成時のハッシュ）
-			edge.TargetHash = persistedEdge.TargetHash
-		}
-		// 新しいエッジの場合、現在のハッシュが既にedge.TargetHashに設定されている
-	}
-
-	// 画像ファイルを列挙して、画像ノードを作成または更新（タグを読み取る）
-	imageList := a.GetImageList()
-	for _, imageItem := range imageList {
-		imageNodeID := "img:/" + imageItem.Path
-		title := imageItem.Name
-
-		// Read tags from WebP file if it's a WebP image
-		var tags []string
-		imageAbsPath := filepath.Join(a.dataDir, filepath.FromSlash(imageItem.Path))
-		if strings.ToLower(filepath.Ext(imageItem.Path)) == ".webp" {
-			webpTags, err := webpchunk.ReadTagsFromWebP(imageAbsPath)
-			if err != nil {
-				a.logError(fmt.Sprintf("Failed to read tags from WebP chunk for %s: %v", imageItem.Path, err))
-			} else {
-				tags = webpTags
-			}
-		}
-
-		// Create or update image node
-		if existingNode, exists := nodes[imageNodeID]; exists {
-			// Update existing node with tags
-			existingNode.Tags = tags
-			a.logInfo(fmt.Sprintf("Updated image node tags: %s (tags: %v)", imageNodeID, tags))
-		} else {
-			// Create new image node
-			nodes[imageNodeID] = &GraphNode{
-				ID:     imageNodeID,
-				Label:  title,
-				Kind:   "asset:image",
-				Exists: true,
-				DegIn:  0,
-				DegOut: 0,
-				Tags:   tags,
-			}
-			a.logInfo(fmt.Sprintf("Created image node: %s (tags: %v)", imageNodeID, tags))
-		}
-	}
-
-	// スライスに変換
-	var nodeList []GraphNode
-	for _, node := range nodes {
-		nodeList = append(nodeList, *node)
-	}
-
-	var edgeList []GraphEdge
-	for _, edge := range edges {
-		edgeList = append(edgeList, *edge)
-	}
-
-	// タグノードを作成し、同じタグを持つドキュメントと接続
-	tagNodes := make(map[string]*GraphNode)
-	tagNodeCount := 0
-	for _, node := range nodeList {
-		if len(node.Tags) > 0 {
-			a.logInfo(fmt.Sprintf("Node %s has %d tags: %v", node.ID, len(node.Tags), node.Tags))
-		}
-		for _, tag := range node.Tags {
-			if tag == "" {
-				continue
-			}
-			tagID := "tag:/" + tag
-
-			// タグノードが存在しない場合は作成
-			if _, exists := tagNodes[tagID]; !exists {
-				tagNodes[tagID] = &GraphNode{
-					ID:     tagID,
-					Label:  "#" + tag,
-					Kind:   "tag",
-					Exists: true,
-					DegIn:  0,
-					DegOut: 0,
-					Tags:   []string{},
-				}
-				tagNodeCount++
-				a.logInfo(fmt.Sprintf("Creating tag node: %s (label: #%s)", tagID, tag))
-			}
-
-			// ドキュメントノードとタグノードを接続するエッジを作成
-			edgeID := fmt.Sprintf("tag_edge_%s_%s", strings.ReplaceAll(node.ID, "/", "_"), strings.ReplaceAll(tagID, "/", "_"))
-			edgeList = append(edgeList, GraphEdge{
-				ID:     edgeID,
-				Source: node.ID,
-				Target: tagID,
-				Kind:   "tag",
-				Weight: 1,
-			})
-			a.logInfo(fmt.Sprintf("Created tag edge: %s -> %s", node.ID, tagID))
-
-			// タグノードの入次数を増やす
-			tagNodes[tagID].DegIn++
-			// ドキュメントノードの出次数を増やす（既にカウントされている可能性があるが、念のため）
-		}
-	}
-
-	// タグノードをノードリストに追加
-	for _, tagNode := range tagNodes {
-		nodeList = append(nodeList, *tagNode)
-	}
-	a.logInfo(fmt.Sprintf("Created %d tag nodes (total nodes: %d, total edges: %d)", tagNodeCount, len(nodeList), len(edgeList)))
-
-	// リンク情報を永続化
-	if linkInfoJSON, err := json.MarshalIndent(edgeList, "", "  "); err == nil {
-		if err := os.MkdirAll(filepath.Dir(linkInfoPath), 0755); err == nil {
-			if err := os.WriteFile(linkInfoPath, linkInfoJSON, 0644); err == nil {
-				a.logInfo(fmt.Sprintf("Saved %d link records to %s", len(edgeList), linkInfoPath))
-			}
-		}
-	}
-
-	// doc_idからパスへのマッピングを保存
-	docMapPath := filepath.Join(a.dataDir, ".mdsys", "doc_map.json")
-	docMap := make(map[string]string)
-
-	// 既存のマッピングを読み込む
-	if data, err := os.ReadFile(docMapPath); err == nil {
-		if err := json.Unmarshal(data, &docMap); err != nil {
-			a.logError(fmt.Sprintf("Failed to parse doc_map.json: %v", err))
-			docMap = make(map[string]string)
-		}
-	}
-
-	// 各ノードのdoc_idとパスのマッピングを更新
-	for _, node := range nodeList {
-		if node.DocID != "" && strings.HasPrefix(node.ID, "doc:/") {
-			path := strings.TrimPrefix(node.ID, "doc:/")
-			contentPath := filepath.Join("content", path)
-			docMap[node.DocID] = contentPath
-		}
-	}
-
-	// マッピングを保存
-	if docMapJSON, err := json.MarshalIndent(docMap, "", "  "); err == nil {
-		if err := os.MkdirAll(filepath.Dir(docMapPath), 0755); err == nil {
-			if err := os.WriteFile(docMapPath, docMapJSON, 0644); err == nil {
-				a.logInfo(fmt.Sprintf("Saved %d doc_id mappings to %s", len(docMap), docMapPath))
-			} else {
-				a.logError(fmt.Sprintf("Failed to write doc_map.json: %v", err))
-			}
-		}
-	} else {
-		a.logError(fmt.Sprintf("Failed to marshal doc_map: %v", err))
-	}
-
-	// デバッグ用：ノードIDとエッジの詳細をログ出力
-	a.logInfo(fmt.Sprintf("Generated graph with %d nodes and %d edges", len(nodeList), len(edgeList)))
-
-	// ノードIDの一覧をログ出力
-	nodeIds := make([]string, 0, len(nodes))
-	for id := range nodes {
-		nodeIds = append(nodeIds, id)
-	}
-	a.logInfo(fmt.Sprintf("Node IDs: %v", nodeIds))
-
-	// エッジの詳細をログ出力
-	for i, edge := range edgeList {
-		if i < 5 { // 最初の5個のエッジのみログ出力
-			a.logInfo(fmt.Sprintf("Edge %d: %s -> %s (kind: %s, weight: %d)",
-				i+1, edge.Source, edge.Target, edge.Kind, edge.Weight))
-		}
-	}
-
-	return &GraphData{
-		Nodes: nodeList,
-		Edges: edgeList,
-		Meta:  GraphMeta{Directed: true},
-	}, nil
 }
 
 // ExportPreviewHTML saves given HTML into karte_data/export and returns a file URL
@@ -4662,7 +3433,7 @@ func (a *App) exportPDFInternal(html string) (string, error) {
 
 	// 画像変換開始イベント
 	if totalImages > 0 {
-		runtime.EventsEmit(a.ctx, "pdf-export-progress", map[string]interface{}{
+		emitPDFExportEvent(a.ctx, "pdf-export-progress", map[string]interface{}{
 			"currentImage": 0,
 			"totalImages":  totalImages,
 			"htmlSize":     len(html),
@@ -4703,7 +3474,7 @@ func (a *App) exportPDFInternal(html string) (string, error) {
 			a.logInfo(fmt.Sprintf("PDF export: DEBUG - data:image[%d] preview: %s", i, preview))
 		}
 	} else {
-		a.logError("PDF export: DEBUG - No data:image found in converted HTML!")
+		a.logInfo("PDF export: DEBUG - No data:image found in converted HTML!")
 	}
 
 	if finalHTMLSize > 1024*1024 {
@@ -4722,7 +3493,7 @@ func (a *App) exportPDFInternal(html string) (string, error) {
 	a.logInfo(fmt.Sprintf("ExportPDF start: out=%s html.len=%d", pdfPath, len(html)))
 
 	// WKWebView読み込み開始イベント
-	runtime.EventsEmit(a.ctx, "pdf-export-progress", map[string]interface{}{
+	emitPDFExportEvent(a.ctx, "pdf-export-progress", map[string]interface{}{
 		"currentImage": totalImages,
 		"totalImages":  totalImages,
 		"htmlSize":     len(html),
@@ -4737,7 +3508,7 @@ func (a *App) exportPDFInternal(html string) (string, error) {
 	a.logInfo("ExportPDF: KarteRenderer.ExportHTMLPDF returned successfully")
 
 	// PDF生成完了イベント
-	runtime.EventsEmit(a.ctx, "pdf-export-progress", map[string]interface{}{
+	emitPDFExportEvent(a.ctx, "pdf-export-progress", map[string]interface{}{
 		"currentImage": totalImages,
 		"totalImages":  totalImages,
 		"htmlSize":     len(html),
@@ -5156,7 +3927,7 @@ func (a *App) convertImageURLsToDataURIs(html string, totalImages int) (string, 
 		// プログレスイベントを発行
 		currentImage++
 		if totalImages > 0 {
-			runtime.EventsEmit(a.ctx, "pdf-export-progress", map[string]interface{}{
+			emitPDFExportEvent(a.ctx, "pdf-export-progress", map[string]interface{}{
 				"currentImage": currentImage,
 				"totalImages":  totalImages,
 				"htmlSize":     len(html),
@@ -5381,203 +4152,6 @@ func (a *App) ClearCustomCSS() error {
 	return nil
 }
 
-// GetAudioFileURL returns a URL for the audio file that can be used in HTML audio elements.
-// The audioPath should be relative to dataDir (e.g., "data/audio/xxx.wav").
-// Returns a URL path that will be served by the HTTP handler.
-func (a *App) GetAudioFileURL(audioPath string) (string, error) {
-	if audioPath == "" {
-		return "", fmt.Errorf("audio path is empty")
-	}
-
-	// Resolve to absolute path to verify file exists
-	var absPath string
-	if filepath.IsAbs(audioPath) {
-		absPath = audioPath
-	} else {
-		// Assume relative to dataDir
-		absPath = filepath.Join(a.dataDir, filepath.FromSlash(audioPath))
-	}
-
-	// Check if file exists
-	info, err := os.Stat(absPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("audio file not found: %s", audioPath)
-		}
-		return "", fmt.Errorf("failed to stat audio file: %w", err)
-	}
-
-	// Return URL path that will be handled by the HTTP handler
-	// The handler will serve files from /audio/ path
-	urlPath := "/audio/" + filepath.ToSlash(audioPath)
-
-	// Log file size for debugging
-	a.logInfo(fmt.Sprintf("Audio file URL: %s (size: %d bytes)", urlPath, info.Size()))
-
-	return urlPath, nil
-}
-
-// GetImageFileURL returns a URL for the image file that can be used in HTML img elements.
-// The imagePath should be relative to dataDir (e.g., "data/image/xxx.png").
-func (a *App) GetImageFileURL(imagePath string) (string, error) {
-	if imagePath == "" {
-		return "", fmt.Errorf("image path is empty")
-	}
-
-	var absPath string
-	if filepath.IsAbs(imagePath) {
-		absPath = imagePath
-	} else {
-		absPath = filepath.Join(a.dataDir, filepath.FromSlash(imagePath))
-	}
-
-	info, err := os.Stat(absPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("image file not found: %s", imagePath)
-		}
-		return "", fmt.Errorf("failed to stat image file: %w", err)
-	}
-
-	urlPath := "/image/" + filepath.ToSlash(imagePath)
-	a.logInfo(fmt.Sprintf("Image file URL: %s (size: %d bytes)", urlPath, info.Size()))
-	return urlPath, nil
-}
-
-// GetPdfFileURL returns a URL for the PDF file that can be used in HTML embed/iframe elements.
-// The pdfPath should be relative to dataDir (e.g., "content/example.pdf").
-func (a *App) GetPdfFileURL(pdfPath string) (string, error) {
-	if pdfPath == "" {
-		return "", fmt.Errorf("pdf path is empty")
-	}
-
-	var absPath string
-	if filepath.IsAbs(pdfPath) {
-		absPath = pdfPath
-	} else {
-		absPath = filepath.Join(a.dataDir, filepath.FromSlash(pdfPath))
-	}
-
-	info, err := os.Stat(absPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("pdf file not found: %s", pdfPath)
-		}
-		return "", fmt.Errorf("failed to stat pdf file: %w", err)
-	}
-
-	urlPath := (&url.URL{Path: "/pdf/" + filepath.ToSlash(pdfPath)}).EscapedPath()
-	a.logInfo(fmt.Sprintf("PDF file URL: %s (size: %d bytes)", urlPath, info.Size()))
-	return urlPath, nil
-}
-
-// createAudioHandler creates an HTTP handler that serves audio files.
-// This handler wraps the default asset handler and adds support for /audio/ paths.
-func (a *App) createAssetHandler() http.Handler {
-	// Get default asset handler
-	defaultHandler := http.FileServer(http.FS(assets))
-
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/audio/") {
-			if a.serveMediaFile(w, r, "/audio/", "audio") {
-				return
-			}
-		}
-		if strings.HasPrefix(r.URL.Path, "/image/") {
-			if a.serveMediaFile(w, r, "/image/", "image") {
-				return
-			}
-		}
-		if strings.HasPrefix(r.URL.Path, "/pdf/") {
-			if a.serveMediaFile(w, r, "/pdf/", "pdf") {
-				return
-			}
-		}
-
-		// For all other paths, use default asset handler
-		defaultHandler.ServeHTTP(w, r)
-	})
-}
-
-func (a *App) serveMediaFile(w http.ResponseWriter, r *http.Request, prefix, mediaType string) bool {
-	relPath := strings.TrimPrefix(r.URL.Path, prefix)
-
-	a.logInfo(fmt.Sprintf("serveMediaFile: %s request for %s, relPath: %s", mediaType, r.URL.Path, relPath))
-
-	var absPath string
-	if filepath.IsAbs(relPath) {
-		absPath = relPath
-	} else {
-		absPath = filepath.Join(a.dataDir, filepath.FromSlash(relPath))
-	}
-
-	a.logInfo(fmt.Sprintf("serveMediaFile: %s resolved path: %s", mediaType, absPath))
-
-	info, err := os.Stat(absPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			a.logError(fmt.Sprintf("serveMediaFile: %s file not found: %s (resolved: %s)", mediaType, relPath, absPath))
-		} else {
-			a.logError(fmt.Sprintf("serveMediaFile: %s stat error: %v (path: %s)", mediaType, err, absPath))
-		}
-		http.Error(w, fmt.Sprintf("%s file not found", strings.Title(mediaType)), http.StatusNotFound)
-		return true
-	}
-
-	a.logInfo(fmt.Sprintf("serveMediaFile: %s file found: %s (size: %d bytes)", mediaType, absPath, info.Size()))
-
-	file, err := os.Open(absPath)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to open %s file", mediaType), http.StatusInternalServerError)
-		return true
-	}
-	defer file.Close()
-
-	ext := strings.ToLower(filepath.Ext(absPath))
-	var mimeType string
-
-	if mediaType == "audio" {
-		switch ext {
-		case ".wav":
-			mimeType = "audio/wav"
-		case ".mp3":
-			mimeType = "audio/mpeg"
-		case ".m4a":
-			mimeType = "audio/mp4"
-		case ".ogg":
-			mimeType = "audio/ogg"
-		default:
-			mimeType = "audio/mpeg"
-		}
-	} else if mediaType == "pdf" {
-		mimeType = "application/pdf"
-	} else {
-		switch ext {
-		case ".jpg", ".jpeg":
-			mimeType = "image/jpeg"
-		case ".png":
-			mimeType = "image/png"
-		case ".gif":
-			mimeType = "image/gif"
-		case ".webp":
-			mimeType = "image/webp"
-		case ".svg":
-			mimeType = "image/svg+xml"
-		default:
-			mimeType = "application/octet-stream"
-		}
-	}
-
-	w.Header().Set("Content-Type", mimeType)
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
-	if mediaType == "audio" {
-		w.Header().Set("Accept-Ranges", "bytes")
-	}
-
-	http.ServeContent(w, r, filepath.Base(absPath), info.ModTime(), file)
-	return true
-}
-
 // formatTimestamp formats a timestamp in seconds as [HH:MM:SS.mmm] or [MM:SS.mmm]
 // Shows milliseconds (3 decimal places) for more precise timestamps
 func formatTimestamp(seconds float64) string {
@@ -5633,6 +4207,11 @@ func (a *App) RenameFile(oldPath, newPath string) error {
 	if !ok {
 		return fmt.Errorf("invalid new path: %s", newPath)
 	}
+	releaseTranscriptMutation, err := a.reserveTranscriptPathMutation(oldPath, newPath)
+	if err != nil {
+		return err
+	}
+	defer releaseTranscriptMutation()
 
 	// Check if old file exists
 	if _, err := os.Stat(oldAbsPath); os.IsNotExist(err) {
@@ -5664,34 +4243,30 @@ func (a *App) RenameFile(oldPath, newPath string) error {
 	}
 
 	// Move file
-	if err := os.Rename(oldAbsPath, newAbsPath); err != nil {
+	if err := a.renameDocumentPath(oldAbsPath, newAbsPath); err != nil {
 		return fmt.Errorf("failed to rename file: %v", err)
 	}
 
-	// Update doc_map.json
-	docMapPath := filepath.Join(a.dataDir, ".mdsys", "doc_map.json")
-	docMap := make(map[string]string)
-
-	// Read existing mapping
-	if data, err := os.ReadFile(docMapPath); err == nil {
-		if err := json.Unmarshal(data, &docMap); err != nil {
-			a.logError(fmt.Sprintf("Failed to parse doc_map.json: %v", err))
-			docMap = make(map[string]string)
-		}
-	}
-
-	// Update mapping (doc_id -> content path)
+	// Update the persistent doc_id mapping before touching any referencing
+	// document. A failed store transaction rolls the rename back so callers
+	// never receive success with a missing mapping.
 	oldContentPath := filepath.ToSlash(oldPath)
-	newContentPath := filepath.ToSlash(newPath)
-	docMap[docID] = newContentPath
-	a.logInfo(fmt.Sprintf("Updated doc_map: %s -> %s", docID, newContentPath))
-
-	// Save mapping
-	if docMapJSON, err := json.MarshalIndent(docMap, "", "  "); err == nil {
-		if err := os.WriteFile(docMapPath, docMapJSON, 0644); err != nil {
-			a.logError(fmt.Sprintf("Failed to write doc_map.json: %v", err))
-		}
+	if relativeOldPath, relErr := filepath.Rel(a.dataDir, oldAbsPath); relErr == nil {
+		oldContentPath = filepath.ToSlash(relativeOldPath)
 	}
+	newContentPath := filepath.ToSlash(newPath)
+	docMap, mapErr := a.updateDocumentMapping(docID, newContentPath)
+	if mapErr != nil {
+		if rollbackErr := a.renameDocumentPath(newAbsPath, oldAbsPath); rollbackErr != nil {
+			return fmt.Errorf(
+				"update document map after rename: %w",
+				errors.Join(mapErr, fmt.Errorf("rollback file rename: %w", rollbackErr)),
+			)
+		}
+		return fmt.Errorf("update document map after rename; file rename was rolled back: %w", mapErr)
+	}
+	newContentPath = docMap[docID]
+	a.logInfo(fmt.Sprintf("Updated doc_map: %s -> %s", docID, newContentPath))
 
 	// Collect files that reference this document based on links.json (doc_id ベース)
 	referencingSet := make(map[string]struct{})
@@ -5840,10 +4415,10 @@ func (a *App) RenameFile(oldPath, newPath string) error {
 		a.logInfo(fmt.Sprintf("Updated references in %s", refPath))
 	}
 
-	// Rebuild index
-	if err := a.BuildSite(); err != nil {
-		a.logError(fmt.Sprintf("Failed to rebuild site: %v", err))
-	}
+	// Rebuild the renamed document and every rewritten referrer asynchronously.
+	dirtySitePaths := []string{oldPath, newPath}
+	dirtySitePaths = append(dirtySitePaths, referencingFiles...)
+	a.scheduleSiteBuild(dirtySitePaths...)
 
 	// Commit to Git if vcs is enabled
 	if a.vcs != nil {
@@ -5867,9 +4442,10 @@ func (a *App) RenameFile(oldPath, newPath string) error {
 			}
 		}
 	}
+	a.refreshGraphAfterMutation("file rename")
 
 	// Emit file changed event
-	runtime.EventsEmit(a.ctx, "file-renamed", map[string]interface{}{
+	a.emitEvent("file-renamed", map[string]interface{}{
 		"oldPath": oldPath,
 		"newPath": newPath,
 		"docId":   docID,
@@ -5936,19 +4512,24 @@ func (a *App) RenamePdfFile(oldPath, newPath string) error {
 func (a *App) UpdateLinkToLatest(sourceDocID, targetDocID string) error {
 	a.logInfo(fmt.Sprintf("UpdateLinkToLatest: sourceDocID=%s, targetDocID=%s", sourceDocID, targetDocID))
 
-	// Load links.json
-	linkInfoPath := filepath.Join(a.dataDir, ".mdsys", "links.json")
-	var edges []GraphEdge
-
-	// Read existing links
-	if linkData, err := os.ReadFile(linkInfoPath); err == nil {
-		if err := json.Unmarshal(linkData, &edges); err != nil {
-			a.logError(fmt.Sprintf("Failed to parse links.json: %v", err))
-			return fmt.Errorf("failed to parse links.json: %v", err)
-		}
-	} else {
-		return fmt.Errorf("failed to read links.json: %v", err)
+	// Refresh at this explicit mutation boundary, then use the complete graph
+	// snapshot. Newly discovered links are no longer written by GetGraphData, so
+	// links.json alone is not an authoritative edge list.
+	if err := a.RefreshGraphData(); err != nil {
+		return fmt.Errorf("refresh graph before link update: %w", err)
 	}
+	graphData, _ := a.GetGraphData()
+	edges := append([]GraphEdge(nil), graphData.Edges...)
+
+	currentTargetHash := ""
+	for _, node := range graphData.Nodes {
+		if node.DocID == targetDocID {
+			currentTargetHash = node.Hash
+			break
+		}
+	}
+
+	linkInfoPath := filepath.Join(a.dataDir, ".mdsys", "links.json")
 
 	// Find and update the matching edge
 	found := false
@@ -5956,15 +4537,9 @@ func (a *App) UpdateLinkToLatest(sourceDocID, targetDocID string) error {
 		if edges[i].SourceDocID == sourceDocID && edges[i].TargetDocID == targetDocID {
 			edges[i].ToVersionMode = "latest"
 			edges[i].TargetUpdated = false
-			// Update ToVersionID to current target hash
-			if strings.HasPrefix(edges[i].Target, "doc:/") {
-				targetPath := strings.TrimPrefix(edges[i].Target, "doc:/")
-				targetFilePath := filepath.Join(a.dataDir, "content", targetPath)
-				if targetContent, err := os.ReadFile(targetFilePath); err == nil {
-					currentHash := gitvcs.CalculateHash(string(targetContent))
-					edges[i].ToVersionID = currentHash
-					edges[i].TargetHash = currentHash
-				}
+			if currentTargetHash != "" {
+				edges[i].ToVersionID = currentTargetHash
+				edges[i].TargetHash = currentTargetHash
 			}
 			found = true
 			a.logInfo(fmt.Sprintf("Updated edge %s -> %s to latest version", edges[i].Source, edges[i].Target))
@@ -5976,23 +4551,21 @@ func (a *App) UpdateLinkToLatest(sourceDocID, targetDocID string) error {
 		return fmt.Errorf("link not found: sourceDocID=%s, targetDocID=%s", sourceDocID, targetDocID)
 	}
 
-	// Save updated links
-	if linkInfoJSON, err := json.MarshalIndent(edges, "", "  "); err == nil {
-		if err := os.MkdirAll(filepath.Dir(linkInfoPath), 0755); err == nil {
-			if err := os.WriteFile(linkInfoPath, linkInfoJSON, 0644); err == nil {
-				a.logInfo(fmt.Sprintf("Saved updated link records to %s", linkInfoPath))
-			} else {
-				return fmt.Errorf("failed to write links.json: %v", err)
-			}
-		} else {
-			return fmt.Errorf("failed to create directory: %v", err)
-		}
-	} else {
+	linkInfoJSON, err := json.MarshalIndent(edges, "", "  ")
+	if err != nil {
 		return fmt.Errorf("failed to marshal links: %v", err)
 	}
+	if err := os.MkdirAll(filepath.Dir(linkInfoPath), 0o755); err != nil {
+		return fmt.Errorf("failed to create directory: %v", err)
+	}
+	if err := atomicWriteDerivedFile(linkInfoPath, linkInfoJSON, 0o644); err != nil {
+		return fmt.Errorf("failed to write links.json: %v", err)
+	}
+	a.logInfo(fmt.Sprintf("Saved updated link records to %s", linkInfoPath))
+	a.refreshGraphAfterMutation("link update")
 
 	// Emit event to refresh preview
-	runtime.EventsEmit(a.ctx, "link-updated", map[string]interface{}{
+	a.emitEvent("link-updated", map[string]interface{}{
 		"sourceDocID": sourceDocID,
 		"targetDocID": targetDocID,
 	})
@@ -6007,7 +4580,7 @@ func (a *App) extractLinks(content string) []LinkInfo {
 	// Wikiリンク [[title]] または [[title|display]]
 	wikiLinkRegex := regexp.MustCompile(`\[\[([^|\]]+)(?:\|([^\]]+))?\]\]`)
 	matches := wikiLinkRegex.FindAllStringSubmatch(content, -1)
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d wiki links", len(matches)))
+	a.logInfo(fmt.Sprintf("Found %d wiki links", len(matches)))
 	for _, match := range matches {
 		title := match[1]
 		// .md拡張子を追加
@@ -6015,53 +4588,53 @@ func (a *App) extractLinks(content string) []LinkInfo {
 			title += ".md"
 		}
 		links = append(links, LinkInfo{Target: title, Kind: "wikilink"})
-		runtime.LogInfo(a.ctx, fmt.Sprintf("  Wiki link: %s", title))
+		a.logInfo(fmt.Sprintf("  Wiki link: %s", title))
 	}
 
 	// Markdownリンク [text](url)
 	markdownLinkRegex := regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
 	matches = markdownLinkRegex.FindAllStringSubmatch(content, -1)
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d markdown links", len(matches)))
+	a.logInfo(fmt.Sprintf("Found %d markdown links", len(matches)))
 	for _, match := range matches {
 		url := match[2]
 		if strings.HasSuffix(strings.ToLower(url), ".md") {
 			links = append(links, LinkInfo{Target: url, Kind: "markdown_link"})
-			runtime.LogInfo(a.ctx, fmt.Sprintf("  Markdown link: %s", url))
+			a.logInfo(fmt.Sprintf("  Markdown link: %s", url))
 		}
 	}
 
 	// 画像リンク ![alt](src)
 	imgLinkRegex := regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
 	matches = imgLinkRegex.FindAllStringSubmatch(content, -1)
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d image links", len(matches)))
+	a.logInfo(fmt.Sprintf("Found %d image links", len(matches)))
 	// imgLinkTrimRegex := regexp.MustCompile(`\s*".*?"`)
 	for _, match := range matches {
 		// src := imgLinkTrimRegex.ReplaceAllString(match[2], "")
 		src := match[2]
 		links = append(links, LinkInfo{Target: src, Kind: "img"})
-		runtime.LogInfo(a.ctx, fmt.Sprintf("  Image link: %s", src))
+		a.logInfo(fmt.Sprintf("  Image link: %s", src))
 	}
 
 	// 引用 > text 内のWikiリンク
 	quoteRegex := regexp.MustCompile(`(?m)^>\s*.*?\[\[([^|\]]+)(?:\|([^\]]+))?\]\].*$`)
 	matches = quoteRegex.FindAllStringSubmatch(content, -1)
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d quote blocks with wiki links", len(matches)))
+	a.logInfo(fmt.Sprintf("Found %d quote blocks with wiki links", len(matches)))
 	for _, match := range matches {
 		title := match[1]
 		if !strings.HasSuffix(strings.ToLower(title), ".md") {
 			title += ".md"
 		}
 		links = append(links, LinkInfo{Target: title, Kind: "quote"})
-		runtime.LogInfo(a.ctx, fmt.Sprintf("  Quote link: %s", title))
+		a.logInfo(fmt.Sprintf("  Quote link: %s", title))
 	}
 
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Total links extracted: %d", len(links)))
+	a.logInfo(fmt.Sprintf("Total links extracted: %d", len(links)))
 	return links
 }
 
 // resolveLinkTarget resolves a link target to a node ID
 func (a *App) resolveLinkTarget(link LinkInfo, currentFile string) string {
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Resolving link: %s (kind: %s) from file: %s", link.Target, link.Kind, currentFile))
+	a.logInfo(fmt.Sprintf("Resolving link: %s (kind: %s) from file: %s", link.Target, link.Kind, currentFile))
 
 	switch link.Kind {
 	case "wikilink", "markdown_link":
@@ -6074,823 +4647,36 @@ func (a *App) resolveLinkTarget(link LinkInfo, currentFile string) string {
 			target = filepath.ToSlash(target)
 		}
 		result := "doc:/" + strings.TrimPrefix(target, "content/")
-		runtime.LogInfo(a.ctx, fmt.Sprintf("  Resolved to: %s", result))
+		a.logInfo(fmt.Sprintf("  Resolved to: %s", result))
 		return result
 	case "img":
 		result := "img:/" + link.Target
-		runtime.LogInfo(a.ctx, fmt.Sprintf("  Resolved to: %s", result))
+		a.logInfo(fmt.Sprintf("  Resolved to: %s", result))
 		return result
 	default:
-		runtime.LogInfo(a.ctx, fmt.Sprintf("  No resolution for kind: %s", link.Kind))
+		a.logInfo(fmt.Sprintf("  No resolution for kind: %s", link.Kind))
 		return ""
 	}
 }
 
-// recordingSegment holds state for a single speech segment during recording
-type recordingSegment struct {
-	samples          []float32
-	startSampleIndex int
-}
-
-// StartRecording starts real-time recording with transcription
-// Uses the recognizer type that matches the configured model.
-func (a *App) StartRecording() error {
-	a.logInfo("[Recording] StartRecording called")
-	a.recordingMu.Lock()
-	defer a.recordingMu.Unlock()
-
-	if a.isRecording {
-		a.logError("[Recording] StartRecording called but already recording")
-		return fmt.Errorf("recording already in progress")
+func waitForWaitGroup(ctx context.Context, wg *sync.WaitGroup) bool {
+	if wg == nil {
+		return true
 	}
-
-	// Wait for ASR to be ready
-	a.logInfo("[Recording] Waiting for ASR service to be ready...")
-	if !a.waitForASRReady() {
-		a.logError("[Recording] ASR service not ready")
-		return fmt.Errorf("ASR service not ready")
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	a.logInfo("[Recording] ASR service is ready")
-
-	// Initialize RealtimeService for partial text support
-	// Check if model is suitable for online recognition (streaming model)
-	a.logInfo("[Recording] Initializing RealtimeService for partial text...")
-	cfgPath := filepath.Join(a.dataDir, "data", "asr", "config.json")
-	a.logInfo(fmt.Sprintf("[Recording] Loading ASR config from: %s", cfgPath))
-	cfg, err := asr.LoadConfigFromFile(cfgPath)
-	if err != nil {
-		a.logError(fmt.Sprintf("[Recording] Failed to load ASR config: %v", err))
-		return fmt.Errorf("failed to load ASR config: %w", err)
-	}
-	if cfg == nil {
-		a.logError("[Recording] ASR config is nil")
-		return fmt.Errorf("ASR config is nil")
-	}
-	a.logInfo(fmt.Sprintf("[Recording] ASR config loaded: enabled=%v, sampleRate=%d", cfg.Enabled, cfg.SampleRate))
-	if !cfg.Enabled {
-		a.logError("[Recording] ASR config not enabled")
-		return fmt.Errorf("ASR not enabled")
-	}
-	a.logInfo("[Recording] Making model paths absolute...")
-	cfg.EnsureModelPathsAbsolute(a.dataDir)
-	a.logInfo(fmt.Sprintf("[Recording] Model paths: encoder=%s, decoder=%s, joiner=%s, tokens=%s",
-		cfg.Model.Encoder, cfg.Model.Decoder, cfg.Model.Joiner, cfg.Model.Tokens))
-
-	if a.realtimeService != nil {
-		a.realtimeService.Reset()
-		a.logInfo("[Recording] Reusing initialized RealtimeService")
-	} else if !cfg.IsStreamingModel() {
-		a.logInfo("[Recording] Model appears to be offline-only (no streaming indicators in filename). Skipping RealtimeService initialization.")
-		a.logInfo("[Recording] Partial text will not be available, but recording will continue with offline ASR.")
-		// Continue without RealtimeService - we'll use offline ASR only
-		a.realtimeService = nil
-	} else {
-		a.logInfo("[Recording] Model appears to be streaming-capable. Initializing RealtimeService...")
-		a.logInfo("[Recording] Calling asr.NewRealtimeService...")
-
-		// Create a logger function that writes to app.log
-		logFunc := func(format string, args ...interface{}) {
-			msg := fmt.Sprintf(format, args...)
-			a.logInfo(fmt.Sprintf("[Recording] [RealtimeASR] %s", msg))
-		}
-
-		// Call NewRealtimeService directly with panic recovery
-		var realtimeService *asr.RealtimeService
-		var serviceErr error
-
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					errMsg := fmt.Sprintf("panic in NewRealtimeService: %v", r)
-					a.logError(fmt.Sprintf("[Recording] %s", errMsg))
-					serviceErr = fmt.Errorf("%s", errMsg)
-				}
-			}()
-
-			a.logInfo("[Recording] Entering NewRealtimeService (this may take a moment)...")
-			realtimeService, serviceErr = asr.NewRealtimeServiceWithLogger(cfg, logFunc)
-			a.logInfo(fmt.Sprintf("[Recording] NewRealtimeService returned: service=%v, err=%v",
-				realtimeService != nil, serviceErr))
-		}()
-
-		if serviceErr != nil {
-			a.logError(fmt.Sprintf("[Recording] Failed to initialize RealtimeService: %v", serviceErr))
-			a.logInfo("[Recording] Continuing without RealtimeService - will use offline ASR only")
-			// Don't fail - continue without RealtimeService
-			a.realtimeService = nil
-		} else if realtimeService == nil {
-			a.logError("[Recording] NewRealtimeService returned nil (no error)")
-			a.logInfo("[Recording] Continuing without RealtimeService - will use offline ASR only")
-			a.realtimeService = nil
-		} else {
-			a.realtimeService = realtimeService
-			a.logInfo("[Recording] RealtimeService initialized successfully")
-		}
-	}
-
-	// Create recorder
-	a.logInfo("[Recording] Creating audio recorder...")
-	recorder, err := audio.NewRecorder()
-	if err != nil {
-		a.logError(fmt.Sprintf("[Recording] Failed to create recorder: %v", err))
-		// Keep the shared recognizer available for a later retry.
-		if a.realtimeService != nil {
-			a.realtimeService.Reset()
-		}
-		return fmt.Errorf("failed to create recorder: %w", err)
-	}
-	a.logInfo("[Recording] Audio recorder created successfully")
-
-	// Check if we can access microphone by trying to get default input device
-	// This will trigger permission request on macOS if not already granted
-	a.logInfo("[Recording] Checking microphone access...")
-
-	// Initialize recording state
-	a.recordingSamples = make([]float32, 0)
-	a.recordingVAD = audio.DefaultSimpleVAD()
-	a.recordingSegment = nil
-	a.recordingStopCh = make(chan struct{})
-	segmentIndex := 0
-
-	// Create transcript file at start (before recording starts)
-	// This ensures the file exists when we append transcript lines
-	timestamp := time.Now().Format("20060102-150405")
-	baseName := fmt.Sprintf("%s_recording", timestamp)
-	dirRel := filepath.ToSlash(filepath.Join("content", "transcripts"))
-	filename := baseName + ".md"
-	contentRel := filepath.ToSlash(filepath.Join(dirRel, filename))
-
-	// Resolve absolute path
-	makeAbs := func(rel string) (string, error) {
-		abs, ok := a.resolveContentPath(rel)
-		if !ok {
-			return "", fmt.Errorf("invalid transcript path: %s", rel)
-		}
-		return abs, nil
-	}
-
-	// Find available filename
-	absPath, err := makeAbs(contentRel)
-	if err != nil {
-		a.logError(fmt.Sprintf("[Recording] Failed to resolve transcript path: %v", err))
-		recorder.Close()
-		return fmt.Errorf("failed to resolve transcript path: %w", err)
-	}
-
-	for i := 2; ; i++ {
-		if _, err := os.Stat(absPath); os.IsNotExist(err) {
-			break
-		}
-		filename = fmt.Sprintf("%s-%d.md", baseName, i)
-		contentRel = filepath.ToSlash(filepath.Join(dirRel, filename))
-		absPath, err = makeAbs(contentRel)
-		if err != nil {
-			a.logError(fmt.Sprintf("[Recording] Failed to resolve transcript path: %v", err))
-			recorder.Close()
-			return fmt.Errorf("failed to resolve transcript path: %w", err)
-		}
-	}
-
-	// Create directory if needed
-	if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
-		a.logError(fmt.Sprintf("[Recording] Failed to create transcript dir: %v", err))
-		recorder.Close()
-		return fmt.Errorf("failed to create transcript dir: %w", err)
-	}
-
-	// Create empty transcript file with frontmatter
-	// We'll append transcript lines as they come in
-	relAudioPath := filepath.ToSlash(filepath.Join("data", "audio", fmt.Sprintf("%s_recording.m4a", timestamp)))
-	body := a.composeTranscriptMarkdown(relAudioPath, "")
-	if err := a.SaveFile(contentRel, body); err != nil {
-		a.logError(fmt.Sprintf("[Recording] Failed to create transcript file: %v", err))
-		recorder.Close()
-		return fmt.Errorf("failed to create transcript file: %w", err)
-	}
-
-	a.recordingTranscriptPath = contentRel
-	a.logInfo(fmt.Sprintf("[Recording] Created transcript file: %s", contentRel))
-
-	// Start recording with callback that buffers samples
-	a.logInfo("[Recording] Starting audio recording...")
-	err = recorder.Start(func(samples []float32) {
-		// This callback runs in audio thread - only buffer samples, no CGO calls
-		a.recordingMu.Lock()
-		a.recordingSamples = append(a.recordingSamples, samples...)
-		a.recordingMu.Unlock()
-
-		// Calculate input level (RMS) for microphone indicator
-		// This is safe to do in audio thread as it's just math
-		rms := calculateRMS(samples)
-		// Emit input level event (use goroutine to avoid blocking audio thread)
-		go func() {
-			runtime.EventsEmit(a.ctx, "recording-input-level", map[string]interface{}{
-				"level": rms,
-			})
-		}()
-	})
-
-	if err != nil {
-		recorder.Close()
-		errMsg := fmt.Sprintf("[Recording] Failed to start recording: %v", err)
-		a.logError(errMsg)
-		// Provide helpful error message for permission issues
-		if strings.Contains(err.Error(), "permission") || strings.Contains(err.Error(), "denied") || strings.Contains(err.Error(), "access") {
-			a.logError("[Recording] Microphone permission may be denied. Please check System Settings > Privacy & Security > Microphone")
-			runtime.EventsEmit(a.ctx, "recording-error", map[string]interface{}{
-				"error":   "マイクの権限が拒否されています。システム設定 > プライバシーとセキュリティ > マイク でKarteにマイクへのアクセスを許可してください。",
-				"details": err.Error(),
-			})
-		}
-		return fmt.Errorf("failed to start recording: %w", err)
-	}
-
-	a.recorder = recorder
-	a.isRecording = true
-
-	// Start processing goroutine that handles ASR (runs outside audio thread)
-	a.recordingWg.Add(1)
+	done := make(chan struct{})
 	go func() {
-		defer a.recordingWg.Done()
-		a.processRecordingSamples(&segmentIndex)
+		wg.Wait()
+		close(done)
 	}()
-
-	runtime.EventsEmit(a.ctx, "recording-started", map[string]interface{}{
-		"transcriptPath": contentRel,
-	})
-	a.logInfo("[Recording] Recording started successfully")
-
-	return nil
-}
-
-// processRecordingSamples processes buffered samples using VAD and ASR
-// This runs in a separate goroutine to avoid CGO calls in audio thread
-func (a *App) processRecordingSamples(segmentIndex *int) {
-	a.logInfo("[Recording] Processing goroutine started")
-	defer a.logInfo("[Recording] Processing goroutine finished (defer)")
-
-	chunkSize := 160                // 10ms @ 16kHz
-	maxSegmentSamples := 16000 * 15 // 15 seconds max
-	processedSamples := 0
-
-	ticker := time.NewTicker(100 * time.Millisecond) // Process every 100ms
-	defer func() {
-		a.logInfo("[Recording] Stopping ticker...")
-		ticker.Stop()
-		a.logInfo("[Recording] Ticker stopped")
-	}()
-
-	for {
-		select {
-		case <-a.recordingStopCh:
-			// Stop ticker first to avoid processing new samples
-			a.logInfo("[Recording] Processing goroutine received stop signal in main select")
-			ticker.Stop()
-			a.logInfo("[Recording] Ticker stopped after stop signal")
-
-			// Get segment data without holding lock for long
-			var seg *recordingSegment
-			var startIdx int
-			var samplesCopy []float32
-			func() {
-				// Use a separate lock scope to minimize lock time
-				a.recordingMu.Lock()
-				defer a.recordingMu.Unlock()
-				if a.recordingSegment != nil && len(a.recordingSegment.samples) > 0 {
-					seg = a.recordingSegment
-					startIdx = seg.startSampleIndex
-					samplesCopy = make([]float32, len(seg.samples))
-					copy(samplesCopy, seg.samples)
-					a.recordingSegment = nil // Clear immediately
-				}
-			}()
-
-			// Finalize any remaining segment in background to avoid blocking exit
-			// Only process if segment is long enough (minimum 0.1 seconds = 1600 samples)
-			if seg != nil && len(samplesCopy) > 0 {
-				minSamples := 1600 // 0.1 seconds at 16kHz
-				if len(samplesCopy) >= minSamples {
-					a.logInfo(fmt.Sprintf("[Recording] Finalizing remaining segment before exit (async, %d samples)", len(samplesCopy)))
-					// Run finalization in background to avoid blocking exit
-					go func() {
-						a.finalizeRecordingSegment(segmentIndex, startIdx, samplesCopy)
-					}()
-				} else {
-					a.logInfo(fmt.Sprintf("[Recording] Skipping remaining segment (too short: %d samples, minimum: %d)", len(samplesCopy), minSamples))
-				}
-			} else {
-				a.logInfo("[Recording] No remaining segment to finalize")
-			}
-			a.logInfo("[Recording] Processing goroutine exiting (return statement)")
-			return
-		case <-ticker.C:
-			// Check if we should stop before processing
-			select {
-			case <-a.recordingStopCh:
-				// Stop signal received, exit immediately
-				a.logInfo("[Recording] Processing goroutine received stop signal in ticker select")
-				ticker.Stop()
-
-				// Get segment data without holding lock for long
-				var seg *recordingSegment
-				var startIdx int
-				var samplesCopy []float32
-				func() {
-					a.recordingMu.Lock()
-					defer a.recordingMu.Unlock()
-					if a.recordingSegment != nil && len(a.recordingSegment.samples) > 0 {
-						seg = a.recordingSegment
-						startIdx = seg.startSampleIndex
-						samplesCopy = make([]float32, len(seg.samples))
-						copy(samplesCopy, seg.samples)
-						a.recordingSegment = nil
-					}
-				}()
-
-				// Only process if segment is long enough (minimum 0.1 seconds = 1600 samples)
-				if seg != nil && len(samplesCopy) > 0 {
-					minSamples := 1600 // 0.1 seconds at 16kHz
-					if len(samplesCopy) >= minSamples {
-						go func() {
-							a.finalizeRecordingSegment(segmentIndex, startIdx, samplesCopy)
-						}()
-					} else {
-						a.logInfo(fmt.Sprintf("[Recording] Skipping segment (too short: %d samples, minimum: %d)", len(samplesCopy), minSamples))
-					}
-				}
-				a.logInfo("[Recording] Processing goroutine exiting from ticker select")
-				return
-			default:
-				// Continue processing
-			}
-
-			// Process buffered samples (minimize lock time)
-			var newSamples []float32
-			func() {
-				a.recordingMu.Lock()
-				defer a.recordingMu.Unlock()
-				if len(a.recordingSamples) <= processedSamples {
-					return
-				}
-				// Get new samples to process (copy to avoid holding lock)
-				newSamples = make([]float32, len(a.recordingSamples)-processedSamples)
-				copy(newSamples, a.recordingSamples[processedSamples:])
-			}()
-
-			if len(newSamples) == 0 {
-				continue
-			}
-
-			// Process with RealtimeService for partial text (if available)
-			if a.realtimeService != nil {
-				// Process audio chunks with RealtimeService
-				for i := 0; i < len(newSamples); i += chunkSize {
-					end := i + chunkSize
-					if end > len(newSamples) {
-						end = len(newSamples)
-					}
-					chunk := newSamples[i:end]
-
-					// Process with RealtimeService to get partial/final text
-					partialText, finalText, isFinal := a.realtimeService.ProcessAudio(chunk)
-
-					// Emit partial text event if text changed and write to file
-					if partialText != "" {
-						// Get current timestamp
-						currentSampleIndex := processedSamples + i
-						timestamp := float64(currentSampleIndex) / float64(audio.RecordingSampleRate)
-						var transcriptPath string
-						func() {
-							a.recordingMu.Lock()
-							defer a.recordingMu.Unlock()
-							transcriptPath = a.recordingTranscriptPath
-						}()
-						runtime.EventsEmit(a.ctx, "recording-transcript-partial", map[string]interface{}{
-							"text":           partialText,
-							"timestamp":      timestamp,
-							"transcriptPath": transcriptPath,
-						})
-
-						// Write partial text to transcript file
-						if transcriptPath != "" {
-							a.appendTranscriptPartial(transcriptPath, partialText)
-						}
-					}
-
-					// Emit final text event if endpoint reached
-					if isFinal && finalText != "" {
-						currentSampleIndex := processedSamples + i
-						timestamp := float64(currentSampleIndex) / float64(audio.RecordingSampleRate)
-						*segmentIndex++
-						var transcriptPath string
-						func() {
-							a.recordingMu.Lock()
-							defer a.recordingMu.Unlock()
-							transcriptPath = a.recordingTranscriptPath
-						}()
-						runtime.EventsEmit(a.ctx, "recording-transcript-final", map[string]interface{}{
-							"text":           finalText,
-							"segmentIndex":   *segmentIndex,
-							"timestamp":      timestamp,
-							"transcriptPath": transcriptPath,
-						})
-						a.logInfo(fmt.Sprintf("[Recording] Final transcript segment %d: %s (timestamp: %.2f)", *segmentIndex, finalText, timestamp))
-
-						// Append to transcript file
-						if transcriptPath != "" {
-							minutes := int(timestamp) / 60
-							seconds := int(timestamp) % 60
-							timestampedLine := fmt.Sprintf("**%02d:%02d** %s", minutes, seconds, finalText)
-							a.appendTranscriptLine(transcriptPath, timestampedLine)
-							a.logInfo(fmt.Sprintf("[Recording] Appended transcript segment %d to file", *segmentIndex))
-						}
-					}
-				}
-			}
-
-			// Process in chunks (for VAD and segment detection - keep existing logic)
-			for i := 0; i < len(newSamples); i += chunkSize {
-				// Check stop signal periodically during processing
-				select {
-				case <-a.recordingStopCh:
-					a.logInfo("[Recording] Processing goroutine received stop signal during chunk processing")
-					ticker.Stop()
-
-					// Get segment data without holding lock for long
-					var seg *recordingSegment
-					var startIdx int
-					var samplesCopy []float32
-					func() {
-						a.recordingMu.Lock()
-						defer a.recordingMu.Unlock()
-						if a.recordingSegment != nil && len(a.recordingSegment.samples) > 0 {
-							seg = a.recordingSegment
-							startIdx = seg.startSampleIndex
-							samplesCopy = make([]float32, len(seg.samples))
-							copy(samplesCopy, seg.samples)
-							a.recordingSegment = nil
-						}
-					}()
-
-					// Only process if segment is long enough (minimum 0.1 seconds = 1600 samples)
-					if seg != nil && len(samplesCopy) > 0 {
-						minSamples := 1600 // 0.1 seconds at 16kHz
-						if len(samplesCopy) >= minSamples {
-							go func() {
-								a.finalizeRecordingSegment(segmentIndex, startIdx, samplesCopy)
-							}()
-						} else {
-							a.logInfo(fmt.Sprintf("[Recording] Skipping segment (too short: %d samples, minimum: %d)", len(samplesCopy), minSamples))
-						}
-					}
-					a.logInfo("[Recording] Processing goroutine exiting from chunk processing")
-					return
-				default:
-					// Continue processing
-				}
-
-				end := i + chunkSize
-				if end > len(newSamples) {
-					end = len(newSamples)
-				}
-				chunk := newSamples[i:end]
-
-				// Use VAD to detect speech
-				isSpeech, flush := a.recordingVAD.Process(chunk)
-
-				if isSpeech {
-					// Update segment with lock protection
-					func() {
-						a.recordingMu.Lock()
-						defer a.recordingMu.Unlock()
-						if a.recordingSegment == nil {
-							// Start new segment
-							a.recordingSegment = &recordingSegment{
-								samples:          make([]float32, 0),
-								startSampleIndex: processedSamples + i,
-							}
-						}
-						a.recordingSegment.samples = append(a.recordingSegment.samples, chunk...)
-					}()
-
-					// Force flush if segment too long
-					var seg *recordingSegment
-					func() {
-						a.recordingMu.Lock()
-						defer a.recordingMu.Unlock()
-						if a.recordingSegment != nil && len(a.recordingSegment.samples) >= maxSegmentSamples {
-							seg = a.recordingSegment
-							a.recordingSegment = nil
-						}
-					}()
-					// Note: maxSegmentSamples is 15 seconds, so this segment is definitely long enough
-					if seg != nil {
-						startIdx := seg.startSampleIndex
-						samplesCopy := make([]float32, len(seg.samples))
-						copy(samplesCopy, seg.samples)
-						go func() {
-							a.finalizeRecordingSegment(segmentIndex, startIdx, samplesCopy)
-						}()
-						a.recordingVAD.Reset()
-					}
-				}
-
-				if flush {
-					var seg *recordingSegment
-					func() {
-						a.recordingMu.Lock()
-						defer a.recordingMu.Unlock()
-						if a.recordingSegment != nil && len(a.recordingSegment.samples) > 0 {
-							seg = a.recordingSegment
-							a.recordingSegment = nil
-						}
-					}()
-					// Only process if segment is long enough (minimum 0.1 seconds = 1600 samples)
-					if seg != nil {
-						startIdx := seg.startSampleIndex
-						samplesCopy := make([]float32, len(seg.samples))
-						copy(samplesCopy, seg.samples)
-						minSamples := 1600 // 0.1 seconds at 16kHz
-						if len(samplesCopy) >= minSamples {
-							go func() {
-								a.finalizeRecordingSegment(segmentIndex, startIdx, samplesCopy)
-							}()
-						} else {
-							a.logInfo(fmt.Sprintf("[Recording] Skipping VAD flush segment (too short: %d samples, minimum: %d)", len(samplesCopy), minSamples))
-						}
-						a.recordingVAD.Reset()
-					}
-				}
-
-				processedSamples += len(chunk)
-			}
-		}
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
 	}
-}
-
-// finalizeRecordingSegment processes a completed speech segment with ASR
-// Note: This function should be called with segment data as arguments,
-// as it may be called asynchronously after recordingSegment has been cleared
-func (a *App) finalizeRecordingSegment(segmentIndex *int, startSampleIndex int, samples []float32) {
-	// Add panic recovery to prevent crashes
-	defer func() {
-		if r := recover(); r != nil {
-			a.logError(fmt.Sprintf("[Recording] Panic in finalizeRecordingSegment: %v", r))
-		}
-	}()
-
-	if a.realtimeService != nil {
-		return
-	}
-
-	if len(samples) == 0 {
-		return
-	}
-
-	// Skip processing if samples are too short (less than 0.1 seconds = 1600 samples at 16kHz)
-	// ASR models typically require a minimum duration to work properly
-	minSamples := 1600 // 0.1 seconds at 16kHz
-	if len(samples) < minSamples {
-		a.logInfo(fmt.Sprintf("[Recording] Skipping ASR for segment with %d samples (too short, minimum: %d)", len(samples), minSamples))
-		return
-	}
-
-	// Process with ASR (this uses CGO, but runs in separate goroutine)
-	if a.asrService != nil {
-		text, err := a.asrService.ProcessSamples(samples)
-		if err != nil {
-			a.logError(fmt.Sprintf("[Recording] ASR processing failed: %v", err))
-			return
-		}
-
-		if strings.TrimSpace(text) != "" {
-			*segmentIndex++
-			timestamp := float64(startSampleIndex) / float64(audio.RecordingSampleRate)
-			var transcriptPath string
-			func() {
-				a.recordingMu.Lock()
-				defer a.recordingMu.Unlock()
-				transcriptPath = a.recordingTranscriptPath
-			}()
-			a.logInfo(fmt.Sprintf("[Recording] Final transcript segment %d: %s (timestamp: %.2f)", *segmentIndex, text, timestamp))
-
-			// Emit event for UI
-			runtime.EventsEmit(a.ctx, "recording-transcript-final", map[string]interface{}{
-				"text":           text,
-				"segmentIndex":   *segmentIndex,
-				"timestamp":      timestamp,
-				"transcriptPath": transcriptPath,
-			})
-
-			// Append to transcript file immediately (with flush)
-			if transcriptPath != "" {
-				// Format timestamp as MM:SS
-				minutes := int(timestamp) / 60
-				seconds := int(timestamp) % 60
-				timestampedLine := fmt.Sprintf("**%02d:%02d** %s", minutes, seconds, text)
-				a.appendTranscriptLine(transcriptPath, timestampedLine)
-				a.logInfo(fmt.Sprintf("[Recording] Appended transcript segment %d to file", *segmentIndex))
-			} else {
-				a.logError("[Recording] Transcript path not set, cannot append transcript line")
-			}
-		}
-	}
-}
-
-// StopRecording stops recording and saves the audio file and transcript
-func (a *App) StopRecording() (string, error) {
-	a.logInfo("[Recording] StopRecording called")
-
-	// Check if recording first (without holding lock)
-	a.recordingMu.Lock()
-	isRecording := a.isRecording
-	a.recordingMu.Unlock()
-
-	if !isRecording {
-		a.logError("[Recording] StopRecording called but not recording")
-		return "", fmt.Errorf("not recording")
-	}
-
-	// Stop recorder first (before stopping processing goroutine)
-	a.logInfo("[Recording] Stopping audio recorder...")
-	var recorder *audio.Recorder
-	func() {
-		a.recordingMu.Lock()
-		defer a.recordingMu.Unlock()
-		recorder = a.recorder
-	}()
-
-	if recorder != nil {
-		if err := recorder.Stop(); err != nil {
-			a.logError(fmt.Sprintf("[Recording] Failed to stop recorder: %v", err))
-		} else {
-			a.logInfo("[Recording] Audio recorder stopped successfully")
-		}
-	}
-
-	// Flush RealtimeService before stopping processing
-	if a.realtimeService != nil {
-		a.logInfo("[Recording] Flushing RealtimeService...")
-		finalText := a.realtimeService.Flush()
-		if finalText != "" {
-			// Get current timestamp
-			var currentSamples int
-			func() {
-				a.recordingMu.Lock()
-				defer a.recordingMu.Unlock()
-				currentSamples = len(a.recordingSamples)
-			}()
-			timestamp := float64(currentSamples) / float64(audio.RecordingSampleRate)
-			var segmentIndex int
-			func() {
-				a.recordingMu.Lock()
-				defer a.recordingMu.Unlock()
-				// Get last segment index (we'll increment it)
-				segmentIndex = 0 // We'll need to track this differently
-			}()
-			var transcriptPath string
-			func() {
-				a.recordingMu.Lock()
-				defer a.recordingMu.Unlock()
-				transcriptPath = a.recordingTranscriptPath
-			}()
-			runtime.EventsEmit(a.ctx, "recording-transcript-final", map[string]interface{}{
-				"text":           finalText,
-				"segmentIndex":   segmentIndex,
-				"timestamp":      timestamp,
-				"transcriptPath": transcriptPath,
-			})
-			a.logInfo(fmt.Sprintf("[Recording] Flushed final transcript: %s", finalText))
-
-			// Append to transcript file
-			if transcriptPath != "" {
-				minutes := int(timestamp) / 60
-				seconds := int(timestamp) % 60
-				timestampedLine := fmt.Sprintf("**%02d:%02d** %s", minutes, seconds, finalText)
-				a.appendTranscriptLine(transcriptPath, timestampedLine)
-			}
-		}
-	}
-
-	// Stop processing goroutine
-	a.logInfo("[Recording] Stopping processing goroutine...")
-	if a.recordingStopCh != nil {
-		a.logInfo("[Recording] Closing recordingStopCh...")
-		close(a.recordingStopCh)
-		a.logInfo("[Recording] recordingStopCh closed, waiting for goroutine...")
-
-		// Wait with timeout to avoid hanging
-		done := make(chan struct{})
-		go func() {
-			a.logInfo("[Recording] Wait goroutine: calling recordingWg.Wait()...")
-			a.recordingWg.Wait()
-			a.logInfo("[Recording] Wait goroutine: recordingWg.Wait() completed")
-			close(done)
-		}()
-
-		select {
-		case <-done:
-			a.logInfo("[Recording] Processing goroutine stopped successfully")
-		case <-time.After(5 * time.Second):
-			a.logError("[Recording] Timeout waiting for processing goroutine to stop (5 seconds)")
-			a.logError("[Recording] This may indicate the goroutine is blocked or waiting on a lock")
-		}
-		a.recordingStopCh = nil
-		a.logInfo("[Recording] recordingStopCh set to nil")
-	} else {
-		a.logInfo("[Recording] Processing goroutine already stopped (recordingStopCh is nil)")
-	}
-
-	// Get recorded samples from our buffer (not from recorder, which may be empty)
-	a.logInfo("[Recording] Getting recorded samples...")
-	var samples []float32
-	func() {
-		a.recordingMu.Lock()
-		defer a.recordingMu.Unlock()
-		samples = make([]float32, len(a.recordingSamples))
-		copy(samples, a.recordingSamples)
-		a.logInfo(fmt.Sprintf("[Recording] Copied %d samples from buffer", len(samples)))
-	}()
-	a.logInfo(fmt.Sprintf("[Recording] Recorded %d samples (%.2f seconds)", len(samples), float64(len(samples))/float64(audio.RecordingSampleRate)))
-	if len(samples) == 0 {
-		a.logError("[Recording] No audio samples recorded")
-		a.cleanupRecording()
-		return "", fmt.Errorf("no audio recorded")
-	}
-
-	// Generate filename with timestamp
-	timestamp := time.Now().Format("20060102-150405")
-	filename := fmt.Sprintf("%s_recording.m4a", timestamp)
-	a.logInfo(fmt.Sprintf("[Recording] Generated filename: %s", filename))
-
-	// Save audio file
-	audioDir := filepath.Join(a.dataDir, "data", "audio")
-	a.logInfo(fmt.Sprintf("[Recording] Creating audio directory: %s", audioDir))
-	if err := os.MkdirAll(audioDir, 0755); err != nil {
-		a.logError(fmt.Sprintf("[Recording] Failed to create audio directory: %v", err))
-		a.cleanupRecording()
-		return "", fmt.Errorf("failed to create audio directory: %w", err)
-	}
-
-	audioPath := filepath.Join(audioDir, filename)
-	a.logInfo(fmt.Sprintf("[Recording] Encoding audio to M4A: %s", audioPath))
-	if err := audio.EncodePCMToM4A(context.Background(), samples, audio.RecordingSampleRate, audioPath); err != nil {
-		a.logError(fmt.Sprintf("[Recording] Failed to encode audio: %v", err))
-		a.cleanupRecording()
-		return "", fmt.Errorf("failed to encode audio: %w", err)
-	}
-	a.logInfo(fmt.Sprintf("[Recording] Audio file saved: %s", audioPath))
-
-	// Get relative path
-	relAudioPath, err := filepath.Rel(a.dataDir, audioPath)
-	if err != nil {
-		relAudioPath = audioPath
-	}
-	relAudioPath = filepath.ToSlash(relAudioPath)
-
-	// Get transcript path (file was created at start)
-	var transcriptPath string
-	func() {
-		a.recordingMu.Lock()
-		defer a.recordingMu.Unlock()
-		transcriptPath = a.recordingTranscriptPath
-	}()
-
-	if transcriptPath == "" {
-		a.logError("[Recording] Transcript path not set, creating new transcript file...")
-		// Fallback: create transcript file if path was not set
-		transcriptText := "_（リアルタイム文字起こしが使用されました。録音中の文字起こし結果は個別のイベントで送信されました。）_\n"
-		var err error
-		transcriptPath, err = a.writeTranscriptDocument(relAudioPath, transcriptText)
-		if err != nil {
-			a.logError(fmt.Sprintf("[Recording] Failed to write transcript: %v", err))
-		} else {
-			a.logInfo(fmt.Sprintf("[Recording] Transcript document created: %s", transcriptPath))
-		}
-	} else {
-		a.logInfo(fmt.Sprintf("[Recording] Using existing transcript file: %s", transcriptPath))
-		// Update audio_path in frontmatter with actual audio file path
-		if err := a.updateTranscriptAudioPath(transcriptPath, relAudioPath); err != nil {
-			a.logError(fmt.Sprintf("[Recording] Failed to update audio_path in transcript: %v", err))
-			// Continue even if update fails
-		} else {
-			a.logInfo(fmt.Sprintf("[Recording] Updated audio_path in transcript: %s", relAudioPath))
-		}
-	}
-
-	// Cleanup
-	a.logInfo("[Recording] Cleaning up recording resources...")
-	a.cleanupRecording()
-
-	// Emit event
-	runtime.EventsEmit(a.ctx, "recording-stopped", map[string]interface{}{
-		"audioPath":      relAudioPath,
-		"transcriptPath": transcriptPath,
-	})
-
-	a.logInfo(fmt.Sprintf("[Recording] Recording stopped successfully: audio=%s, transcript=%s", relAudioPath, transcriptPath))
-
-	return relAudioPath, nil
 }
 
 // IsRecording returns whether recording is currently in progress
@@ -6923,36 +4709,47 @@ func (a *App) AllowClose() {
 func (a *App) cleanupRecording() {
 	a.logInfo("[Recording] cleanupRecording called")
 
-	var recorder *audio.Recorder
+	var recorder appAudioRecorder
+	var realtimeService appRealtimeASRService
+	var recordingASRLease *asrResourceLease
+	var recordingPipeline *appRecordingPipeline
 	func() {
 		a.recordingMu.Lock()
 		defer a.recordingMu.Unlock()
 		recorder = a.recorder
 		a.recorder = nil
-		a.recordingSamples = nil
-		a.recordingVAD = nil
-		a.recordingSegment = nil
+		realtimeService, recordingASRLease = a.takeRecordingASRResourcesLocked()
+		recordingPipeline = a.recordingPipeline
+		a.recordingPipeline = nil
 		a.recordingTranscriptPath = ""
+		a.recordingStopCh = nil
 		a.isRecording = false
 	}()
 
 	if recorder != nil {
 		a.logInfo("[Recording] Closing audio recorder...")
-		recorder.Close()
+		if err := recorder.Close(); err != nil {
+			a.logError(fmt.Sprintf("[Recording] Failed to close audio recorder: %v", err))
+		}
 		a.logInfo("[Recording] Audio recorder closed")
 	}
-
-	// The recognizer is shared across recordings and is closed during app
-	// shutdown. Reset its stream here so another recording can start.
-	func() {
-		a.recordingMu.Lock()
-		defer a.recordingMu.Unlock()
-		if a.realtimeService != nil {
-			a.logInfo("[Recording] Resetting RealtimeService...")
-			a.realtimeService.Reset()
-			a.logInfo("[Recording] RealtimeService reset")
+	if recordingPipeline != nil {
+		recordingPipeline.stopProcessing()
+		if err := recordingPipeline.transcript.Abort(); err != nil {
+			a.logError(fmt.Sprintf("[Recording] Failed to close transcript buffer: %v", err))
 		}
-	}()
+		if err := recordingPipeline.wav.Abort(); err != nil {
+			a.logError(fmt.Sprintf("[Recording] Failed to remove incomplete WAV: %v", err))
+		}
+	}
+
+	if realtimeService != nil {
+		a.logInfo("[Recording] Closing RealtimeService...")
+	}
+	closeRecordingASRResources(realtimeService, recordingASRLease)
+	if realtimeService != nil {
+		a.logInfo("[Recording] RealtimeService closed")
+	}
 
 	a.logInfo("[Recording] Cleanup completed")
 }
