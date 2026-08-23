@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kirimine170/Karte/blob/main/compliance/license-exceptions.schema.json",
+  "title": "Karte LGPL license exception registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "exceptions"],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "exceptions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "component",
+          "path",
+          "license",
+          "reason",
+          "approvedBy",
+          "expiresAt"
+        ],
+        "properties": {
+          "component": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "license": {
+            "type": "string",
+            "pattern": "^LGPL-[0-9]"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "approvedBy": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date"
+          }
+        }
+      }
+    }
+  }
+}

@@ -2,16 +2,16 @@
 
 set -euo pipefail
 
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 app_bundle=${1:?usage: package-macos-runtime.sh APP_BUNDLE TARGET}
 target=${2:?usage: package-macos-runtime.sh APP_BUNDLE TARGET}
+supported_macos_version=${MACOSX_DEPLOYMENT_TARGET:-11.0}
 
 case "$target" in
   darwin-arm64)
-    sherpa_arch_dir=aarch64-apple-darwin
     expected_arch=arm64
     ;;
   darwin-amd64)
-    sherpa_arch_dir=x86_64-apple-darwin
     expected_arch=x86_64
     ;;
   *)
@@ -28,9 +28,32 @@ fi
 frameworks_dir="$app_bundle/Contents/Frameworks"
 mkdir -p "$frameworks_dir"
 
-sherpa_module_dir=$(go list -m -f '{{.Dir}}' github.com/k2-fsa/sherpa-onnx-go-macos)
-sherpa_lib_dir="$sherpa_module_dir/lib/$sherpa_arch_dir"
-portaudio_lib_dir="$(brew --prefix portaudio)/lib"
+if [[ -z ${KARTE_SHERPA_LIB_DIR:-} ]]; then
+  echo "KARTE_SHERPA_LIB_DIR is required; build pinned macOS native libraries with scripts/build-macos-native-runtime.sh" >&2
+  exit 1
+fi
+if [[ -z ${KARTE_PORTAUDIO_LIB_DIR:-} ]]; then
+  echo "KARTE_PORTAUDIO_LIB_DIR is required; Homebrew bottles are not valid release inputs" >&2
+  exit 1
+fi
+sherpa_lib_dir=$KARTE_SHERPA_LIB_DIR
+portaudio_lib_dir=$KARTE_PORTAUDIO_LIB_DIR
+native_root=$(cd "$sherpa_lib_dir/../.." && pwd -P)
+native_license_dir="$native_root/licenses"
+
+for native_license in onnxruntime-LICENSE sherpa-onnx-LICENSE portaudio-LICENSE.txt; do
+  if [[ ! -f "$native_license_dir/$native_license" || -L "$native_license_dir/$native_license" ]]; then
+    echo "Pinned native license is missing or not regular: $native_license_dir/$native_license" >&2
+    exit 1
+  fi
+done
+
+bundled_license_dir="$app_bundle/Contents/Resources/THIRD_PARTY_LICENSES/native"
+mkdir -p "$bundled_license_dir"
+cp -p "$native_license_dir/onnxruntime-LICENSE" "$bundled_license_dir/onnxruntime-LICENSE"
+cp -p "$native_license_dir/sherpa-onnx-LICENSE" "$bundled_license_dir/sherpa-onnx-LICENSE"
+cp -p "$native_license_dir/portaudio-LICENSE.txt" "$bundled_license_dir/portaudio-LICENSE.txt"
+chmod 0644 "$bundled_license_dir"/*
 
 copy_dylibs() {
   local source_dir=$1
@@ -125,7 +148,7 @@ while IFS= read -r -d '' binary; do
   fi
   remove_build_host_rpaths "$binary"
   rewrite_bundled_dependencies "$binary"
-done < <(find "$app_bundle/Contents/MacOS" "$frameworks_dir" -type f -print0)
+done < <(find "$app_bundle/Contents" -type f -print0)
 
 if ! list_rpaths "$app_executable" | grep -Fxq '@executable_path/../Frameworks'; then
   install_name_tool -add_rpath '@executable_path/../Frameworks' "$app_executable"
@@ -182,7 +205,7 @@ verify_macho() {
 while IFS= read -r -d '' binary; do
   is_macho "$binary" || continue
   verify_macho "$binary"
-done < <(find "$app_bundle/Contents/MacOS" "$frameworks_dir" -type f -print0)
+done < <(find "$app_bundle/Contents" -type f -print0)
 
 model_count=0
 while IFS= read -r -d '' model; do
@@ -198,10 +221,14 @@ if [[ $model_count -eq 0 ]]; then
   exit 1
 fi
 
+"$script_dir/capture-macos-native-compliance.sh" "$app_bundle" "$target"
+
+"$script_dir/verify-macos-deployment-target.sh" "$app_bundle" "$supported_macos_version"
+
 codesign_identity=${MACOS_CODESIGN_IDENTITY:--}
 while IFS= read -r -d '' dylib; do
   codesign --force --sign "$codesign_identity" --timestamp=none "$dylib"
-done < <(find "$frameworks_dir" -type f -name '*.dylib' -print0)
+done < <(find "$app_bundle/Contents" -type f -name '*.dylib' -print0)
 
 codesign --force --deep --sign "$codesign_identity" --timestamp=none "$app_bundle"
 codesign --verify --deep --strict --verbose=2 "$app_bundle"

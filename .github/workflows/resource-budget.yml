@@ -1,0 +1,144 @@
+name: Resource Budget
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/resource-budget.yml'
+      - '**/*.go'
+      - 'cmd/resourcegate/**'
+      - 'internal/resourcebudget/**'
+      - 'frontend/**'
+      - 'resource-budget/**'
+      - 'RESOURCE_BUDGET.md'
+      - 'go.mod'
+      - 'go.sum'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/resource-budget.yml'
+      - '**/*.go'
+      - 'cmd/resourcegate/**'
+      - 'internal/resourcebudget/**'
+      - 'frontend/**'
+      - 'resource-budget/**'
+      - 'RESOURCE_BUDGET.md'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deterministic-gate:
+    runs-on: ubuntu-22.04
+    env:
+      GOFLAGS: -buildvcs=false
+      RESOURCE_REPORT_DIR: ${{ runner.temp }}/karte-resource-budget
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --no-audit
+
+      - name: Prepare deterministic fixtures
+        run: |
+          mkdir -p "$RESOURCE_REPORT_DIR" frontend/dist
+          touch frontend/dist/.placeholder
+
+      - name: Measure backend resource budget
+        id: backend_measure
+        continue-on-error: true
+        env:
+          KARTE_RESOURCE_REPORT: ${{ runner.temp }}/karte-resource-budget/backend.json
+          GOCACHE: ${{ runner.temp }}/karte-resource-gocache
+        run: go test . -run '^TestResourceBudgetGate$' -count=1
+
+      - name: Measure frontend resource budget
+        id: frontend_measure
+        if: always()
+        continue-on-error: true
+        working-directory: frontend
+        env:
+          KARTE_RESOURCE_REPORT: ${{ runner.temp }}/karte-resource-budget/frontend.json
+        run: npm test -- --run src/__tests__/resource-budget.test.ts
+
+      - name: Compare reports and publish PR summary
+        if: always()
+        env:
+          GOCACHE: ${{ runner.temp }}/karte-resource-gocache
+          BACKEND_MEASUREMENT_OUTCOME: ${{ steps.backend_measure.outcome }}
+          FRONTEND_MEASUREMENT_OUTCOME: ${{ steps.frontend_measure.outcome }}
+        run: |
+          summary="$RESOURCE_REPORT_DIR/summary.md"
+          gate_status=0
+          if test -f "$RESOURCE_REPORT_DIR/backend.json" && test -f "$RESOURCE_REPORT_DIR/frontend.json"; then
+            go run ./cmd/resourcegate \
+              --baseline resource-budget/baseline.json \
+              --report "$RESOURCE_REPORT_DIR/backend.json" \
+              --report "$RESOURCE_REPORT_DIR/frontend.json" \
+              --markdown-out "$summary" \
+              --json-out "$RESOURCE_REPORT_DIR/evaluation.json" || gate_status=$?
+          else
+            printf '%s\n' \
+              '## Karte resource budget' \
+              '' \
+              'Result: FAIL．' \
+              '' \
+              'One or more measurement reports are missing；inspect the backend and frontend measurement steps．' \
+              >"$summary"
+            gate_status=1
+          fi
+          if ! test -f "$summary"; then
+            printf '%s\n' \
+              '## Karte resource budget' \
+              '' \
+              'Result: FAIL．' \
+              '' \
+              'The report comparator could not produce a summary；inspect its log and the raw report artifacts．' \
+              >"$summary"
+            gate_status=1
+          fi
+          if test "$BACKEND_MEASUREMENT_OUTCOME" != success || test "$FRONTEND_MEASUREMENT_OUTCOME" != success; then
+            printf '\nMeasurement step outcomes: backend=%s，frontend=%s．\n' \
+              "$BACKEND_MEASUREMENT_OUTCOME" \
+              "$FRONTEND_MEASUREMENT_OUTCOME" \
+              >>"$summary"
+            gate_status=1
+          fi
+          cat "$summary" >>"$GITHUB_STEP_SUMMARY"
+          exit "$gate_status"
+
+      - name: Upload raw samples and evaluation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resource-budget-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/karte-resource-budget/backend.json
+            ${{ runner.temp }}/karte-resource-budget/frontend.json
+            ${{ runner.temp }}/karte-resource-budget/evaluation.json
+            ${{ runner.temp }}/karte-resource-budget/summary.md
+          if-no-files-found: warn
+          retention-days: 14

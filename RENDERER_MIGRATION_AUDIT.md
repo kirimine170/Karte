@@ -12,7 +12,7 @@ T-004.
 | `App.PreviewMarkdown` / `App.PreviewMarkdownForPath` | `RenderString` | Legacy Marp detection, graph/version warnings, image URL rewriting, printout preview metadata | Migrated |
 | `App.build` | `RenderMarkdown` | Walk content, write public HTML, build the index, atomically replace output | Migrated |
 | `App.ExportPDF` / `exportHTMLToPDFWithRenderer` | `ExportHTMLPDF` | Resolve images, wait for printout pagination, create temporary HTML, emit progress | Migrated |
-| `scripts/update-karte-renderer.sh` | Go module dependency | Pin a tested pseudo-version, test Renderer, then test Karte | Migrated |
+| `scripts/update-karte-renderer.sh` | Go module dependency | Pin an explicit immutable SemVer or pseudo-version, verify module identity and module-file diff, run Renderer and Karte contract gates, and restore transactionally on failure | Migrated; tag migration awaits the external repository decision |
 
 Karte still parses front matter in `internal/frontmatter` before previewing.
 That parser drives App-specific decisions and graph metadata, so it is not a
@@ -23,12 +23,12 @@ is expanded.
 
 | Path | Current callers | Decision | Removal gate |
 | --- | --- | --- | --- |
-| `internal/site` | No production caller | Remove; it duplicates Markdown, front matter, layout, CSV import, and KaTeX rendering | T-004 contract fixtures pass on all supported CI jobs |
-| `internal/marp` | No production caller | Remove; it is a partial Marp parser/renderer superseded by Renderer | Marp fixture passes and no package import is reintroduced |
-| `internal/pdf` | No production caller | Remove; the Windows wkhtmltopdf path is superseded by `ExportHTMLPDF` | PDF adapter test passes on supported OS builds |
+| `internal/site` | No production caller | Removed in T-003; it duplicated Markdown, front matter, layout, CSV import, and KaTeX rendering | T-004 contract fixtures pass on all supported CI jobs |
+| `internal/marp` | No production caller | Removed in T-003; it was a partial Marp parser/renderer superseded by Renderer | Marp fixture passes and no package import is reintroduced |
+| `internal/pdf` | No production caller | Removed in T-003; the Windows wkhtmltopdf path was superseded by `ExportHTMLPDF` | PDF adapter test passes on supported OS builds |
 
-The packages remain temporarily so removal can be reviewed separately from the
-dependency migration. New production code must not import them.
+The packages and the legacy embedded font were removed in T-003 after the
+contract fixtures passed. New production code must not recreate or import them.
 
 ## Contract coverage
 
@@ -46,11 +46,12 @@ Renderer owns deeper parser, path-confinement, browser-command, and golden
 fixture coverage. Karte owns only the boundary assertions required by its App
 entry points.
 
-## T-003 removal sequence
+## T-003 removal sequence (complete)
 
 1. Run the Renderer dependency tests and Karte's contract fixtures on the
-   macOS, Windows, and Linux CI matrix.
-2. Delete `internal/site`, `internal/marp`, and `internal/pdf`.
-3. Remove dependencies that become unused after `go mod tidy`.
-4. Run preview, public build, Marp, and PDF regression tests.
-5. Confirm no production import of the deleted packages exists.
+   macOS, Windows, and Linux CI matrix. Complete in the T-004 gate and T-003
+   verification.
+2. Delete `internal/site`, `internal/marp`, and `internal/pdf`. Complete.
+3. Remove dependencies that become unused after `go mod tidy`. Complete.
+4. Run preview, public build, Marp, and PDF regression tests. Complete.
+5. Confirm no production import of the deleted packages exists. Complete.

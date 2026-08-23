@@ -9,11 +9,14 @@ on:
       - '**/*.go'
       - 'frontend/**'
       - 'build/**'
-      - 'scripts/fetch-asr-models.sh'
-      - 'scripts/package-macos-runtime.sh'
+      - 'scripts/**'
       - 'testdata/renderer-contract/**'
       - 'templates/**'
       - 'themes/**'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'bom.cdx.json'
+      - 'compliance/**'
       - 'wails.json'
       - 'go.mod'
       - 'go.sum'
@@ -25,11 +28,14 @@ on:
       - '**/*.go'
       - 'frontend/**'
       - 'build/**'
-      - 'scripts/fetch-asr-models.sh'
-      - 'scripts/package-macos-runtime.sh'
+      - 'scripts/**'
       - 'testdata/renderer-contract/**'
       - 'templates/**'
       - 'themes/**'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'bom.cdx.json'
+      - 'compliance/**'
       - 'wails.json'
       - 'go.mod'
       - 'go.sum'
@@ -44,11 +50,16 @@ concurrency:
 
 jobs:
   build:
-    name: Build ${{ matrix.target }}
+    name: Build ${{ matrix.target }} (${{ matrix.toolchain_label }})
     runs-on: ${{ matrix.os }}
     env:
       GOFLAGS: -buildvcs=false
       MACOSX_DEPLOYMENT_TARGET: '11.0'
+      DEVELOPER_DIR: ${{ matrix.developer_dir }}
+      KARTE_EXPECTED_XCODE_VERSION: ${{ matrix.xcode_version }}
+      KARTE_EXPECTED_XCODE_BUILD: ${{ matrix.xcode_build }}
+      KARTE_EXPECTED_SDK_VERSION: ${{ matrix.sdk_version }}
+      KARTE_EXPECTED_SDK_BUILD: ${{ matrix.sdk_build }}
     strategy:
       fail-fast: false
       matrix:
@@ -58,21 +69,66 @@ jobs:
             artifact_name: Karte-macOS-apple-silicon
             artifact_path: dist/darwin-arm64
             generate_tags: ""
+            toolchain_label: xcode-16.4
+            developer_dir: /Applications/Xcode_16.4.app/Contents/Developer
+            xcode_version: '16.4'
+            xcode_build: 16F6
+            sdk_version: '15.5'
+            sdk_build: 24F74
+            native_cold: '0'
+            publish_artifact: true
           - os: macos-15-intel
             target: darwin-amd64
             artifact_name: Karte-macOS-intel
             artifact_path: dist/darwin-amd64
             generate_tags: ""
+            toolchain_label: xcode-16.4
+            developer_dir: /Applications/Xcode_16.4.app/Contents/Developer
+            xcode_version: '16.4'
+            xcode_build: 16F6
+            sdk_version: '15.5'
+            sdk_build: 24F74
+            native_cold: '0'
+            publish_artifact: true
+          - os: macos-26
+            target: darwin-arm64
+            artifact_name: Karte-macOS-xcode26-compat
+            artifact_path: dist/darwin-arm64
+            generate_tags: ""
+            toolchain_label: xcode-26.0.1-compat
+            developer_dir: /Applications/Xcode_26.0.1.app/Contents/Developer
+            xcode_version: 26.0.1
+            xcode_build: 17A400
+            sdk_version: '26.0'
+            sdk_build: 25A352
+            native_cold: '1'
+            publish_artifact: false
           - os: ubuntu-22.04
             target: linux
             artifact_name: Karte-linux-amd64
             artifact_path: dist/linux
             generate_tags: universal
+            toolchain_label: system
+            developer_dir: ""
+            xcode_version: ""
+            xcode_build: ""
+            sdk_version: ""
+            sdk_build: ""
+            native_cold: '0'
+            publish_artifact: true
           - os: windows-latest
             target: windows
             artifact_name: Karte-windows-amd64
             artifact_path: dist/windows
             generate_tags: universal
+            toolchain_label: system
+            developer_dir: ""
+            xcode_version: ""
+            xcode_build: ""
+            sdk_version: ""
+            sdk_build: ""
+            native_cold: '0'
+            publish_artifact: true
 
     defaults:
       run:
@@ -85,6 +141,11 @@ jobs:
       - name: Fetch pinned ASR models
         if: github.event_name != 'pull_request'
         run: ./scripts/fetch-asr-models.sh
+
+      - name: Test Renderer dependency update transaction
+        run: |
+          bash -n scripts/update-karte-renderer.sh scripts/test-update-karte-renderer.sh
+          ./scripts/test-update-karte-renderer.sh
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -99,6 +160,56 @@ jobs:
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
+      - name: Set up Python for macOS native dependencies
+        if: runner.os == 'macOS'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify exact macOS toolchain
+        if: runner.os == 'macOS'
+        id: macos_toolchain
+        run: |
+          manifest="$RUNNER_TEMP/karte-macos-toolchain-${{ matrix.toolchain_label }}.json"
+          native_root="$PWD/.cache/macos-native/${{ matrix.target }}"
+          ./scripts/macos-toolchain-manifest.sh \
+            --manifest "$manifest" \
+            --github-output "$GITHUB_OUTPUT"
+          {
+            printf '%s\n' "KARTE_TOOLCHAIN_MANIFEST=$manifest"
+            printf '%s\n' "KARTE_NATIVE_ROOT=$native_root"
+          } >>"$GITHUB_ENV"
+
+      - name: Test macOS deployment target gate
+        if: runner.os == 'macOS'
+        run: |
+          bash -n \
+            scripts/build-macos-native-runtime.sh \
+            scripts/lib/macos-toolchain.sh \
+            scripts/macos-toolchain-manifest.sh \
+            scripts/macos-wails.sh \
+            scripts/package-macos-runtime.sh \
+            scripts/test-build-macos-native-runtime.sh \
+            scripts/test-macos-wails-toolchain.sh \
+            scripts/test-verify-macos-deployment-target.sh \
+            scripts/verify-macos-deployment-target.sh
+          ./scripts/test-build-macos-native-runtime.sh
+          ./scripts/test-verify-macos-deployment-target.sh
+
+      - name: Restore pinned macOS native runtime
+        if: runner.os == 'macOS' && matrix.native_cold == '0'
+        uses: actions/cache@v4
+        with:
+          path: .cache/macos-native/${{ matrix.target }}
+          key: macos-native-${{ matrix.target }}-${{ steps.macos_toolchain.outputs.cache_key }}-sherpa-1.13.4-ort-1.27.0-portaudio-19.7.0-minos-11-${{ hashFiles('scripts/build-macos-native-runtime.sh', 'scripts/lib/macos-toolchain.sh') }}
+
+      - name: Build pinned macOS native runtime
+        if: runner.os == 'macOS'
+        env:
+          KARTE_NATIVE_COLD: ${{ matrix.native_cold }}
+        run: |
+          ./scripts/build-macos-native-runtime.sh "$KARTE_NATIVE_ROOT" "${{ matrix.target }}"
+
       - name: Download Go dependencies
         run: go mod download
 
@@ -107,6 +218,20 @@ jobs:
           wails_version="$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v2)"
           test -n "$wails_version"
           go install "github.com/wailsapp/wails/v2/cmd/wails@${wails_version}"
+
+      - name: Test macOS Wails toolchain，UTType，and loader contracts
+        if: runner.os == 'macOS'
+        run: ./scripts/test-macos-wails-toolchain.sh
+
+      - name: Finalize macOS build manifest
+        if: runner.os == 'macOS'
+        env:
+          KARTE_NATIVE_COLD: ${{ matrix.native_cold }}
+        run: |
+          ./scripts/macos-wails.sh \
+            --native-root "$KARTE_NATIVE_ROOT" \
+            --target "${{ matrix.target }}" \
+            manifest "$KARTE_TOOLCHAIN_MANIFEST"
 
       - name: Install PortAudio (Linux)
         if: runner.os == 'Linux'
@@ -125,13 +250,8 @@ jobs:
             libatk1.0-dev \
             libcairo2-dev \
             libgirepository1.0-dev \
-            pkg-config
-
-      - name: Install PortAudio (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew update
-          brew install portaudio
+            pkg-config \
+            xvfb
 
       - name: Install PortAudio (Windows)
         if: runner.os == 'Windows'
@@ -160,6 +280,35 @@ jobs:
         working-directory: frontend
         run: npm ci --no-audit
 
+      - name: Test deterministic license and artifact gate fixtures
+        if: runner.os == 'Linux'
+        run: |
+          go test ./internal/compliance ./cmd/licensegate ./cmd/buildmatrix -count=1
+          go run ./cmd/licensegate verify
+          bash -n \
+            scripts/build-macos-native-runtime.sh \
+            scripts/capture-macos-native-compliance.sh \
+            scripts/package-macos-runtime.sh \
+            scripts/test-capture-macos-native-compliance.sh
+          ./scripts/test-capture-macos-native-compliance.sh
+
+      - name: Validate Windows native compliance capture fixture
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $scriptPath = Resolve-Path scripts/capture-windows-native-compliance.ps1
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            $scriptPath,
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | Format-List | Out-String | Write-Error
+          }
+          ./scripts/test-capture-windows-native-compliance.ps1
+
       - name: Prepare placeholder dist
         run: |
           mkdir -p frontend/dist
@@ -175,15 +324,87 @@ jobs:
         shell: pwsh
         run: go test . ./internal/audio ./internal/runtimepath ./internal/screenshot ./internal/webpchunk
 
-      - name: Prepare font file for Windows build
-        if: runner.os == 'Windows'
+      - name: Test artifact startup smoke tooling
         run: |
-          mkdir -p internal/pdf/fonts
-          echo "" > internal/pdf/fonts/NotoSansJP-Regular.ttf || touch internal/pdf/fonts/NotoSansJP-Regular.ttf
+          go test ./cmd/artifactsmoke -count=1
+          go test . -run 'Test(StartupSmoke|WriteStartupSmoke|WailsOptionsConnectStartupSmoke)' -count=1
+
+      - name: Test Unix artifact startup smoke runner
+        if: runner.os != 'Windows'
+        run: |
+          bash -n scripts/smoke-desktop-artifact.sh scripts/test-smoke-desktop-artifact.sh
+          ./scripts/test-smoke-desktop-artifact.sh
+
+      - name: Validate Windows artifact startup smoke runner
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $scriptPath = Resolve-Path scripts/smoke-desktop-artifact.ps1
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            $scriptPath,
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | Format-List | Out-String | Write-Error
+          }
+          $source = Get-Content -LiteralPath $scriptPath -Raw
+          @(
+            'finally {'
+            'Stop-LiveTrackedProcesses -LogName "windows-final-taskkill.log"'
+            '$orphans = @(Get-LiveTrackedProcesses)'
+            '& taskkill.exe /PID $tracked.ProcessId /T /F'
+            '[DateTime]::UtcNow.AddMilliseconds($WaitMilliseconds)'
+            'throw "failed to terminate $($remaining.Count) tracked process(es)'
+            '[KarteStartupSmoke.ProcessJob]::Start('
+            '$process.WaitForEmpty(5000)'
+            '$env:PATH = $cleanRuntimePath'
+          ) | ForEach-Object {
+            if (-not $source.Contains($_)) {
+              throw "Windows smoke lifecycle guard is missing: $_"
+            }
+          }
+          $jobSource = Get-Content -LiteralPath scripts/windows-startup-smoke-job.cs -Raw
+          @(
+            'CREATE_SUSPENDED'
+            'JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE'
+            'AssignProcessToJobObject'
+          ) | ForEach-Object {
+            if (-not $jobSource.Contains($_)) {
+              throw "Windows smoke job containment guard is missing: $_"
+            }
+          }
+          ./scripts/test-smoke-desktop-artifact.ps1
+
+      - name: Smoke test rebuilt macOS ASR runtime
+        if: runner.os == 'macOS' && github.event_name != 'pull_request'
+        env:
+          KARTE_ASR_NATIVE_SMOKE_MODEL_DIR: ${{ github.workspace }}/templates/karte_data_template/data/asr/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10
+        run: |
+          ./scripts/macos-wails.sh \
+            --native-root "$KARTE_NATIVE_ROOT" \
+            --target "${{ matrix.target }}" \
+            run go test ./internal/asr \
+              -run TestPinnedNativeRuntimeLoadsBundledModelAndRunsInference \
+              -count=1
 
       - name: Generate Wails JS bindings
         run: |
-          if [ -n "${{ matrix.generate_tags }}" ]; then
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            wrapper=(
+              ./scripts/macos-wails.sh
+              --native-root "$KARTE_NATIVE_ROOT"
+              --target "${{ matrix.target }}"
+              generate
+            )
+            if [[ -n "${{ matrix.generate_tags }}" ]]; then
+              "${wrapper[@]}" -tags "${{ matrix.generate_tags }}"
+            else
+              "${wrapper[@]}"
+            fi
+          elif [[ -n "${{ matrix.generate_tags }}" ]]; then
             wails generate module -tags "${{ matrix.generate_tags }}"
           else
             wails generate module
@@ -201,13 +422,30 @@ jobs:
           fi
 
       - name: Build application
-        run: go run ./cmd/buildmatrix --targets ${{ matrix.target }} --clean
+        run: |
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            ./scripts/macos-wails.sh \
+              --native-root "$KARTE_NATIVE_ROOT" \
+              --target "${{ matrix.target }}" \
+              buildmatrix --targets "${{ matrix.target }}" --clean
+          else
+            go run ./cmd/buildmatrix --targets "${{ matrix.target }}" --clean
+          fi
 
       - name: Bundle and verify macOS runtime dependencies
         # PR builds compile and package without the large ASR model payload.
         # Main and manual builds fetch and verify the pinned upstream archive.
         if: runner.os == 'macOS' && github.event_name != 'pull_request'
-        run: ./scripts/package-macos-runtime.sh "${{ matrix.artifact_path }}/Karte.app" "${{ matrix.target }}"
+        run: |
+          KARTE_SHERPA_LIB_DIR="$KARTE_NATIVE_ROOT/sherpa/lib" \
+          KARTE_PORTAUDIO_LIB_DIR="$KARTE_NATIVE_ROOT/portaudio/lib" \
+            ./scripts/package-macos-runtime.sh \
+              "${{ matrix.artifact_path }}/Karte.app" \
+              "${{ matrix.target }}"
+
+      - name: Enforce macOS deployment target on packaged bundle
+        if: runner.os == 'macOS' && github.event_name != 'pull_request'
+        run: ./scripts/verify-macos-deployment-target.sh "${{ matrix.artifact_path }}/Karte.app" "$MACOSX_DEPLOYMENT_TARGET"
 
       - name: Archive artifact (macOS)
         if: runner.os == 'macOS'
@@ -227,12 +465,48 @@ jobs:
         run: |
           Compress-Archive -Path "${{ matrix.artifact_path }}\*" -DestinationPath "${{ matrix.artifact_name }}.zip" -Force
 
+      - name: Smoke extracted artifact (macOS and Linux)
+        if: runner.os == 'Linux' || (runner.os == 'macOS' && github.event_name != 'pull_request')
+        run: |
+          ./scripts/smoke-desktop-artifact.sh \
+            "${{ matrix.target }}" \
+            "$PWD/${{ matrix.artifact_name }}.zip" \
+            "$RUNNER_TEMP/karte-startup-smoke-logs/${{ matrix.target }}"
+
+      - name: Smoke extracted artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/smoke-desktop-artifact.ps1 `
+            -Target "${{ matrix.target }}" `
+            -Archive (Join-Path $env:GITHUB_WORKSPACE "${{ matrix.artifact_name }}.zip") `
+            -LogDirectory (Join-Path $env:RUNNER_TEMP "karte-startup-smoke-logs\${{ matrix.target }}")
+
+      - name: Upload startup smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-startup-smoke-logs
+          path: ${{ runner.temp }}/karte-startup-smoke-logs/${{ matrix.target }}
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Upload build artifact
+        if: matrix.publish_artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}.zip
           if-no-files-found: error
+
+      - name: Upload macOS toolchain manifest
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-toolchain-manifest
+          path: ${{ env.KARTE_TOOLCHAIN_MANIFEST }}
+          if-no-files-found: error
+          retention-days: 30
 
   publish-main-release:
     name: Publish latest successful main build

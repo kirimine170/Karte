@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>{{TITLE}}</title>
+  <link rel="stylesheet" href="./base.css">
+  <style>
+    .inline-art { background-image: url("../assets/images/paper.webp?variant=inline#crop"); }
+  </style>
+</head>
+<body>
+  <a href="#content">本文へ</a>
+  <img
+    src="../assets/images/logo.png?revision=1#hero"
+    srcset="../assets/images/logo.png 1x, ../assets/images/logo-2x.png 2x"
+    style="mask-image: url('../assets/images/paper.webp')"
+    alt="Karte">
+  <main id="content">{{CONTENT}}</main>
+</body>
+</html>

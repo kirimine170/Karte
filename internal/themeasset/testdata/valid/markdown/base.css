@@ -1,0 +1,11 @@
+@font-face {
+  font-family: "Karte Fixture";
+  src: url(../assets/fonts/karte-sans.woff2?revision=1#regular) format("woff2");
+  font-display: swap;
+}
+
+/* url(https://comment.example/ignored.png) */
+.karte-document {
+  font-family: "Karte Fixture", sans-serif;
+  background-image: url(../assets/images/paper.webp);
+}
