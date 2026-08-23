@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -13,11 +14,16 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 const (
 	// DefaultSampleRate is the PCM rate the ASR pipeline expects.
 	DefaultSampleRate = 16000
+	// MaxDecodedPCMBytes bounds both in-memory float PCM and staged PCM16 data.
+	MaxDecodedPCMBytes  = int64(256 * 1024 * 1024)
+	pcmCopyBufferBytes  = 128 * 1024
+	maxFFmpegErrorBytes = 64 * 1024
 )
 
 var (
@@ -59,6 +65,9 @@ func SanitizeFileName(name string) string {
 // DecodeToPCM converts the given audio file to mono float32 PCM using ffmpeg.
 // It returns the sample rate actually used along with the samples.
 func DecodeToPCM(ctx context.Context, path string, sampleRate int) (int, []float32, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if sampleRate <= 0 {
 		sampleRate = DefaultSampleRate
 	}
@@ -78,7 +87,7 @@ func DecodeToPCM(ctx context.Context, path string, sampleRate int) (int, []float
 		"-",
 	)
 
-	var stderr bytes.Buffer
+	stderr := newCappedAudioBuffer(maxFFmpegErrorBytes)
 	cmd.Stderr = &stderr
 
 	stdout, err := cmd.StdoutPipe()
@@ -90,23 +99,21 @@ func DecodeToPCM(ctx context.Context, path string, sampleRate int) (int, []float
 		return 0, nil, fmt.Errorf("ffmpeg start: %w (stderr: %s)", err, stderr.String())
 	}
 
-	data, err := io.ReadAll(stdout)
+	samples, err := readFloat32PCMLimited(ctx, stdout, MaxDecodedPCMBytes)
 	if err != nil {
-		return 0, nil, fmt.Errorf("ffmpeg read: %w", err)
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return 0, nil, ctxErr
+		}
+		return 0, nil, fmt.Errorf("ffmpeg PCM read: %w", err)
 	}
 
 	if err := cmd.Wait(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return 0, nil, ctxErr
+		}
 		return 0, nil, fmt.Errorf("ffmpeg failed: %w (stderr: %s)", err, stderr.String())
-	}
-
-	if len(data)%4 != 0 {
-		return 0, nil, fmt.Errorf("unexpected PCM buffer size: %d", len(data))
-	}
-
-	samples := make([]float32, len(data)/4)
-	for i := 0; i < len(samples); i++ {
-		bits := binary.LittleEndian.Uint32(data[i*4 : i*4+4])
-		samples[i] = math.Float32frombits(bits)
 	}
 
 	return sampleRate, samples, nil
@@ -115,8 +122,14 @@ func DecodeToPCM(ctx context.Context, path string, sampleRate int) (int, []float
 // ConvertToPCM16Wav converts the given audio file into a temporary 16-bit mono WAV file.
 // Caller must invoke the returned cleanup function.
 func ConvertToPCM16Wav(ctx context.Context, srcPath string, sampleRate int) (string, func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if sampleRate <= 0 {
 		sampleRate = DefaultSampleRate
+	}
+	if sampleRate > 384000 {
+		return "", nil, fmt.Errorf("sample rate %d exceeds the supported limit", sampleRate)
 	}
 
 	ffmpegPath, err := findFFmpeg()
@@ -129,30 +142,240 @@ func ConvertToPCM16Wav(ctx context.Context, srcPath string, sampleRate int) (str
 		return "", nil, fmt.Errorf("create temp wav: %w", err)
 	}
 	tmpPath := tmpFile.Name()
-	tmpFile.Close()
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			_ = tmpFile.Close()
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := writePCM16WAVHeader(tmpFile, sampleRate, 0); err != nil {
+		return "", nil, fmt.Errorf("write temporary WAV header: %w", err)
+	}
 
 	cmd := exec.CommandContext(ctx, ffmpegPath,
 		"-i", srcPath,
+		"-vn",
 		"-ac", "1",
 		"-ar", fmt.Sprintf("%d", sampleRate),
-		"-f", "wav",
-		"-y",
-		tmpPath,
+		"-acodec", "pcm_s16le",
+		"-f", "s16le",
+		"-",
 	)
 
-	var stderr bytes.Buffer
+	stderr := newCappedAudioBuffer(maxFFmpegErrorBytes)
 	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		os.Remove(tmpPath)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", nil, fmt.Errorf("ffmpeg PCM16 stdout pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return "", nil, fmt.Errorf("ffmpeg PCM16 start: %w (stderr: %s)", err, stderr.String())
+	}
+	pcmBytes, copyErr := copyPCM16Limited(ctx, tmpFile, stdout, MaxDecodedPCMBytes)
+	if copyErr != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", nil, ctxErr
+		}
+		return "", nil, fmt.Errorf("stream decoded PCM16: %w", copyErr)
+	}
+	if err := cmd.Wait(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", nil, ctxErr
+		}
 		return "", nil, fmt.Errorf("ffmpeg wav convert failed: %w (stderr: %s)", err, stderr.String())
 	}
-
-	cleanup := func() {
-		os.Remove(tmpPath)
+	if pcmBytes%2 != 0 {
+		return "", nil, fmt.Errorf("unexpected PCM16 byte count: %d", pcmBytes)
+	}
+	if err := writePCM16WAVHeader(tmpFile, sampleRate, pcmBytes); err != nil {
+		return "", nil, fmt.Errorf("finalize temporary WAV header: %w", err)
+	}
+	if err := tmpFile.Sync(); err != nil {
+		return "", nil, fmt.Errorf("sync temporary WAV: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return "", nil, fmt.Errorf("close temporary WAV: %w", err)
 	}
 
+	var cleanupOnce sync.Once
+	cleanup := func() {
+		cleanupOnce.Do(func() { _ = os.Remove(tmpPath) })
+	}
+	succeeded = true
 	return tmpPath, cleanup, nil
+}
+
+type cappedAudioBuffer struct {
+	remaining int
+	buffer    bytes.Buffer
+}
+
+func newCappedAudioBuffer(limit int) cappedAudioBuffer {
+	return cappedAudioBuffer{remaining: limit}
+}
+
+func (buffer *cappedAudioBuffer) Write(data []byte) (int, error) {
+	originalLength := len(data)
+	if len(data) > buffer.remaining {
+		data = data[:buffer.remaining]
+	}
+	if len(data) > 0 {
+		_, _ = buffer.buffer.Write(data)
+		buffer.remaining -= len(data)
+	}
+	return originalLength, nil
+}
+
+func (buffer *cappedAudioBuffer) String() string {
+	return buffer.buffer.String()
+}
+
+func readFloat32PCMLimited(ctx context.Context, reader io.Reader, limit int64) ([]float32, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if reader == nil || limit <= 0 {
+		return nil, errors.New("invalid PCM reader or limit")
+	}
+	raw := make([]byte, pcmCopyBufferBytes+3)
+	samples := make([]float32, 0, minInt(int(limit/4), DefaultSampleRate*60))
+	var total int64
+	pending := 0
+	emptyReads := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		read, readErr := reader.Read(raw[pending:])
+		if read > 0 {
+			emptyReads = 0
+			total += int64(read)
+			if total > limit {
+				return nil, fmt.Errorf("decoded PCM exceeds %d bytes", limit)
+			}
+			available := pending + read
+			complete := available - available%4
+			for offset := 0; offset < complete; offset += 4 {
+				bits := binary.LittleEndian.Uint32(raw[offset : offset+4])
+				samples = append(samples, math.Float32frombits(bits))
+			}
+			pending = available - complete
+			copy(raw[:pending], raw[complete:available])
+		} else if readErr == nil {
+			emptyReads++
+			if emptyReads >= 100 {
+				return nil, io.ErrNoProgress
+			}
+		}
+		if readErr != nil {
+			if !errors.Is(readErr, io.EOF) {
+				return nil, readErr
+			}
+			if pending != 0 {
+				return nil, fmt.Errorf("unexpected PCM buffer size: %d", total)
+			}
+			return samples, nil
+		}
+	}
+}
+
+func copyPCM16Limited(ctx context.Context, writer io.Writer, reader io.Reader, limit int64) (int64, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if writer == nil || reader == nil || limit <= 0 {
+		return 0, errors.New("invalid PCM copy arguments")
+	}
+	buffer := make([]byte, pcmCopyBufferBytes)
+	var writtenTotal int64
+	emptyReads := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return writtenTotal, err
+		}
+		remaining := limit - writtenTotal
+		readBuffer := buffer
+		if remaining < int64(len(readBuffer)) {
+			readBuffer = readBuffer[:remaining+1]
+		}
+		read, readErr := reader.Read(readBuffer)
+		if read > 0 {
+			emptyReads = 0
+			if writtenTotal+int64(read) > limit {
+				return writtenTotal, fmt.Errorf("decoded PCM exceeds %d bytes", limit)
+			}
+			written, writeErr := writeAudioFull(writer, readBuffer[:read])
+			writtenTotal += int64(written)
+			if writeErr != nil {
+				return writtenTotal, writeErr
+			}
+		} else if readErr == nil {
+			emptyReads++
+			if emptyReads >= 100 {
+				return writtenTotal, io.ErrNoProgress
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				return writtenTotal, nil
+			}
+			return writtenTotal, readErr
+		}
+	}
+}
+
+func writeAudioFull(writer io.Writer, data []byte) (int, error) {
+	writtenTotal := 0
+	for len(data) > 0 {
+		written, err := writer.Write(data)
+		if written < 0 || written > len(data) {
+			return writtenTotal, errors.New("invalid PCM write count")
+		}
+		writtenTotal += written
+		data = data[written:]
+		if err != nil {
+			return writtenTotal, err
+		}
+		if written == 0 {
+			return writtenTotal, io.ErrShortWrite
+		}
+	}
+	return writtenTotal, nil
+}
+
+func writePCM16WAVHeader(file *os.File, sampleRate int, dataBytes int64) error {
+	if file == nil || sampleRate <= 0 || dataBytes < 0 || dataBytes > math.MaxUint32-36 {
+		return errors.New("invalid WAV header values")
+	}
+	var header [44]byte
+	copy(header[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(header[4:8], uint32(36+dataBytes))
+	copy(header[8:12], "WAVE")
+	copy(header[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(header[16:20], 16)
+	binary.LittleEndian.PutUint16(header[20:22], 1)
+	binary.LittleEndian.PutUint16(header[22:24], 1)
+	binary.LittleEndian.PutUint32(header[24:28], uint32(sampleRate))
+	binary.LittleEndian.PutUint32(header[28:32], uint32(sampleRate*2))
+	binary.LittleEndian.PutUint16(header[32:34], 2)
+	binary.LittleEndian.PutUint16(header[34:36], 16)
+	copy(header[36:40], "data")
+	binary.LittleEndian.PutUint32(header[40:44], uint32(dataBytes))
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	_, err := writeAudioFull(file, header[:])
+	return err
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 // StreamWavChunks reads a PCM WAV file and feeds samples chunk by chunk to handler.

@@ -1,5 +1,3 @@
-//go:build darwin && !universal
-
 package asr
 
 import (
@@ -7,8 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	sherpa "github.com/k2-fsa/sherpa-onnx-go-macos"
 )
 
 // Config models the JSON file stored under karte_data/data/asr/config.json.
@@ -36,8 +32,9 @@ type DecodeSpec struct {
 
 // RuntimeSpec captures runtime hints (threads/provider).
 type RuntimeSpec struct {
-	Threads  int    `json:"threads"`
-	Provider string `json:"provider"`
+	Threads            int    `json:"threads"`
+	Provider           string `json:"provider"`
+	IdleTimeoutSeconds int    `json:"idleTimeoutSeconds,omitempty"`
 }
 
 // LoadConfigFromFile reads the JSON config if it exists.
@@ -64,12 +61,7 @@ func (c *Config) applyDefaults() {
 	if c.Decoding.Method == "" {
 		c.Decoding.Method = "greedy_search"
 	}
-	if c.Runtime.Threads == 0 {
-		c.Runtime.Threads = 4
-	}
-	if c.Runtime.Provider == "" {
-		c.Runtime.Provider = "cpu"
-	}
+	applyRuntimeDefaults(&c.Runtime)
 }
 
 // Validate ensures the config is usable when enabled.
@@ -77,49 +69,10 @@ func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
-	if !c.Enabled {
-		return nil
+	if err := validateRuntimeSpec(c.Runtime); err != nil {
+		return err
 	}
-	if c.Model.Tokens == "" {
-		return fmt.Errorf("model.tokens must be set")
-	}
-	if c.Model.ZipformerCTC == "" {
-		if c.Model.Encoder == "" || c.Model.Decoder == "" || c.Model.Joiner == "" {
-			return fmt.Errorf("encoder/decoder/joiner paths are required for transducer models")
-		}
-	}
-	return nil
-}
-
-func (c *Config) offlineRecognizerConfig() *sherpa.OfflineRecognizerConfig {
-	modelCfg := sherpa.OfflineModelConfig{
-		Tokens:     c.Model.Tokens,
-		NumThreads: c.Runtime.Threads,
-		Provider:   c.Runtime.Provider,
-	}
-
-	if c.Model.ZipformerCTC != "" {
-		modelCfg.ZipformerCtc = sherpa.OfflineZipformerCtcModelConfig{
-			Model: c.Model.ZipformerCTC,
-		}
-	} else {
-		modelCfg.Transducer = sherpa.OfflineTransducerModelConfig{
-			Encoder: c.Model.Encoder,
-			Decoder: c.Model.Decoder,
-			Joiner:  c.Model.Joiner,
-		}
-	}
-
-	return &sherpa.OfflineRecognizerConfig{
-		FeatConfig: sherpa.FeatureConfig{
-			SampleRate: c.SampleRate,
-			FeatureDim: 80,
-		},
-		ModelConfig:    modelCfg,
-		DecodingMethod: c.Decoding.Method,
-		MaxActivePaths: 4,
-		BlankPenalty:   0.0,
-	}
+	return validatePlatformConfig(c)
 }
 
 // EnsureModelPathsAbsolute rewrites model paths to be absolute relative to baseDir.

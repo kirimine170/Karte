@@ -11,7 +11,8 @@
         "method": "greedy_search"
     },
     "runtime": {
-        "threads": 4,
-        "provider": "cpu"
+        "threads": 2,
+        "provider": "cpu",
+        "idleTimeoutSeconds": 300
     }
 }
