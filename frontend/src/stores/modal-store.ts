@@ -1,6 +1,7 @@
 import { createStore } from 'zustand/vanilla';
 import type { ModalState } from '../types/ui-state';
 import type { ConflictResolutionStrategy } from '../types/wails-api';
+import type { CsvPageResult } from '../types/wails-api';
 
 interface ModalStore extends ModalState {
     // Actions
@@ -21,8 +22,11 @@ interface ModalStore extends ModalState {
     setWebClipImporting: (importing: boolean) => void;
     setWebClipWarnings: (warnings: string[]) => void;
     showCsvEditModal: (filePath: string, data: string[][]) => void;
+    showCsvEditPage: (page: CsvPageResult) => void;
     hideCsvEditModal: () => void;
     setCsvEditModalData: (data: string[][]) => void;
+    setCsvEditPage: (page: CsvPageResult) => void;
+    rebaseCsvEditRevision: (revision: string, totalRows: number, data: string[][]) => void;
     showConflictModal: (conflictInfo: { path: string; localContent: string; remoteContent: string }) => void;
     hideConflictModal: () => void;
     showImagePreviewModal: (imagePath: string, imageName: string, metadata: string, systemMetadata: string) => void;
@@ -61,6 +65,12 @@ export const useModalStore = createStore<ModalStore>((set) => ({
         visible: false,
         filePath: '',
         data: [],
+        page: 1,
+        limit: 50,
+        totalRows: 0,
+        hasMore: false,
+        revision: '',
+        legacy: false,
     },
     conflictModal: {
         visible: false,
@@ -118,13 +128,67 @@ export const useModalStore = createStore<ModalStore>((set) => ({
         webClipModal: { ...state.webClipModal, warnings },
     })),
     showCsvEditModal: (filePath, data) => set({
-        csvEditModal: { visible: true, filePath, data },
+        csvEditModal: {
+            visible: true,
+            filePath,
+            data,
+            page: 1,
+            limit: 50,
+            totalRows: Math.max(data.length - 1, 0),
+            hasMore: false,
+            revision: '',
+            legacy: true,
+        },
+    }),
+    showCsvEditPage: (page) => set({
+        csvEditModal: {
+            visible: true,
+            filePath: page.path,
+            data: [page.header, ...page.rows],
+            page: page.page,
+            limit: page.limit,
+            totalRows: page.totalRows,
+            hasMore: page.hasMore,
+            revision: page.revision,
+            legacy: Boolean(page.legacy),
+        },
     }),
     hideCsvEditModal: () => set({
-        csvEditModal: { visible: false, filePath: '', data: [] },
+        csvEditModal: {
+            visible: false,
+            filePath: '',
+            data: [],
+            page: 1,
+            limit: 50,
+            totalRows: 0,
+            hasMore: false,
+            revision: '',
+            legacy: false,
+        },
     }),
     setCsvEditModalData: (data) => set((state) => ({
         csvEditModal: { ...state.csvEditModal, data },
+    })),
+    setCsvEditPage: (page) => set({
+        csvEditModal: {
+            visible: true,
+            filePath: page.path,
+            data: [page.header, ...page.rows],
+            page: page.page,
+            limit: page.limit,
+            totalRows: page.totalRows,
+            hasMore: page.hasMore,
+            revision: page.revision,
+            legacy: Boolean(page.legacy),
+        },
+    }),
+    rebaseCsvEditRevision: (revision, totalRows, data) => set((state) => ({
+        csvEditModal: {
+            ...state.csvEditModal,
+            data,
+            revision,
+            totalRows,
+        },
     })),
     showConflictModal: (conflictInfo) => set({
         conflictModal: { visible: true, conflictInfo },

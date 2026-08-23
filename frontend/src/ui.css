@@ -917,6 +917,10 @@
     padding: 12px 16px;
     border-bottom: 1px solid var(--border-subtle-color);
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
   }
 
   .preview-pane-header h3 {
@@ -924,6 +928,30 @@
     font-weight: 600;
     color: var(--color-text-heading);
     margin: 0;
+  }
+
+  .preview-page-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .preview-page-controls[hidden] {
+    display: none;
+  }
+
+  .preview-nav-btn {
+    min-width: 30px;
+    min-height: 28px;
+    padding: 4px 8px;
+  }
+
+  .preview-page-info {
+    min-width: 52px;
+    text-align: center;
+    color: var(--color-slate-300);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
   }
 
   .audio-player-container {
@@ -1150,6 +1178,17 @@
     display: flex;
   }
 
+  .pdf-scroll-page {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    background: var(--color-pdf-page-bg);
+    border: 1px solid var(--color-pdf-page-border);
+    border-radius: var(--radius-sm);
+  }
+
   .pdf-canvas-container canvas {
     width: auto;
     height: auto;
@@ -1163,8 +1202,8 @@
   .pdf-scroll-canvas {
     width: 100%;
     height: auto;
-    border: 1px solid var(--color-pdf-page-border);
-    border-radius: var(--radius-sm);
+    border: none;
+    border-radius: inherit;
     background: var(--color-pdf-page-bg);
   }
 

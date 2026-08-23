@@ -1,13 +1,23 @@
 import { BaseComponent } from './component-base';
-import { useUIStore, useDocStore, useCustomCssStore, useBoardStore } from '../stores/index';
+import { useUIStore, useDocStore, useCustomCssStore } from '../stores/index';
 import GraphModule from '../graph-d3';
-import type { BoardDocument, WailsAppAPI } from '../types/wails-api';
+import type { WailsAppAPI } from '../types/wails-api';
 import type { GraphData } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
 import { renderMarkdownPreview } from '../utils/preview-renderer';
-import { writePreviewFrame } from '../utils/preview-frame';
 import { convertTimestampsToLinks } from '../utils/preview-audio';
+import {
+    beginDocumentTransition,
+    cancelDocumentTransition,
+    commitBoardDocumentTransition,
+    commitDocumentPreview,
+    commitEditorDocumentTransition,
+    isBoardDocumentPath,
+    isDocumentTransitionActive,
+    isPdfDocumentPath,
+    type DocumentTransition,
+} from '../utils/document-transition';
 
 export class GraphView extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
@@ -15,6 +25,8 @@ export class GraphView extends BaseComponent {
     private graphModule: GraphModule | null = null;
     private toggleTagNodesBtn: HTMLButtonElement | null = null;
     private openBoardBtn: HTMLButtonElement | null = null;
+    private documentTransition: DocumentTransition | null = null;
+    private destroyed = true;
 
     constructor(api: WailsAppAPI, parent?: HTMLElement) {
         super(parent);
@@ -23,6 +35,7 @@ export class GraphView extends BaseComponent {
 
     init(): void {
         eventLogger.log('GraphView', 'init');
+        this.destroyed = false;
         
         const graphContainer = document.getElementById('graph-container');
         if (!graphContainer) {
@@ -47,6 +60,7 @@ export class GraphView extends BaseComponent {
     private initGraphModule(): void {
         try {
             this.graphModule = new GraphModule('graph-container');
+            this.graphModule.setActive(useUIStore.getState().activeTab === 'graph');
             
             // ノードクリックイベント
             this.graphModule.on('node:click', (data: { id?: string; ID?: string }) => {
@@ -68,7 +82,7 @@ export class GraphView extends BaseComponent {
                 this.addEventListener(this.toggleTagNodesBtn, 'click', () => {
                     if (this.graphModule) {
                         this.graphModule.toggleTagNodes();
-                        const showTagNodes = this.graphModule.showTagNodes;
+                        const showTagNodes = this.graphModule.areTagNodesVisible();
                         eventLogger.log('GraphView', 'tag-nodes-toggle', { showTagNodes });
                         if (this.toggleTagNodesBtn) {
                             this.toggleTagNodesBtn.textContent = `タグノード表示: ${showTagNodes ? 'ON' : 'OFF'}`;
@@ -87,13 +101,23 @@ export class GraphView extends BaseComponent {
                         useUIStore.getState().setStatusMessage('先に対象ファイルを選択してください', 2000);
                         return;
                     }
+                    const transition = beginDocumentTransition(currentPath);
+                    this.documentTransition = transition;
                     try {
                         const board = await this.api.CreateBoardForResource(currentPath);
-                        this.applyBoardDocument(board);
+                        if (this.destroyed || !commitBoardDocumentTransition(transition, board)) {
+                            return;
+                        }
                         eventLogger.log('GraphView', 'open-board', { currentPath, boardPath: board.path });
                     } catch (error) {
-                        console.error('Failed to open board:', error);
-                        useUIStore.getState().setStatusMessage('コルクボードを開けませんでした', 2500);
+                        if (!this.destroyed && isDocumentTransitionActive(transition)) {
+                            console.error('Failed to open board:', error);
+                            useUIStore.getState().setStatusMessage('コルクボードを開けませんでした', 2500);
+                        }
+                    } finally {
+                        if (this.documentTransition === transition) {
+                            this.documentTransition = null;
+                        }
                     }
                 })
             );
@@ -101,16 +125,29 @@ export class GraphView extends BaseComponent {
     }
 
     private subscribeToStores(): void {
+        // UI Store - graph tabが非activeの間はforce simulationを停止する
+        let lastActiveTab = useUIStore.getState().activeTab;
+        this.unsubscribe.push(
+            useUIStore.subscribe((state) => {
+                if (state.activeTab === lastActiveTab) return;
+                lastActiveTab = state.activeTab;
+                this.graphModule?.setActive(state.activeTab === 'graph');
+            })
+        );
+
         // Doc Store - 現在のファイルパスが変更されたらグラフを更新
         this.unsubscribe.push(
-            useDocStore.subscribe((state) => {
-                if (state.currentPath && this.graphModule) {
-                    const focusId = state.currentPath.startsWith('content/')
-                        ? `doc:/${state.currentPath.replace('content/', '')}`
-                        : `doc:/${state.currentPath}`;
-                    this.graphModule.setFocus({ roots: [focusId], depth: 3 });
+            useDocStore.subscribe(
+                (state) => state.currentPath,
+                (currentPath) => {
+                    if (currentPath && this.graphModule) {
+                        const focusId = currentPath.startsWith('content/')
+                            ? `doc:/${currentPath.replace('content/', '')}`
+                            : `doc:/${currentPath}`;
+                        this.graphModule.setFocus({ roots: [focusId], depth: 3 });
+                    }
                 }
-            })
+            )
         );
     }
 
@@ -154,9 +191,6 @@ export class GraphView extends BaseComponent {
         
         // ファイルを読み込む
         await this.loadFile(filePath);
-        if (!filePath.toLowerCase().endsWith('.board.md')) {
-            useUIStore.getState().setActiveTab('editor');
-        }
     }
 
     private async loadFile(path: string): Promise<void> {
@@ -170,37 +204,35 @@ export class GraphView extends BaseComponent {
             }
         }
 
+        const transition = beginDocumentTransition(path);
+        this.documentTransition = transition;
         try {
-            if (path.toLowerCase().endsWith('.board.md')) {
+            if (isBoardDocumentPath(path)) {
                 const board = await this.api.LoadBoard(path);
-                this.applyBoardDocument(board);
+                commitBoardDocumentTransition(transition, board);
                 return;
             }
             const content = await this.api.LoadFile(path);
-            docStore.setCurrentPath(path);
-            if (path.toLowerCase().endsWith('.pdf')) {
-                docStore.setMarkdownContent('');
-                docStore.setPreviewHtml('');
-                docStore.clearUnsavedChanges();
+            if (!commitEditorDocumentTransition(transition, content) || isPdfDocumentPath(path)) {
                 return;
             }
 
-            docStore.setMarkdownContent(content);
-            docStore.clearUnsavedChanges();
-
             // プレビューを更新
             const { prepared, html } = await renderMarkdownPreview(content, this.api, path);
-            const finalHtml = this.buildPreviewHtml(prepared, html);
-            docStore.setPreviewHtml(finalHtml);
-
-            // iframeに反映
-            const preview = document.getElementById('preview') as HTMLIFrameElement;
-            if (preview) {
-                writePreviewFrame(preview, finalHtml);
+            if (!isDocumentTransitionActive(transition)) {
+                return;
             }
+            const finalHtml = this.buildPreviewHtml(prepared, html);
+            commitDocumentPreview(transition, finalHtml);
         } catch (error) {
-            console.error('Failed to load file:', error);
-            useUIStore.getState().setStatusMessage('ファイルの読み込みに失敗しました', 3000);
+            if (!this.destroyed && isDocumentTransitionActive(transition)) {
+                console.error('Failed to load file:', error);
+                useUIStore.getState().setStatusMessage('ファイルの読み込みに失敗しました', 3000);
+            }
+        } finally {
+            if (this.documentTransition === transition) {
+                this.documentTransition = null;
+            }
         }
     }
 
@@ -211,29 +243,20 @@ export class GraphView extends BaseComponent {
         return convertTimestampsToLinks(withCss);
     }
 
-    private applyBoardDocument(board: BoardDocument): void {
-        useBoardStore.getState().setBoard(board);
-        useDocStore.getState().setCurrentPath(board.path);
-        useDocStore.getState().setMarkdownContent(board.rawContent);
-        useDocStore.getState().setPreviewHtml('');
-        useDocStore.getState().clearUnsavedChanges();
-        useUIStore.getState().setActiveTab('board');
-    }
-
     async refresh(): Promise<void> {
         await this.loadGraphData();
     }
 
     destroy(): void {
+        this.destroyed = true;
+        cancelDocumentTransition(this.documentTransition);
+        this.documentTransition = null;
         this.unsubscribe.forEach((unsub) => unsub());
         this.unsubscribe = [];
         
         // グラフモジュールのクリーンアップ
         if (this.graphModule) {
-            // GraphModuleにdestroyメソッドがあれば呼び出す
-            if (typeof (this.graphModule as unknown as { destroy?: () => void }).destroy === 'function') {
-                (this.graphModule as unknown as { destroy: () => void }).destroy();
-            }
+            this.graphModule.destroy();
             this.graphModule = null;
         }
     }

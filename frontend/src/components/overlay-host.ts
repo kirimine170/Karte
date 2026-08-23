@@ -5,10 +5,12 @@ import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
 import { renderMarkdownPreview } from '../utils/preview-renderer';
 import { convertTimestampsToLinks } from '../utils/preview-audio';
+import { importDroppedMediaFile, MediaImportTransferManager } from '../utils/media-import';
 
 export class OverlayHost extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
     private api: WailsAppAPI;
+    private readonly mediaImportTransfers: MediaImportTransferManager;
     private dropOverlay: HTMLElement | null = null;
     private transcriptionProgress: HTMLElement | null = null;
     private transcriptionProgressFill: HTMLElement | null = null;
@@ -27,6 +29,7 @@ export class OverlayHost extends BaseComponent {
     constructor(api: WailsAppAPI, parent?: HTMLElement) {
         super(parent);
         this.api = api;
+        this.mediaImportTransfers = new MediaImportTransferManager(api);
     }
 
     init(): void {
@@ -264,11 +267,6 @@ export class OverlayHost extends BaseComponent {
         return name.toLowerCase().endsWith('.csv');
     }
 
-    private getFilePath(file: File): string | null {
-        const fileWithPath = file as File & { path?: string };
-        return fileWithPath.path || null;
-    }
-
     private async handleAudioDrop(files: File[]): Promise<void> {
         const audioFiles = files.filter((file) => this.isSupportedAudioFile(file.name));
         if (audioFiles.length === 0) {
@@ -279,17 +277,7 @@ export class OverlayHost extends BaseComponent {
         for (const file of audioFiles) {
             try {
                 useUIStore.getState().setStatusMessage(`音声を取り込み中: ${file.name}`);
-                const path = this.getFilePath(file);
-                if (path) {
-                    await this.api.ImportAudioFile(path);
-                } else {
-                    const base64 = await this.readFileAsBase64(file);
-                    if (base64) {
-                        await this.api.ImportAudioBase64(file.name || `audio-${Date.now()}.wav`, base64);
-                    } else {
-                        useUIStore.getState().setStatusMessage('音声データにアクセスできませんでした', 4000);
-                    }
-                }
+                await importDroppedMediaFile(this.api, this.mediaImportTransfers, 'audio', file, `audio-${Date.now()}.wav`);
             } catch (error) {
                 console.error('ImportAudioFile failed', error);
                 useUIStore.getState().setStatusMessage(`音声取り込みに失敗: ${this.formatError(error)}`, 4000);
@@ -310,17 +298,7 @@ export class OverlayHost extends BaseComponent {
         for (const file of imageFiles) {
             try {
                 useUIStore.getState().setStatusMessage(`画像を取り込み中: ${file.name}`);
-                const path = this.getFilePath(file);
-                if (path) {
-                    await this.api.ImportImageFile(path);
-                } else {
-                    const base64 = await this.readFileAsBase64(file);
-                    if (base64) {
-                        await this.api.ImportImageBase64(file.name || `image-${Date.now()}.png`, base64);
-                    } else {
-                        useUIStore.getState().setStatusMessage('画像データにアクセスできませんでした', 4000);
-                    }
-                }
+                await importDroppedMediaFile(this.api, this.mediaImportTransfers, 'image', file, `image-${Date.now()}.png`);
             } catch (error) {
                 console.error('ImportImageFile failed', error);
                 useUIStore.getState().setStatusMessage(`画像取り込みに失敗: ${this.formatError(error)}`, 4000);
@@ -340,17 +318,13 @@ export class OverlayHost extends BaseComponent {
         for (const file of csvFiles) {
             try {
                 useUIStore.getState().setStatusMessage(`CSVを取り込み中: ${file.name}`);
-                const path = this.getFilePath(file);
-                if (path) {
-                    await this.api.ImportCsvFile(path);
-                } else {
-                    const base64 = await this.readFileAsBase64(file);
-                    if (base64) {
-                        await this.api.ImportCsvBase64(file.name || `data-${Date.now()}.csv`, base64);
-                    } else {
-                        useUIStore.getState().setStatusMessage('CSVデータにアクセスできませんでした', 4000);
-                    }
-                }
+                await importDroppedMediaFile(
+                    this.api,
+                    this.mediaImportTransfers,
+                    'csv',
+                    file,
+                    `data-${Date.now()}.csv`,
+                );
             } catch (error) {
                 console.error('ImportCsvFile failed', error);
                 useUIStore.getState().setStatusMessage(`CSV取り込みに失敗: ${this.formatError(error)}`, 4000);
@@ -371,19 +345,8 @@ export class OverlayHost extends BaseComponent {
         for (const file of pdfFiles) {
             try {
                 useUIStore.getState().setStatusMessage(`PDFを取り込み中: ${file.name}`);
-                const path = this.getFilePath(file);
-                if (path) {
-                    const pdfPath = await this.api.ImportPdfFile(path);
-                    await this.loadFile(pdfPath);
-                } else {
-                    const base64 = await this.readFileAsBase64(file);
-                    if (base64) {
-                        const pdfPath = await this.api.ImportPdfBase64(file.name || `document-${Date.now()}.pdf`, base64);
-                        await this.loadFile(pdfPath);
-                    } else {
-                        useUIStore.getState().setStatusMessage('PDFデータにアクセスできませんでした', 4000);
-                    }
-                }
+                const pdfPath = await importDroppedMediaFile(this.api, this.mediaImportTransfers, 'pdf', file, `document-${Date.now()}.pdf`);
+                await this.loadFile(pdfPath);
             } catch (error) {
                 console.error('ImportPdfFile failed', error);
                 useUIStore.getState().setStatusMessage(`PDF取り込みに失敗: ${this.formatError(error)}`, 4000);
@@ -436,25 +399,6 @@ export class OverlayHost extends BaseComponent {
         }
     }
 
-    private async readFileAsBase64(file: File): Promise<string | null> {
-        if (!file.arrayBuffer) {
-            return null;
-        }
-        const buffer = await file.arrayBuffer();
-        return this.arrayBufferToBase64(buffer);
-    }
-
-    private arrayBufferToBase64(buffer: ArrayBuffer): string {
-        const bytes = new Uint8Array(buffer);
-        let binary = '';
-        const chunkSize = 0x8000;
-        for (let i = 0; i < bytes.length; i += chunkSize) {
-            const chunk = bytes.subarray(i, i + chunkSize);
-            binary += String.fromCharCode.apply(null, chunk as unknown as number[]);
-        }
-        return btoa(binary);
-    }
-
     private formatError(error: unknown): string {
         if (error instanceof Error) {
             return error.message;
@@ -463,6 +407,7 @@ export class OverlayHost extends BaseComponent {
     }
 
     destroy(): void {
+        this.mediaImportTransfers.destroy();
         this.unsubscribe.forEach((unsub) => unsub());
         this.unsubscribe = [];
     }

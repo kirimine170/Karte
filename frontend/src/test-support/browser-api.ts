@@ -24,17 +24,26 @@ function parseCsvContent(csvText) {
     return { headers, rows: dataRows };
 }
 
+function escapeCsvPreviewHtml(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 function buildCsvTableHtml(parsedCsv, sourcePath) {
     const headerCells = parsedCsv.headers
-        .map((cell) => `<th scope="col">${cell}</th>`)
+        .map((cell) => `<th scope="col">${escapeCsvPreviewHtml(cell)}</th>`)
         .join('');
     const bodyRows = parsedCsv.rows
-        .map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join('')}</tr>`)
+        .map((row) => `<tr>${row.map((cell) => `<td>${escapeCsvPreviewHtml(cell)}</td>`).join('')}</tr>`)
         .join('');
 
     return `
 <figure data-testid="csv-import" aria-label="CSV preview">
-    <figcaption>@import ${sourcePath}</figcaption>
+    <figcaption>@import ${escapeCsvPreviewHtml(sourcePath)}</figcaption>
     <table data-testid="csv-table">
         <thead><tr>${headerCells}</tr></thead>
         <tbody>${bodyRows}</tbody>
@@ -73,13 +82,94 @@ export function createBrowserApi() {
         return null;
     }
 
+    const mediaImportSessions = new Map();
+    let nextMediaImportSession = 1;
+
     return {
         async GetFileList() {
             return [
-                { path: 'content/README.md', title: 'README', modTime: '2026-06-06T08:00:00.000Z' },
-                { path: 'content/Test.md', title: 'Test Document', modTime: '2026-06-07T08:00:00.000Z' },
-                { path: 'content/Test.board.md', title: 'Test Board', modTime: '2026-06-05T08:00:00.000Z' }
+                { path: 'content/README.md', title: 'README', modTime: '2026-06-06T08:00:00.000Z', size: 128 },
+                { path: 'content/Test.md', title: 'Test Document', modTime: '2026-06-07T08:00:00.000Z', size: 128 },
+                { path: 'content/Test.board.md', title: 'Test Board', modTime: '2026-06-05T08:00:00.000Z', size: 128 }
             ];
+        },
+
+        async SearchFiles(query, page, limit) {
+            const files = await this.GetFileList();
+            const normalizedQuery = String(query || '').trim().toLowerCase();
+            const matches = [];
+            for (const file of files) {
+                const content = await this.LoadFile(file.path);
+                const searchText = `${file.path}\n${file.title || ''}\n${content}`.toLowerCase();
+                if (!normalizedQuery || searchText.includes(normalizedQuery)) {
+                    matches.push(file);
+                }
+            }
+            const normalizedPage = Number.isInteger(page) && page > 0 ? page : 1;
+            const normalizedLimit = Math.min(Number.isInteger(limit) && limit > 0 ? limit : 50, 100);
+            const start = (normalizedPage - 1) * normalizedLimit;
+            const items = matches.slice(start, start + normalizedLimit);
+            return {
+                items,
+                page: normalizedPage,
+                limit: normalizedLimit,
+                total: matches.length,
+                hasMore: start + items.length < matches.length,
+            };
+        },
+
+        async SearchResources(request) {
+            const query = String(request?.query || '').trim().toLowerCase();
+            const kinds = Array.isArray(request?.kinds) ? request.kinds : [];
+            const excluded = new Set(Array.isArray(request?.excludePaths) ? request.excludePaths : []);
+            const resources = [];
+            if (kinds.includes('markdown') || kinds.includes('pdf')) {
+                for (const file of await this.GetFileList()) {
+                    const kind = file.path.toLowerCase().endsWith('.pdf') ? 'pdf' : 'markdown';
+                    if (kinds.includes(kind)) {
+                        resources.push({
+                            kind,
+                            path: file.path,
+                            title: file.title || file.path,
+                            metadata: {
+                                name: file.path.split('/').pop() || file.path,
+                                extension: kind === 'pdf' ? '.pdf' : '.md',
+                                size: file.size || 0,
+                                modTime: file.modTime || '',
+                            },
+                        });
+                    }
+                }
+            }
+            if (kinds.includes('image')) {
+                for (const image of await this.GetImageList()) {
+                    resources.push({
+                        kind: 'image',
+                        path: image.path,
+                        title: image.name || image.path,
+                        metadata: { name: image.name || image.path, extension: '.webp', size: image.size || 0, modTime: image.modTime || '' },
+                    });
+                }
+            }
+            if (kinds.includes('csv')) {
+                for (const csv of await this.GetCsvList()) {
+                    resources.push({
+                        kind: 'csv',
+                        path: csv.path,
+                        title: csv.name || csv.path,
+                        metadata: { name: csv.name || csv.path, extension: '.csv', size: csv.size || 0, modTime: csv.modTime || '' },
+                    });
+                }
+            }
+            const matches = resources
+                .filter((item) => !excluded.has(item.path))
+                .filter((item) => !query || `${item.title}\n${item.path}\n${item.metadata.name}`.toLowerCase().includes(query))
+                .sort((left, right) => left.path.toLowerCase().localeCompare(right.path.toLowerCase()));
+            const page = Number.isInteger(request?.page) && request.page > 0 ? request.page : 1;
+            const limit = Math.min(Number.isInteger(request?.limit) && request.limit > 0 ? request.limit : 50, 100);
+            const start = (page - 1) * limit;
+            const items = matches.slice(start, start + limit);
+            return { items, query, kinds, page, limit, total: matches.length, hasMore: start + items.length < matches.length };
         },
 
         async LoadFile(path) {
@@ -214,6 +304,24 @@ export function createBrowserApi() {
             return [parsed.headers, ...parsed.rows];
         },
 
+        async GetCsvPage(request) {
+            const records = await this.GetCsvFile(request.path);
+            const header = records[0] || [];
+            const allRows = records.slice(1);
+            const start = (request.page - 1) * request.limit;
+            const rows = allRows.slice(start, start + request.limit);
+            return {
+                path: request.path,
+                header,
+                rows,
+                page: request.page,
+                limit: request.limit,
+                totalRows: allRows.length,
+                hasMore: start + rows.length < allRows.length,
+                revision: `browser-csv-${request.path}-${allRows.length}`,
+            };
+        },
+
         async GetCsvList() {
             return [
                 { path: 'data/csv/mock-1.csv', name: 'mock-1.csv', size: 512, modTime: '2026-06-07T10:00:00.000Z' },
@@ -223,6 +331,14 @@ export function createBrowserApi() {
 
         async SaveCsvFile() {
             return true;
+        },
+
+        async SaveCsvPage(request) {
+            return {
+                path: request.path,
+                revision: `browser-csv-saved-${Date.now()}`,
+                totalRows: request.rows.length,
+            };
         },
 
         async CreateNewFile(filename) {
@@ -258,6 +374,41 @@ export function createBrowserApi() {
         async ResolveConflict(path, strategy) {
             console.log('Mock ResolveConflict called:', path, strategy);
             return true;
+        },
+
+        async BeginMediaImport(kind, filename, declaredSize) {
+            const id = `browser-media-${nextMediaImportSession++}`;
+            mediaImportSessions.set(id, { kind, filename, declaredSize, offset: 0 });
+            return { id, chunkSize: 256 * 1024, maxBytes: kind === 'image' ? 64 * 1024 * 1024 : 512 * 1024 * 1024 };
+        },
+
+        async AppendMediaImportChunk(sessionId, expectedOffset, encodedChunk) {
+            const session = mediaImportSessions.get(sessionId);
+            if (!session || session.offset !== expectedOffset) {
+                throw new Error('Invalid browser media import offset');
+            }
+            session.offset += atob(encodedChunk).length;
+            return session.offset;
+        },
+
+        async FinishMediaImport(sessionId) {
+            const session = mediaImportSessions.get(sessionId);
+            if (!session || session.offset !== session.declaredSize) {
+                throw new Error('Incomplete browser media import');
+            }
+            mediaImportSessions.delete(sessionId);
+            const directory = session.kind === 'audio'
+                ? 'data/audio'
+                : session.kind === 'image'
+                    ? 'data/image'
+                    : session.kind === 'csv'
+                        ? 'data/csv'
+                        : 'content';
+            return `${directory}/mock-${Date.now()}-${session.filename}`;
+        },
+
+        async AbortMediaImport(sessionId) {
+            mediaImportSessions.delete(sessionId);
         },
 
         async ImportAudioFile(path) {
@@ -305,6 +456,16 @@ export function createBrowserApi() {
             return `content/mock-${Date.now()}.pdf`;
         },
 
+        async ImportCsvFile(path) {
+            console.log('Mock ImportCsvFile called:', path);
+            return `data/csv/mock-${Date.now()}.csv`;
+        },
+
+        async ImportCsvBase64(name, data) {
+            console.log('Mock ImportCsvBase64 called:', name, data.length);
+            return `data/csv/mock-${Date.now()}.csv`;
+        },
+
         async GetPdfFileURL(pdfPath) {
             console.log('Mock GetPdfFileURL called:', pdfPath);
             return `/pdf/${pdfPath}`;
@@ -349,7 +510,7 @@ export function createBrowserApi() {
 
         async StopRecording() {
             console.log('Mock StopRecording called');
-            return 'data/audio/mock-recording.m4a';
+            return 'data/audio/mock-recording.wav';
         },
 
         async IsRecording() {
@@ -371,7 +532,7 @@ export function createBrowserApi() {
             return true;
         },
 
-        async SaveEventLogs() {
+        async SaveEventLogs(_logsJson) {
             return true;
         }
     };

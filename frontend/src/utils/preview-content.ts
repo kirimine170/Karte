@@ -1,5 +1,5 @@
 import type { WailsAppAPI } from '../types/wails-api';
-import { parseCsvContent } from '../logic';
+import { CSV_PAGE_LIMIT, loadCsvPage } from './csv-page';
 
 const importArgsRegex = /([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*"([^"]*)"/g;
 const importCsvLineRegex = /^\s*@import\((.*?)\)\s*$/;
@@ -23,35 +23,11 @@ function escapeHtml(value: string): string {
         .replace(/'/g, '&#39;');
 }
 
-function buildCsvHtmlTableFromText(csvText: string): string {
-    const { headers, rows } = parseCsvContent(csvText);
-    if (headers.length === 0 && rows.length === 0) {
-        return '';
-    }
-    const columnHeaders = headers.length > 0
-        ? headers
-        : (rows[0] || []).map((_, index) => `Column ${index + 1}`);
-    const headerCells = columnHeaders.map((cell) => `<th>${escapeHtml(String(cell))}</th>`).join('');
-    const bodyRows = rows.map((row) => {
-        const cells = columnHeaders.map((_, index) => {
-            const cell = row[index] ?? '';
-            return `<td>${escapeHtml(String(cell))}</td>`;
-        }).join('');
-        return `<tr>${cells}</tr>`;
-    }).join('');
-    return `<table><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table>`;
-}
-
 async function resolveCsvImportToHtml(path: string, api: WailsAppAPI): Promise<string> {
     try {
-        if (path.startsWith('content/')) {
-            const csvText = await api.LoadFile(path);
-            const table = buildCsvHtmlTableFromText(csvText);
-            return table || `@import(type="csv", path="${path}")`;
-        }
-        const data = await api.GetCsvFile(path);
-        const headers = data[0] || [];
-        const rows = data.slice(1);
+        const page = await loadCsvPage(api, { path, page: 1, limit: CSV_PAGE_LIMIT });
+        const headers = page.header;
+        const rows = page.rows;
         const headerCells = headers.map((cell) => `<th>${escapeHtml(String(cell ?? ''))}</th>`).join('');
         const bodyRows = rows.map((row) => {
             const cells = headers.map((_, index) => {
@@ -60,7 +36,10 @@ async function resolveCsvImportToHtml(path: string, api: WailsAppAPI): Promise<s
             }).join('');
             return `<tr>${cells}</tr>`;
         }).join('');
-        const table = `<table><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table>`;
+        const notice = page.hasMore
+            ? `<p class="csv-preview-truncated">先頭${rows.length}行を表示しています（全${page.totalRows}行）</p>`
+            : '';
+        const table = `<table><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table>${notice}`;
         return table || `@import(type="csv", path="${path}")`;
     } catch (error) {
         console.error('Failed to resolve CSV import:', error);

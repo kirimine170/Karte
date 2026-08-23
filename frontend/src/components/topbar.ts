@@ -313,11 +313,14 @@ export class Topbar extends BaseComponent {
 
         // Doc Store
         this.unsubscribe.push(
-            useDocStore.subscribe((state) => {
-                if (this.saveBtn) {
-                    this.toggleClass(this.saveBtn, 'unsaved', state.hasUnsavedChanges);
+            useDocStore.subscribe(
+                (state) => state.hasUnsavedChanges,
+                (hasUnsavedChanges) => {
+                    if (this.saveBtn) {
+                        this.toggleClass(this.saveBtn, 'unsaved', hasUnsavedChanges);
+                    }
                 }
-            })
+            )
         );
 
         // Custom CSS Store

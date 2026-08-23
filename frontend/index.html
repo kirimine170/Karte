@@ -85,6 +85,11 @@
         <div class="preview-pane">
           <div class="preview-pane-header">
             <h3>プレビュー</h3>
+            <div class="preview-page-controls" id="previewPageControls" hidden>
+              <button class="btn preview-nav-btn" id="previewPrevBtn" type="button" title="前のページ" aria-label="前のページ">←</button>
+              <span class="preview-page-info" id="previewPageInfo" aria-live="polite">-</span>
+              <button class="btn preview-nav-btn" id="previewNextBtn" type="button" title="次のページ" aria-label="次のページ">→</button>
+            </div>
           </div>
           <div class="preview-container">
             <div id="audioPlayerContainer" class="audio-player-container" style="display: none;">
@@ -313,6 +318,11 @@
           <thead id="csvEditTableHead"></thead>
           <tbody id="csvEditTableBody"></tbody>
         </table>
+      </div>
+      <div class="modal-actions" aria-label="CSVページ操作">
+        <button id="csvPrevPageBtn" class="btn btn-secondary" type="button">前のページ</button>
+        <span id="csvPageLabel" aria-live="polite">1 / 1</span>
+        <button id="csvNextPageBtn" class="btn btn-secondary" type="button">次のページ</button>
       </div>
       <div style="display: flex; gap: 10px; margin-bottom: 15px;">
         <button id="csvAddRowBtn" class="btn">行を追加</button>
