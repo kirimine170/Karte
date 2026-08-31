@@ -1,0 +1,3 @@
+# Architecture Decision Records
+
+Karteの持続的なarchitecture判断と理由をこのdirectoryで管理する．

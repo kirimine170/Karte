@@ -2014,6 +2014,75 @@
   font-size: 14px;
 }
 
+.ephy-review-content {
+  width: min(1100px, 94vw);
+  max-height: 92vh;
+  overflow: auto;
+}
+
+.ephy-review-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr);
+  gap: 16px;
+}
+
+.ephy-proposal-select,
+.ephy-review-editor {
+  width: 100%;
+  box-sizing: border-box;
+  color: var(--text-color);
+  background: var(--input-color-unhover);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+.ephy-proposal-select {
+  margin: 6px 0 14px;
+  padding: 8px;
+}
+
+.ephy-review-editor {
+  min-height: 150px;
+  padding: 10px;
+  resize: vertical;
+  white-space: pre-wrap;
+}
+
+.ephy-body-editor {
+  min-height: 220px;
+}
+
+.ephy-review-pre {
+  max-height: 260px;
+  overflow: auto;
+  padding: 10px;
+  color: var(--text-color);
+  background: var(--input-color-unhover);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ephy-proposal-errors {
+  margin-bottom: 12px;
+  padding: 10px;
+  color: var(--color-error-text, #8b1e1e);
+  background: var(--color-error-bg, #fff0f0);
+  border-radius: 6px;
+  white-space: pre-wrap;
+}
+
+.ephy-hidden {
+  display: none;
+}
+
+@media (max-width: 820px) {
+  .ephy-review-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 #board-tab {
   height: 100%;
 }

@@ -9,6 +9,7 @@ import { ModalHost } from './components/modal-host';
 import { OverlayHost } from './components/overlay-host';
 import { ImageGallery } from './components/image-gallery';
 import { CsvGallery } from './components/csv-gallery';
+import { EphyReview } from './components/ephy-review';
 import { getWailsAppAPI, getWailsRuntimeAPI } from './api/wails-api';
 import { useUIStore, useDocStore, useASRStore, useExportStore, useModalStore, useCustomCssStore, useBoardStore } from './stores/index';
 import { getASRStatusPollingDecision, markASRInitializationStopped } from './utils/asr-status';
@@ -33,6 +34,7 @@ export class App {
         overlayHost: OverlayHost | null;
         imageGallery: ImageGallery | null;
         csvGallery: CsvGallery | null;
+        ephyReview: EphyReview | null;
     } = {
             topbar: null,
             sidebar: null,
@@ -44,6 +46,7 @@ export class App {
             overlayHost: null,
             imageGallery: null,
             csvGallery: null,
+            ephyReview: null,
         };
 
     async init(): Promise<void> {
@@ -123,6 +126,9 @@ export class App {
 
         this.components.csvGallery = new CsvGallery(this.api);
         this.components.csvGallery.init();
+
+        this.components.ephyReview = new EphyReview(this.api);
+        this.components.ephyReview.init();
 
         await this.loadCustomCss();
 

@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "candidate_id": "candidate-create-001",
+  "operation": "create",
+  "target_doc_id": null,
+  "target_relative_path": "content/ephy/new-memory.md",
+  "base_sha256": null,
+  "proposed_frontmatter": {
+    "title": "Synthetic memory",
+    "tags": "ephy, reviewed"
+  },
+  "proposed_body": "# Synthetic memory\n\nThis fixture contains no personal data.",
+  "source_refs": [
+    {
+      "type": "synthetic-test",
+      "reference": "fixture://conversation/001"
+    }
+  ],
+  "sensitivity": "restricted",
+  "created_at": "2026-08-29T00:00:00Z"
+}

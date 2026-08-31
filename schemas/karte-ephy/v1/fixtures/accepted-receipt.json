@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "candidate_id": "candidate-update-001",
+  "result": "accepted",
+  "doc_id": "doc:synthetic-001",
+  "relative_path": "content/existing.md",
+  "resulting_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "processed_at": "2026-08-29T00:02:00Z",
+  "error_code": null,
+  "message": "Accepted after human review."
+}
