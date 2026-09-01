@@ -13,9 +13,19 @@ import (
 	"time"
 )
 
-const SchemaVersion = "1.0"
+const SchemaVersion = "1.1"
 
-var candidateIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+var (
+	candidateIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+	projectPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+	filenamePattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}\.md$`)
+	yearMonthPattern   = regexp.MustCompile(`^[0-9]{4}-(0[1-9]|1[0-2])$`)
+	supportedKinds     = map[string]bool{
+		"note": true, "meeting": true, "decision": true, "plan": true,
+		"task": true, "research": true, "reference": true, "report": true,
+		"person": true, "organization": true, "journal": true,
+	}
+)
 
 type SourceRef struct {
 	Type      string `json:"type"`
@@ -23,15 +33,35 @@ type SourceRef struct {
 	SHA256    string `json:"sha256,omitempty"`
 }
 
+type PlacementCandidate struct {
+	Project    string   `json:"project"`
+	Kind       string   `json:"kind"`
+	Confidence *float64 `json:"confidence"`
+	Reason     string   `json:"reason"`
+}
+
+type PlacementHint struct {
+	Project              string               `json:"project"`
+	Kind                 string               `json:"kind"`
+	YearMonth            string               `json:"year_month"`
+	Confidence           *float64             `json:"confidence"`
+	PreferredFilename    string               `json:"preferred_filename"`
+	Candidates           []PlacementCandidate `json:"candidates"`
+	ConsultationRequired bool                 `json:"consultation_required"`
+	ConsultationQuestion *string              `json:"consultation_question"`
+}
+
 type Proposal struct {
 	SchemaVersion       string         `json:"schema_version"`
 	CandidateID         string         `json:"candidate_id"`
 	Operation           string         `json:"operation"`
 	TargetDocID         *string        `json:"target_doc_id"`
-	TargetRelativePath  string         `json:"target_relative_path"`
+	TargetRelativePath  *string        `json:"target_relative_path"`
 	BaseSHA256          *string        `json:"base_sha256"`
+	AppendPosition      *string        `json:"append_position"`
 	ProposedFrontmatter map[string]any `json:"proposed_frontmatter"`
 	ProposedBody        string         `json:"proposed_body"`
+	Placement           PlacementHint  `json:"placement"`
 	SourceRefs          []SourceRef    `json:"source_refs"`
 	Sensitivity         string         `json:"sensitivity"`
 	CreatedAt           string         `json:"created_at"`
@@ -57,11 +87,16 @@ type ProposalError struct {
 }
 
 type ProposalReview struct {
-	Proposal        Proposal `json:"proposal"`
-	CurrentContent  string   `json:"current_content"`
-	ProposedContent string   `json:"proposed_content"`
-	Diff            string   `json:"diff"`
-	CurrentSHA256   *string  `json:"current_sha256"`
+	Proposal              Proposal `json:"proposal"`
+	CurrentContent        string   `json:"current_content"`
+	ProposedContent       string   `json:"proposed_content"`
+	Diff                  string   `json:"diff"`
+	CurrentSHA256         *string  `json:"current_sha256"`
+	ResolvedDocID         string   `json:"resolved_doc_id"`
+	ResolvedRelativePath  string   `json:"resolved_relative_path"`
+	RoutingReason         string   `json:"routing_reason"`
+	PlacementAlternatives []string `json:"placement_alternatives"`
+	ContentWarnings       []string `json:"content_warnings"`
 }
 
 type Inbox struct {
@@ -139,7 +174,12 @@ func (proposal Proposal) Validate() error {
 	if !candidateIDPattern.MatchString(proposal.CandidateID) {
 		return fmt.Errorf("invalid candidate_id")
 	}
-	if err := ValidateContentPath(proposal.TargetRelativePath); err != nil {
+	if proposal.TargetRelativePath != nil {
+		if err := ValidateContentPath(*proposal.TargetRelativePath); err != nil {
+			return err
+		}
+	}
+	if err := proposal.Placement.Validate(); err != nil {
 		return err
 	}
 	if len(proposal.ProposedFrontmatter) > 64 {
@@ -178,15 +218,24 @@ func (proposal Proposal) Validate() error {
 
 	switch proposal.Operation {
 	case "create":
-		if proposal.TargetDocID != nil || proposal.BaseSHA256 != nil {
-			return fmt.Errorf("create requires null target_doc_id and base_sha256")
+		if proposal.TargetDocID != nil || proposal.TargetRelativePath != nil || proposal.BaseSHA256 != nil || proposal.AppendPosition != nil {
+			return fmt.Errorf("create lets Karte choose the path and requires null target identity")
 		}
-	case "update":
+	case "append":
 		if proposal.TargetDocID == nil || strings.TrimSpace(*proposal.TargetDocID) == "" {
-			return fmt.Errorf("update requires target_doc_id")
+			return fmt.Errorf("append requires target_doc_id")
+		}
+		if proposal.TargetRelativePath == nil {
+			return fmt.Errorf("append requires target_relative_path")
 		}
 		if proposal.BaseSHA256 == nil || !isSHA256(*proposal.BaseSHA256) {
-			return fmt.Errorf("update requires base_sha256")
+			return fmt.Errorf("append requires base_sha256")
+		}
+		if proposal.AppendPosition == nil || *proposal.AppendPosition != "document_end" {
+			return fmt.Errorf("append currently supports document_end only")
+		}
+		if strings.TrimSpace(proposal.ProposedBody) == "" && len(proposal.ProposedFrontmatter) == 0 {
+			return fmt.Errorf("append must propose a body fragment or frontmatter patch")
 		}
 		if value, ok := proposal.ProposedFrontmatter["doc_id"]; ok {
 			docID, ok := value.(string)
@@ -196,6 +245,54 @@ func (proposal Proposal) Validate() error {
 		}
 	default:
 		return fmt.Errorf("unsupported operation")
+	}
+	return nil
+}
+
+func (placement PlacementHint) Validate() error {
+	if !projectPattern.MatchString(placement.Project) || !supportedKinds[placement.Kind] {
+		return fmt.Errorf("placement project or kind is invalid")
+	}
+	if !yearMonthPattern.MatchString(placement.YearMonth) || !filenamePattern.MatchString(placement.PreferredFilename) {
+		return fmt.Errorf("placement year_month or preferred_filename is invalid")
+	}
+	if placement.Confidence == nil || *placement.Confidence < 0 || *placement.Confidence > 1 {
+		return fmt.Errorf("placement confidence must be between 0 and 1")
+	}
+	if len(placement.Candidates) == 0 || len(placement.Candidates) > 3 {
+		return fmt.Errorf("placement candidates must contain between 1 and 3 entries")
+	}
+	selectedIncluded := false
+	for _, candidate := range placement.Candidates {
+		if !projectPattern.MatchString(candidate.Project) || !supportedKinds[candidate.Kind] {
+			return fmt.Errorf("placement candidate project or kind is invalid")
+		}
+		if candidate.Confidence == nil || *candidate.Confidence < 0 || *candidate.Confidence > 1 {
+			return fmt.Errorf("placement candidate confidence must be between 0 and 1")
+		}
+		if strings.TrimSpace(candidate.Reason) == "" || len(candidate.Reason) > 512 {
+			return fmt.Errorf("placement candidate reason is invalid")
+		}
+		if candidate.Project == placement.Project && candidate.Kind == placement.Kind {
+			selectedIncluded = true
+		}
+	}
+	if !selectedIncluded {
+		return fmt.Errorf("placement candidates must include the selected project and kind")
+	}
+	if placement.ConsultationRequired {
+		if placement.ConsultationQuestion == nil || strings.TrimSpace(*placement.ConsultationQuestion) == "" {
+			return fmt.Errorf("consultation_required placement needs a consultation_question")
+		}
+	} else if placement.ConsultationQuestion != nil {
+		return fmt.Errorf("resolved placement cannot retain a consultation_question")
+	}
+	return nil
+}
+
+func (proposal Proposal) RequirePublishable() error {
+	if proposal.Placement.ConsultationRequired {
+		return fmt.Errorf("Ephy must resolve placement consultation before publishing the proposal")
 	}
 	return nil
 }
@@ -239,7 +336,7 @@ func ValidateContentPath(value string) error {
 		return fmt.Errorf("target_relative_path must use a relative forward-slash path")
 	}
 	cleaned := path.Clean(value)
-	if cleaned != value || !strings.HasPrefix(cleaned, "content/") || strings.EqualFold(path.Ext(cleaned), ".md") == false {
+	if cleaned != value || !strings.HasPrefix(cleaned, "content/") || !strings.EqualFold(path.Ext(cleaned), ".md") {
 		return fmt.Errorf("target_relative_path must name a Markdown file below content")
 	}
 	for _, part := range strings.Split(cleaned, "/") {
@@ -248,6 +345,14 @@ func ValidateContentPath(value string) error {
 		}
 	}
 	return nil
+}
+
+func DeriveCreateDocID(candidateID string) (string, error) {
+	if !candidateIDPattern.MatchString(candidateID) {
+		return "", fmt.Errorf("invalid candidate_id")
+	}
+	digest := sha256.Sum256([]byte("karte-ephy-v1.1:" + candidateID))
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func SHA256Bytes(data []byte) string {

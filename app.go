@@ -2119,8 +2119,15 @@ func (a *App) SaveFile(path, content string) error {
 	return nil
 }
 
-// ListEphyProposals returns validated proposals plus non-sensitive validation errors.
-// It never mutates canonical content or proposal files.
+type ephyResolvedProposal struct {
+	Decision        ephyoutbox.PlacementDecision
+	CurrentContent  string
+	CurrentSHA256   *string
+	ProposedContent string
+	Warnings        []string
+}
+
+// ListEphyProposals derives Karte-owned create paths without mutating canonical content.
 func (a *App) ListEphyProposals() (*ephyoutbox.Inbox, error) {
 	store, err := ephyoutbox.NewStore(a.dataDir)
 	if err != nil {
@@ -2133,44 +2140,93 @@ func (a *App) ListEphyProposals() (*ephyoutbox.Inbox, error) {
 	inbox := &ephyoutbox.Inbox{Proposals: []ephyoutbox.ProposalReview{}, Errors: proposalErrors}
 	for _, proposal := range proposals {
 		if receipt, receiptErr := store.ReadReceipt(proposal.CandidateID); receiptErr != nil {
-			inbox.Errors = append(inbox.Errors, ephyoutbox.ProposalError{Filename: proposal.CandidateID + ".json", CandidateID: proposal.CandidateID, Code: "receipt_read_failed", Message: "existing receipt could not be read"})
+			inbox.Errors = append(inbox.Errors, ephyProposalError(proposal, "receipt_read_failed", "existing receipt could not be read"))
 			continue
 		} else if receipt != nil {
-			inbox.Errors = append(inbox.Errors, ephyoutbox.ProposalError{Filename: proposal.CandidateID + ".json", CandidateID: proposal.CandidateID, Code: "processed_" + receipt.Result, Message: "proposal already has a final receipt"})
+			inbox.Errors = append(inbox.Errors, ephyProposalError(proposal, "processed_"+receipt.Result, "proposal already has a final receipt"))
 			continue
 		}
-		proposedContent, renderErr := renderEphyProposalContent(proposal.ProposedFrontmatter, proposal.ProposedBody)
-		if renderErr != nil {
-			inbox.Errors = append(inbox.Errors, ephyoutbox.ProposalError{Filename: proposal.CandidateID + ".json", CandidateID: proposal.CandidateID, Code: "invalid_frontmatter", Message: renderErr.Error()})
-			continue
-		}
-		absPath, ok := a.resolveContentPath(proposal.TargetRelativePath)
-		if !ok {
-			inbox.Errors = append(inbox.Errors, ephyoutbox.ProposalError{Filename: proposal.CandidateID + ".json", CandidateID: proposal.CandidateID, Code: "invalid_target_path", Message: "target path escapes canonical content"})
-			continue
-		}
-		currentContent := ""
-		var currentSHA *string
-		if current, readErr := os.ReadFile(absPath); readErr == nil {
-			currentContent = string(current)
-			digest := ephyoutbox.SHA256Bytes(current)
-			currentSHA = &digest
-		} else if !os.IsNotExist(readErr) {
-			inbox.Errors = append(inbox.Errors, ephyoutbox.ProposalError{Filename: proposal.CandidateID + ".json", CandidateID: proposal.CandidateID, Code: "target_read_failed", Message: "target document could not be read"})
+		resolved, resolveErr := a.resolveEphyProposal(proposal)
+		if resolveErr != nil {
+			inbox.Errors = append(inbox.Errors, ephyProposalError(proposal, "proposal_not_reviewable", resolveErr.Error()))
 			continue
 		}
 		inbox.Proposals = append(inbox.Proposals, ephyoutbox.ProposalReview{
-			Proposal:        proposal,
-			CurrentContent:  currentContent,
-			ProposedContent: proposedContent,
-			Diff:            buildEphyProposalDiff(currentContent, proposedContent),
-			CurrentSHA256:   currentSHA,
+			Proposal: proposal, CurrentContent: resolved.CurrentContent, ProposedContent: resolved.ProposedContent,
+			Diff: buildEphyProposalDiff(resolved.CurrentContent, resolved.ProposedContent), CurrentSHA256: resolved.CurrentSHA256,
+			ResolvedDocID: resolved.Decision.DocID, ResolvedRelativePath: resolved.Decision.RelativePath,
+			RoutingReason: resolved.Decision.Reason, PlacementAlternatives: resolved.Decision.Alternatives,
+			ContentWarnings: resolved.Warnings,
 		})
 	}
 	return inbox, nil
 }
 
+func ephyProposalError(proposal ephyoutbox.Proposal, code, message string) ephyoutbox.ProposalError {
+	return ephyoutbox.ProposalError{Filename: proposal.CandidateID + ".json", CandidateID: proposal.CandidateID, Code: code, Message: message}
+}
+
+func (a *App) resolveEphyProposal(proposal ephyoutbox.Proposal) (*ephyResolvedProposal, error) {
+	if err := proposal.RequirePublishable(); err != nil {
+		return nil, err
+	}
+	docID := ""
+	if proposal.Operation == "create" {
+		var err error
+		docID, err = ephyoutbox.DeriveCreateDocID(proposal.CandidateID)
+		if err != nil {
+			return nil, err
+		}
+	} else if proposal.TargetDocID != nil {
+		docID = *proposal.TargetDocID
+	}
+	decision, err := ephyoutbox.ResolvePlacement(a.dataDir, proposal, docID)
+	if err != nil {
+		return nil, err
+	}
+	absPath, ok := a.resolveContentPath(decision.RelativePath)
+	if !ok {
+		return nil, fmt.Errorf("resolved target path escapes canonical content")
+	}
+	resolved := &ephyResolvedProposal{Decision: decision, Warnings: []string{}}
+	current, readErr := os.ReadFile(absPath)
+	if readErr == nil {
+		resolved.CurrentContent = string(current)
+		digest := ephyoutbox.SHA256Bytes(current)
+		resolved.CurrentSHA256 = &digest
+	} else if !os.IsNotExist(readErr) {
+		return nil, fmt.Errorf("target document could not be read")
+	}
+	if proposal.Operation == "create" {
+		frontmatter := cloneStringMap(proposal.ProposedFrontmatter)
+		frontmatter["doc_id"] = docID
+		frontmatter["project"] = proposal.Placement.Project
+		frontmatter["kind"] = proposal.Placement.Kind
+		resolved.ProposedContent, err = renderEphyProposalContent(frontmatter, proposal.ProposedBody)
+		return resolved, err
+	}
+	if readErr != nil {
+		return nil, fmt.Errorf("append target is missing")
+	}
+	frontmatter, body, parseErr := parseEphyCanonicalContent(resolved.CurrentContent)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	if err := validateEphyAppendTarget(proposal, frontmatter); err != nil {
+		return nil, err
+	}
+	if _, ok := frontmatter["project"]; !ok {
+		resolved.Warnings = append(resolved.Warnings, "Canonical frontmatter has no project field.")
+	}
+	if _, ok := frontmatter["kind"]; !ok {
+		resolved.Warnings = append(resolved.Warnings, "Canonical frontmatter has no kind field.")
+	}
+	resolved.ProposedContent, err = buildEphyAppendContent(frontmatter, body, proposal.ProposedFrontmatter, proposal.ProposedBody, docID)
+	return resolved, err
+}
+
 // AcceptEphyProposal persists reviewed content only through SaveFile and then writes a receipt.
+// For append，editedBody is a fragment and editedFrontmatter is a patch.
 func (a *App) AcceptEphyProposal(candidateID string, editedFrontmatter map[string]any, editedBody string) (*ephyoutbox.Receipt, error) {
 	store, err := ephyoutbox.NewStore(a.dataDir)
 	if err != nil {
@@ -2185,9 +2241,11 @@ func (a *App) AcceptEphyProposal(candidateID string, editedFrontmatter map[strin
 		_ = store.RemoveTransaction(candidateID)
 		return existing, nil
 	}
-
 	proposal, err := store.ReadPending(candidateID)
 	if err != nil {
+		return nil, err
+	}
+	if err := proposal.RequirePublishable(); err != nil {
 		return nil, err
 	}
 	transaction, err := store.ReadTransaction(candidateID)
@@ -2197,14 +2255,26 @@ func (a *App) AcceptEphyProposal(candidateID string, editedFrontmatter map[strin
 	if transaction != nil && transaction.State == "saved" && transaction.ResultingSHA256 != nil {
 		return a.finishSavedEphyTransaction(store, transaction)
 	}
-
-	absPath, ok := a.resolveContentPath(proposal.TargetRelativePath)
-	if !ok {
-		return a.finishEphyConflict(store, proposal, "invalid_target_path", "Target path is outside canonical content.")
+	docID := ""
+	if proposal.Operation == "create" {
+		docID, err = ephyoutbox.DeriveCreateDocID(proposal.CandidateID)
+	} else if proposal.TargetDocID != nil {
+		docID = *proposal.TargetDocID
 	}
-	// A process can stop after SaveFile succeeds but before the transaction is
-	// advanced from prepared to saved.  If canonical bytes exactly match the
-	// reviewed transaction，recover the receipt without invoking SaveFile again.
+	if err != nil {
+		return nil, err
+	}
+	decision, err := ephyoutbox.ResolvePlacement(a.dataDir, proposal, docID)
+	if err != nil {
+		return nil, err
+	}
+	if transaction != nil {
+		decision.RelativePath, decision.DocID = transaction.RelativePath, transaction.DocID
+	}
+	absPath, ok := a.resolveContentPath(decision.RelativePath)
+	if !ok {
+		return a.finishEphyConflict(store, proposal.CandidateID, optionalString(docID), optionalString(decision.RelativePath), "invalid_target_path", "Target path is outside canonical content.")
+	}
 	if transaction != nil && transaction.State == "prepared" {
 		current, recoveryErr := os.ReadFile(absPath)
 		if recoveryErr == nil && string(current) == transaction.PreparedContent && fm.ExtractDocID(string(current)) == transaction.DocID {
@@ -2220,63 +2290,59 @@ func (a *App) AcceptEphyProposal(candidateID string, editedFrontmatter map[strin
 	current, readErr := os.ReadFile(absPath)
 	if proposal.Operation == "create" {
 		if readErr == nil {
-			return a.finishEphyConflict(store, proposal, "target_exists", "Create target already exists.")
+			return a.finishEphyConflict(store, proposal.CandidateID, &docID, &decision.RelativePath, "target_exists", "Create target already exists.")
 		}
 		if !os.IsNotExist(readErr) {
 			return nil, fmt.Errorf("read create target: %w", readErr)
 		}
 	} else {
 		if readErr != nil {
-			return a.finishEphyConflict(store, proposal, "target_missing", "Update target is missing.")
+			return a.finishEphyConflict(store, proposal.CandidateID, proposal.TargetDocID, proposal.TargetRelativePath, "target_missing", "Append target is missing.")
 		}
 		currentSHA := ephyoutbox.SHA256Bytes(current)
 		if proposal.BaseSHA256 == nil || currentSHA != *proposal.BaseSHA256 {
-			return a.finishEphyConflict(store, proposal, "stale_base_sha256", "Canonical content changed after proposal creation.")
+			return a.finishEphyConflict(store, proposal.CandidateID, proposal.TargetDocID, proposal.TargetRelativePath, "stale_base_sha256", "Canonical content changed after proposal creation.")
 		}
 		if proposal.TargetDocID == nil || fm.ExtractDocID(string(current)) != *proposal.TargetDocID {
-			return a.finishEphyConflict(store, proposal, "target_doc_id_mismatch", "Canonical doc_id does not match the proposal target.")
+			return a.finishEphyConflict(store, proposal.CandidateID, proposal.TargetDocID, proposal.TargetRelativePath, "target_doc_id_mismatch", "Canonical doc_id does not match the proposal target.")
 		}
 	}
-
 	frontmatter := cloneStringMap(proposal.ProposedFrontmatter)
 	if editedFrontmatter != nil {
 		frontmatter = cloneStringMap(editedFrontmatter)
 	}
 	body := editedBody
+	prepared := ""
 	if proposal.Operation == "create" {
-		delete(frontmatter, "doc_id")
+		frontmatter["doc_id"] = docID
+		frontmatter["project"] = proposal.Placement.Project
+		frontmatter["kind"] = proposal.Placement.Kind
+		prepared, err = renderEphyProposalContent(frontmatter, body)
 	} else {
-		frontmatter["doc_id"] = *proposal.TargetDocID
+		currentFrontmatter, currentBody, parseErr := parseEphyCanonicalContent(string(current))
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		if matchErr := validateEphyAppendTarget(proposal, currentFrontmatter); matchErr != nil {
+			return a.finishEphyConflict(store, proposal.CandidateID, proposal.TargetDocID, proposal.TargetRelativePath, "target_content_mismatch", matchErr.Error())
+		}
+		prepared, err = buildEphyAppendContent(currentFrontmatter, currentBody, frontmatter, body, docID)
 	}
-	prepared, err := renderEphyProposalContent(frontmatter, body)
 	if err != nil {
 		return nil, err
-	}
-	prepared, docID, err := a.ensureDocID(prepared)
-	if err != nil {
-		return nil, err
-	}
-	if proposal.Operation == "update" && proposal.TargetDocID != nil && docID != *proposal.TargetDocID {
-		return a.finishEphyConflict(store, proposal, "target_doc_id_mismatch", "Edited content changed doc_id.")
 	}
 	if transaction == nil {
 		transaction = &ephyoutbox.Transaction{
-			SchemaVersion:   ephyoutbox.SchemaVersion,
-			CandidateID:     proposal.CandidateID,
-			RelativePath:    proposal.TargetRelativePath,
-			DocID:           docID,
-			BaseSHA256:      proposal.BaseSHA256,
-			PreparedContent: prepared,
-			State:           "prepared",
-			StartedAt:       time.Now().UTC().Format(time.RFC3339Nano),
+			SchemaVersion: ephyoutbox.SchemaVersion, CandidateID: proposal.CandidateID,
+			RelativePath: decision.RelativePath, DocID: docID, BaseSHA256: proposal.BaseSHA256,
+			PreparedContent: prepared, State: "prepared", StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		}
 		if err := store.WriteTransaction(*transaction); err != nil {
 			return nil, err
 		}
-	} else if transaction.PreparedContent != prepared || transaction.RelativePath != proposal.TargetRelativePath {
+	} else if transaction.PreparedContent != prepared || transaction.RelativePath != decision.RelativePath {
 		return nil, fmt.Errorf("candidate transaction already exists with different reviewed content")
 	}
-
 	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create canonical parent directory: %w", err)
 	}
@@ -2284,15 +2350,14 @@ func (a *App) AcceptEphyProposal(candidateID string, editedFrontmatter map[strin
 	if saveFile == nil {
 		saveFile = a.SaveFile
 	}
-	if err := saveFile(proposal.TargetRelativePath, transaction.PreparedContent); err != nil {
+	if err := saveFile(decision.RelativePath, transaction.PreparedContent); err != nil {
 		return nil, err
 	}
 	resulting, err := os.ReadFile(absPath)
 	if err != nil {
 		return nil, fmt.Errorf("read accepted canonical content: %w", err)
 	}
-	resultingDocID := fm.ExtractDocID(string(resulting))
-	if resultingDocID == "" || resultingDocID != transaction.DocID {
+	if resultingDocID := fm.ExtractDocID(string(resulting)); resultingDocID == "" || resultingDocID != transaction.DocID {
 		return nil, fmt.Errorf("accepted canonical doc_id does not match reviewed transaction")
 	}
 	resultingSHA := ephyoutbox.SHA256Bytes(resulting)
@@ -2324,13 +2389,24 @@ func (a *App) RejectEphyProposal(candidateID, message string) (*ephyoutbox.Recei
 	if len(message) > 2048 {
 		return nil, fmt.Errorf("rejection message is too long")
 	}
-	relativePath := proposal.TargetRelativePath
+	var docID *string
+	var relativePath *string
+	if proposal.Operation == "create" {
+		derived, deriveErr := ephyoutbox.DeriveCreateDocID(proposal.CandidateID)
+		if deriveErr == nil {
+			if decision, placementErr := ephyoutbox.ResolvePlacement(a.dataDir, proposal, derived); placementErr == nil {
+				docID, relativePath = &derived, &decision.RelativePath
+			}
+		}
+	} else {
+		docID, relativePath = proposal.TargetDocID, proposal.TargetRelativePath
+	}
 	receipt := ephyoutbox.Receipt{
 		SchemaVersion: ephyoutbox.SchemaVersion,
 		CandidateID:   proposal.CandidateID,
 		Result:        "rejected",
-		DocID:         proposal.TargetDocID,
-		RelativePath:  &relativePath,
+		DocID:         docID,
+		RelativePath:  relativePath,
 		ProcessedAt:   time.Now().UTC().Format(time.RFC3339Nano),
 		Message:       optionalString(message),
 	}
@@ -2381,14 +2457,13 @@ func (a *App) finishSavedEphyTransaction(store *ephyoutbox.Store, transaction *e
 	return &receipt, nil
 }
 
-func (a *App) finishEphyConflict(store *ephyoutbox.Store, proposal ephyoutbox.Proposal, errorCode, message string) (*ephyoutbox.Receipt, error) {
-	relativePath := proposal.TargetRelativePath
+func (a *App) finishEphyConflict(store *ephyoutbox.Store, candidateID string, docID, relativePath *string, errorCode, message string) (*ephyoutbox.Receipt, error) {
 	receipt := ephyoutbox.Receipt{
 		SchemaVersion: ephyoutbox.SchemaVersion,
-		CandidateID:   proposal.CandidateID,
+		CandidateID:   candidateID,
 		Result:        "conflict",
-		DocID:         proposal.TargetDocID,
-		RelativePath:  &relativePath,
+		DocID:         docID,
+		RelativePath:  relativePath,
 		ProcessedAt:   time.Now().UTC().Format(time.RFC3339Nano),
 		ErrorCode:     &errorCode,
 		Message:       &message,
@@ -2412,6 +2487,73 @@ func renderEphyProposalContent(frontmatter map[string]any, body string) (string,
 		return "", fmt.Errorf("encode proposed frontmatter: %w", err)
 	}
 	return "---\n" + string(yamlBytes) + "---\n" + body, nil
+}
+
+func parseEphyCanonicalContent(content string) (map[string]any, string, error) {
+	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	if !strings.HasPrefix(normalized, "---\n") {
+		return nil, "", fmt.Errorf("canonical Markdown requires YAML frontmatter")
+	}
+	remainder := strings.TrimPrefix(normalized, "---\n")
+	closing := strings.Index(remainder, "\n---\n")
+	if closing < 0 {
+		return nil, "", fmt.Errorf("canonical Markdown frontmatter is not closed")
+	}
+	frontmatter := map[string]any{}
+	if err := yaml.Unmarshal([]byte(remainder[:closing]), &frontmatter); err != nil {
+		return nil, "", fmt.Errorf("decode canonical frontmatter: %w", err)
+	}
+	if len(frontmatter) == 0 {
+		return nil, "", fmt.Errorf("canonical frontmatter must be a mapping")
+	}
+	return frontmatter, remainder[closing+len("\n---\n"):], nil
+}
+
+func validateEphyAppendTarget(proposal ephyoutbox.Proposal, frontmatter map[string]any) error {
+	if proposal.TargetDocID == nil {
+		return fmt.Errorf("append requires target_doc_id")
+	}
+	docID, ok := frontmatter["doc_id"].(string)
+	if !ok || docID != *proposal.TargetDocID {
+		return fmt.Errorf("canonical doc_id does not match the append target")
+	}
+	for key, expected := range map[string]string{"project": proposal.Placement.Project, "kind": proposal.Placement.Kind} {
+		if value, exists := frontmatter[key]; exists {
+			text, textOK := value.(string)
+			if !textOK || text != expected {
+				return fmt.Errorf("canonical %s does not match the placement hint", key)
+			}
+		}
+	}
+	return nil
+}
+
+func buildEphyAppendContent(currentFrontmatter map[string]any, currentBody string, patch map[string]any, fragment, docID string) (string, error) {
+	frontmatter := cloneStringMap(currentFrontmatter)
+	for key, value := range patch {
+		if key == "doc_id" {
+			if text, ok := value.(string); !ok || text != docID {
+				return "", fmt.Errorf("append patch cannot change doc_id")
+			}
+		}
+		if (key == "project" || key == "kind") && frontmatter[key] != nil && frontmatter[key] != value {
+			return "", fmt.Errorf("append patch cannot move a document between project or kind directories")
+		}
+		frontmatter[key] = value
+	}
+	frontmatter["doc_id"] = docID
+	body := strings.TrimRight(currentBody, "\r\n")
+	fragment = strings.TrimSpace(fragment)
+	if fragment != "" {
+		if body != "" {
+			body += "\n\n"
+		}
+		body += fragment
+	}
+	if body != "" {
+		body += "\n"
+	}
+	return renderEphyProposalContent(frontmatter, body)
 }
 
 func buildEphyProposalDiff(current, proposed string) string {

@@ -24,12 +24,21 @@ func newEphyTestApp(t *testing.T) (*App, string) {
 	return app, dataRoot
 }
 
-func writePendingFixture(t *testing.T, dataRoot, name string) ephyoutbox.Proposal {
+func readProposalFixture(t *testing.T, name string) ([]byte, ephyoutbox.Proposal) {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("schemas", "karte-ephy", "v1", "fixtures", name))
 	if err != nil {
 		t.Fatal(err)
 	}
+	proposal, err := ephyoutbox.DecodeProposal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data, proposal
+}
+
+func writePendingPayload(t *testing.T, dataRoot string, data []byte) ephyoutbox.Proposal {
+	t.Helper()
 	proposal, err := ephyoutbox.DecodeProposal(data)
 	if err != nil {
 		t.Fatal(err)
@@ -44,13 +53,44 @@ func writePendingFixture(t *testing.T, dataRoot, name string) ephyoutbox.Proposa
 	return proposal
 }
 
-func TestListEphyProposalsIsReadOnlyAndShowsReviewContext(t *testing.T) {
-	app, dataRoot := newEphyTestApp(t)
-	proposal := writePendingFixture(t, dataRoot, "create-proposal.json")
-	canonicalBefore, err := filepath.Glob(filepath.Join(dataRoot, "content", "**", "*.md"))
+func writePendingFixture(t *testing.T, dataRoot, name string) ephyoutbox.Proposal {
+	t.Helper()
+	data, _ := readProposalFixture(t, name)
+	return writePendingPayload(t, dataRoot, data)
+}
+
+func writeAppendTarget(t *testing.T, dataRoot string) (string, []byte) {
+	t.Helper()
+	relativePath := "content/projects/ephy/note/2026-09/existing.md"
+	canonical := []byte("---\ntitle: Existing\ntags: fixture, reviewed\ndoc_id: doc:synthetic-001\nproject: ephy\nkind: note\n---\n# Existing\n\nCanonical body.\n")
+	abs := filepath.Join(dataRoot, filepath.FromSlash(relativePath))
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(abs, canonical, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return abs, canonical
+}
+
+func appendProposalWithHash(t *testing.T, canonical []byte) []byte {
+	t.Helper()
+	fixture, _ := readProposalFixture(t, "append-proposal.json")
+	var payload map[string]any
+	if err := json.Unmarshal(fixture, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["base_sha256"] = ephyoutbox.SHA256Bytes(canonical)
+	data, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return data
+}
+
+func TestListEphyProposalsIsReadOnlyAndShowsResolvedPlacement(t *testing.T) {
+	app, dataRoot := newEphyTestApp(t)
+	proposal := writePendingFixture(t, dataRoot, "create-proposal.json")
 	inbox, err := app.ListEphyProposals()
 	if err != nil {
 		t.Fatal(err)
@@ -59,21 +99,26 @@ func TestListEphyProposalsIsReadOnlyAndShowsReviewContext(t *testing.T) {
 		t.Fatalf("unexpected inbox: %#v", inbox)
 	}
 	review := inbox.Proposals[0]
-	if review.Proposal.CandidateID != proposal.CandidateID || review.Diff == "" || !strings.Contains(review.ProposedContent, proposal.ProposedBody) {
+	wantPath := "content/projects/ephy/decision/2026-09/synthetic-placement-decision.md"
+	if review.Proposal.CandidateID != proposal.CandidateID || review.ResolvedRelativePath != wantPath || review.ResolvedDocID == "" {
+		t.Fatalf("review placement is incomplete: %#v", review)
+	}
+	if review.Diff == "" || !strings.Contains(review.ProposedContent, proposal.ProposedBody) || !strings.Contains(review.RoutingReason, "project=ephy") {
 		t.Fatalf("review context is incomplete: %#v", review)
 	}
-	canonicalAfter, err := filepath.Glob(filepath.Join(dataRoot, "content", "**", "*.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(canonicalBefore) != len(canonicalAfter) {
+	if _, err := os.Stat(filepath.Join(dataRoot, filepath.FromSlash(wantPath))); !os.IsNotExist(err) {
 		t.Fatal("listing proposals changed canonical content")
 	}
 }
 
-func TestAcceptEphyProposalUsesSaveFileAndRecoversReceiptRetry(t *testing.T) {
+func TestAcceptEphyCreateUsesSaveFileAndRecoversReceiptRetry(t *testing.T) {
 	app, dataRoot := newEphyTestApp(t)
 	proposal := writePendingFixture(t, dataRoot, "create-proposal.json")
+	inbox, err := app.ListEphyProposals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalPath := filepath.Join(dataRoot, filepath.FromSlash(inbox.Proposals[0].ResolvedRelativePath))
 	saveCalls := 0
 	app.ephySaveFile = func(path, content string) error {
 		saveCalls++
@@ -92,7 +137,6 @@ func TestAcceptEphyProposalUsesSaveFileAndRecoversReceiptRetry(t *testing.T) {
 	if _, err := app.AcceptEphyProposal(proposal.CandidateID, editedFrontmatter, editedBody); err == nil {
 		t.Fatal("expected first receipt attempt to fail")
 	}
-	canonicalPath := filepath.Join(dataRoot, filepath.FromSlash(proposal.TargetRelativePath))
 	firstSaved, err := os.ReadFile(canonicalPath)
 	if err != nil {
 		t.Fatal(err)
@@ -101,32 +145,36 @@ func TestAcceptEphyProposalUsesSaveFileAndRecoversReceiptRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Result != "accepted" || receipt.DocID == nil || receipt.ResultingSHA256 == nil {
-		t.Fatalf("unexpected receipt: %#v", receipt)
-	}
-	if saveCalls != 1 {
-		t.Fatalf("SaveFile must not be repeated after canonical save, got %d calls", saveCalls)
+	if receipt.Result != "accepted" || receipt.DocID == nil || receipt.RelativePath == nil || saveCalls != 1 {
+		t.Fatalf("unexpected receipt or save count: %#v calls=%d", receipt, saveCalls)
 	}
 	secondSaved, err := os.ReadFile(canonicalPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(firstSaved) != string(secondSaved) {
-		t.Fatal("receipt retry changed canonical Markdown")
-	}
-	if !strings.Contains(string(secondSaved), "Edited synthetic memory") || !strings.Contains(string(secondSaved), "Reviewed before acceptance.") {
-		t.Fatal("edit-and-accept content was not saved")
-	}
-	if _, err := os.Stat(filepath.Join(dataRoot, ".mdsys", "ephy", "outbox", "accepted", proposal.CandidateID+".json")); err != nil {
-		t.Fatal(err)
+	if string(firstSaved) != string(secondSaved) || !strings.Contains(string(secondSaved), "Reviewed before acceptance.") {
+		t.Fatal("receipt retry changed or lost canonical Markdown")
 	}
 }
 
 func TestAcceptEphyProposalRecoversCrashAfterCanonicalSave(t *testing.T) {
 	app, dataRoot := newEphyTestApp(t)
 	proposal := writePendingFixture(t, dataRoot, "create-proposal.json")
-	prepared := "---\ndoc_id: doc:recovered-001\ntitle: Edited synthetic memory\n---\n# Recovered memory\n"
-	canonicalPath := filepath.Join(dataRoot, filepath.FromSlash(proposal.TargetRelativePath))
+	docID, err := ephyoutbox.DeriveCreateDocID(proposal.CandidateID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := ephyoutbox.ResolvePlacement(dataRoot, proposal, docID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frontmatter := cloneStringMap(proposal.ProposedFrontmatter)
+	frontmatter["doc_id"], frontmatter["project"], frontmatter["kind"] = docID, proposal.Placement.Project, proposal.Placement.Kind
+	prepared, err := renderEphyProposalContent(frontmatter, proposal.ProposedBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalPath := filepath.Join(dataRoot, filepath.FromSlash(decision.RelativePath))
 	if err := os.MkdirAll(filepath.Dir(canonicalPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -138,13 +186,9 @@ func TestAcceptEphyProposalRecoversCrashAfterCanonicalSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	transaction := ephyoutbox.Transaction{
-		SchemaVersion:   ephyoutbox.SchemaVersion,
-		CandidateID:     proposal.CandidateID,
-		RelativePath:    proposal.TargetRelativePath,
-		DocID:           "doc:recovered-001",
-		PreparedContent: prepared,
-		State:           "prepared",
-		StartedAt:       time.Now().UTC().Format(time.RFC3339Nano),
+		SchemaVersion: ephyoutbox.SchemaVersion, CandidateID: proposal.CandidateID,
+		RelativePath: decision.RelativePath, DocID: docID, PreparedContent: prepared,
+		State: "prepared", StartedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	if err := store.WriteTransaction(transaction); err != nil {
 		t.Fatal(err)
@@ -153,7 +197,6 @@ func TestAcceptEphyProposalRecoversCrashAfterCanonicalSave(t *testing.T) {
 		t.Fatal("crash recovery must not invoke SaveFile twice")
 		return nil
 	}
-
 	receipt, err := app.AcceptEphyProposal(proposal.CandidateID, proposal.ProposedFrontmatter, proposal.ProposedBody)
 	if err != nil {
 		t.Fatal(err)
@@ -161,67 +204,33 @@ func TestAcceptEphyProposalRecoversCrashAfterCanonicalSave(t *testing.T) {
 	if receipt.Result != "accepted" || receipt.ResultingSHA256 == nil || *receipt.ResultingSHA256 != ephyoutbox.SHA256Bytes([]byte(prepared)) {
 		t.Fatalf("unexpected recovered receipt: %#v", receipt)
 	}
-	if _, err := os.Stat(filepath.Join(dataRoot, ".mdsys", "ephy", "outbox", "accepted", proposal.CandidateID+".json")); err != nil {
-		t.Fatal(err)
-	}
 }
 
-func TestAcceptEphyUpdateUsesMatchingCanonicalByteHash(t *testing.T) {
+func TestAcceptEphyAppendUsesMatchingDocIDContentAndByteHash(t *testing.T) {
 	app, dataRoot := newEphyTestApp(t)
-	canonicalPath := filepath.Join(dataRoot, "content", "existing.md")
-	canonical := []byte("---\ntitle: Existing\ndoc_id: doc:synthetic-001\n---\n# Existing\n\nCanonical body.\n")
-	if err := os.WriteFile(canonicalPath, canonical, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	fixture, err := os.ReadFile(filepath.Join("schemas", "karte-ephy", "v1", "fixtures", "update-proposal.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(fixture, &payload); err != nil {
-		t.Fatal(err)
-	}
-	payload["base_sha256"] = ephyoutbox.SHA256Bytes(canonical)
-	proposalBytes, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	proposal, err := ephyoutbox.DecodeProposal(proposalBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pendingDir := filepath.Join(dataRoot, ".mdsys", "ephy", "outbox", "pending")
-	if err := os.MkdirAll(pendingDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(pendingDir, proposal.CandidateID+".json"), proposalBytes, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
+	canonicalPath, canonical := writeAppendTarget(t, dataRoot)
+	proposal := writePendingPayload(t, dataRoot, appendProposalWithHash(t, canonical))
 	receipt, err := app.AcceptEphyProposal(proposal.CandidateID, proposal.ProposedFrontmatter, proposal.ProposedBody)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if receipt.Result != "accepted" || receipt.DocID == nil || *receipt.DocID != "doc:synthetic-001" {
-		t.Fatalf("unexpected update receipt: %#v", receipt)
+		t.Fatalf("unexpected append receipt: %#v", receipt)
 	}
 	updated, err := os.ReadFile(canonicalPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(updated), "Reviewed fixture update.") || !strings.Contains(string(updated), `doc_id: "doc:synthetic-001"`) {
-		t.Fatalf("canonical update is incorrect: %s", updated)
+	text := string(updated)
+	if !strings.Contains(text, "Canonical body.") || !strings.Contains(text, "Reviewed addition") || !strings.Contains(text, `doc_id: "doc:synthetic-001"`) {
+		t.Fatalf("canonical append is incorrect: %s", text)
 	}
 }
 
-func TestAcceptEphyProposalStopsOnStaleBaseHash(t *testing.T) {
+func TestAcceptEphyAppendStopsOnStaleBaseHash(t *testing.T) {
 	app, dataRoot := newEphyTestApp(t)
-	canonicalPath := filepath.Join(dataRoot, "content", "existing.md")
-	canonical := "---\ntitle: Existing\ndoc_id: doc:synthetic-001\n---\n# Existing\n\nCanonical body.\n"
-	if err := os.WriteFile(canonicalPath, []byte(canonical), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	proposal := writePendingFixture(t, dataRoot, "update-proposal.json")
+	canonicalPath, canonical := writeAppendTarget(t, dataRoot)
+	proposal := writePendingFixture(t, dataRoot, "append-proposal.json")
 	saveCalls := 0
 	app.ephySaveFile = func(path, content string) error {
 		saveCalls++
@@ -231,18 +240,52 @@ func TestAcceptEphyProposalStopsOnStaleBaseHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Result != "conflict" || receipt.ErrorCode == nil || *receipt.ErrorCode != "stale_base_sha256" {
-		t.Fatalf("unexpected conflict receipt: %#v", receipt)
-	}
-	if saveCalls != 0 {
-		t.Fatal("stale proposal called SaveFile")
+	if receipt.Result != "conflict" || receipt.ErrorCode == nil || *receipt.ErrorCode != "stale_base_sha256" || saveCalls != 0 {
+		t.Fatalf("unexpected stale result: %#v calls=%d", receipt, saveCalls)
 	}
 	current, err := os.ReadFile(canonicalPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(current) != canonical {
-		t.Fatal("stale proposal changed canonical content")
+	if string(current) != string(canonical) {
+		t.Fatal("stale append changed canonical content")
+	}
+}
+
+func TestListEphyAppendRejectsProjectOrKindMismatch(t *testing.T) {
+	app, dataRoot := newEphyTestApp(t)
+	_, canonical := writeAppendTarget(t, dataRoot)
+	data := appendProposalWithHash(t, canonical)
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	placement := payload["placement"].(map[string]any)
+	placement["project"] = "master"
+	placement["candidates"] = []any{map[string]any{"project": "master", "kind": "note", "confidence": 0.97, "reason": "Synthetic mismatch."}}
+	data, _ = json.Marshal(payload)
+	writePendingPayload(t, dataRoot, data)
+	inbox, err := app.ListEphyProposals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox.Proposals) != 0 || len(inbox.Errors) != 1 || !strings.Contains(inbox.Errors[0].Message, "project") {
+		t.Fatalf("content mismatch was not rejected: %#v", inbox)
+	}
+}
+
+func TestConsultationProposalCannotReachReviewOrSave(t *testing.T) {
+	app, dataRoot := newEphyTestApp(t)
+	proposal := writePendingFixture(t, dataRoot, "consultation-proposal.json")
+	inbox, err := app.ListEphyProposals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox.Proposals) != 0 || len(inbox.Errors) != 1 || !strings.Contains(inbox.Errors[0].Message, "consultation") {
+		t.Fatalf("consultation proposal became reviewable: %#v", inbox)
+	}
+	if _, err := app.AcceptEphyProposal(proposal.CandidateID, proposal.ProposedFrontmatter, proposal.ProposedBody); err == nil {
+		t.Fatal("consultation proposal reached SaveFile")
 	}
 }
 
@@ -264,40 +307,20 @@ func TestRejectEphyProposalIsIdempotentAndDoesNotSave(t *testing.T) {
 	if first.Result != "rejected" || second.Result != "rejected" {
 		t.Fatalf("unexpected receipts: %#v %#v", first, second)
 	}
-	if _, err := os.Stat(filepath.Join(dataRoot, ".mdsys", "ephy", "outbox", "rejected", proposal.CandidateID+".json")); err != nil {
-		t.Fatal(err)
-	}
 }
 
-func TestListEphyProposalsRejectsTargetSymlinkEscape(t *testing.T) {
+func TestListEphyProposalsRejectsPlacementSymlinkEscape(t *testing.T) {
 	app, dataRoot := newEphyTestApp(t)
-	proposal := writePendingFixture(t, dataRoot, "create-proposal.json")
-	pendingPath := filepath.Join(dataRoot, ".mdsys", "ephy", "outbox", "pending", proposal.CandidateID+".json")
-	data, err := os.ReadFile(pendingPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(data, &payload); err != nil {
-		t.Fatal(err)
-	}
-	payload["target_relative_path"] = "content/escape/new.md"
-	data, err = json.Marshal(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(pendingPath, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writePendingFixture(t, dataRoot, "create-proposal.json")
 	outside := t.TempDir()
-	if err := os.Symlink(outside, filepath.Join(dataRoot, "content", "escape")); err != nil {
+	if err := os.Symlink(outside, filepath.Join(dataRoot, "content", "projects")); err != nil {
 		t.Fatal(err)
 	}
 	inbox, err := app.ListEphyProposals()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inbox.Proposals) != 0 || len(inbox.Errors) == 0 || inbox.Errors[0].Code != "invalid_target_path" {
+	if len(inbox.Proposals) != 0 || len(inbox.Errors) == 0 || inbox.Errors[0].Code != "proposal_not_reviewable" {
 		t.Fatalf("symlink escape was not rejected: %#v", inbox)
 	}
 }

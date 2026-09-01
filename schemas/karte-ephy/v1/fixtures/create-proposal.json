@@ -1,21 +1,41 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "candidate_id": "candidate-create-001",
   "operation": "create",
   "target_doc_id": null,
-  "target_relative_path": "content/ephy/new-memory.md",
+  "target_relative_path": null,
   "base_sha256": null,
+  "append_position": null,
   "proposed_frontmatter": {
-    "title": "Synthetic memory",
-    "tags": "ephy, reviewed"
+    "title": "Synthetic placement decision",
+    "tags": "ephy, reviewed",
+    "project": "ephy",
+    "kind": "decision"
   },
-  "proposed_body": "# Synthetic memory\n\nThis fixture contains no personal data.",
+  "proposed_body": "# Synthetic placement decision\n\nThis fixture contains no personal data.",
+  "placement": {
+    "project": "ephy",
+    "kind": "decision",
+    "year_month": "2026-09",
+    "confidence": 0.94,
+    "preferred_filename": "synthetic-placement-decision.md",
+    "candidates": [
+      {
+        "project": "ephy",
+        "kind": "decision",
+        "confidence": 0.94,
+        "reason": "The source records a durable project decision."
+      }
+    ],
+    "consultation_required": false,
+    "consultation_question": null
+  },
   "source_refs": [
     {
       "type": "synthetic-test",
       "reference": "fixture://conversation/001"
     }
   ],
-  "sensitivity": "restricted",
-  "created_at": "2026-08-29T00:00:00Z"
+  "sensitivity": "internal",
+  "created_at": "2026-09-01T00:00:00Z"
 }

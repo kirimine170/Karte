@@ -93,7 +93,7 @@ export class EphyReview extends BaseComponent {
                 for (const review of this.proposals) {
                     const option = document.createElement('option');
                     option.value = review.proposal.candidate_id;
-                    option.textContent = `${review.proposal.operation} · ${review.proposal.target_relative_path}`;
+                    option.textContent = `${review.proposal.operation} · ${review.resolved_relative_path}`;
                     this.proposalSelect.append(option);
                 }
             }
@@ -118,16 +118,23 @@ export class EphyReview extends BaseComponent {
         }
         const proposal = review.proposal;
         const baseHash = proposal.base_sha256 || '(create)';
-        const targetDocId = proposal.target_doc_id || '(new document)';
+        const targetDocId = review.resolved_doc_id || proposal.target_doc_id || '(new document)';
         const sources = proposal.source_refs.map((ref) => `${ref.type}: ${ref.reference}`).join('\n');
+        const alternatives = review.placement_alternatives.length > 0 ? review.placement_alternatives.join('\n') : '(none)';
+        const warnings = review.content_warnings.length > 0 ? review.content_warnings.join('\n') : '(none)';
         if (this.metadata) {
             this.metadata.textContent = [
                 `Candidate: ${proposal.candidate_id}`,
                 `Operation: ${proposal.operation}`,
-                `Target: ${proposal.target_relative_path}`,
+                `Target: ${review.resolved_relative_path}`,
                 `doc_id: ${targetDocId}`,
                 `Base SHA-256: ${baseHash}`,
                 `Sensitivity: ${proposal.sensitivity}`,
+                `Placement: project=${proposal.placement.project}, kind=${proposal.placement.kind}, month=${proposal.placement.year_month}`,
+                `Confidence: ${proposal.placement.confidence.toFixed(2)}`,
+                `Routing reason: ${review.routing_reason}`,
+                `Alternatives:\n${alternatives}`,
+                `Warnings:\n${warnings}`,
                 `Sources:\n${sources}`,
             ].join('\n');
         }
@@ -143,7 +150,7 @@ export class EphyReview extends BaseComponent {
         }
         if (this.diff) {
             this.diff.textContent = review.diff;
-            this.diff.parentElement?.classList.toggle('ephy-hidden', proposal.operation !== 'update');
+            this.diff.parentElement?.classList.toggle('ephy-hidden', proposal.operation !== 'append');
         }
         this.updateButtons();
     }

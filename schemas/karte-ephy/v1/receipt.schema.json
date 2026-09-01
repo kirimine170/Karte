@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ephy.local/schemas/karte-ephy/v1/receipt.schema.json",
-  "title": "Karte proposal receipt v1",
+  "title": "Karte proposal receipt v1.1",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -17,7 +17,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "1.0"
+      "const": "1.1"
     },
     "candidate_id": {
       "type": "string",

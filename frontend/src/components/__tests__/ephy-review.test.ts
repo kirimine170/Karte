@@ -3,14 +3,25 @@ import { EphyReview } from '../ephy-review';
 
 const proposalReview = {
     proposal: {
-        schema_version: '1.0' as const,
+        schema_version: '1.1' as const,
         candidate_id: 'candidate-create-001',
         operation: 'create' as const,
         target_doc_id: null,
-        target_relative_path: 'content/ephy/new-memory.md',
+        target_relative_path: null,
         base_sha256: null,
+        append_position: null,
         proposed_frontmatter: { title: 'Synthetic memory', tags: 'fixture' },
         proposed_body: '# Synthetic\n\nBody.',
+        placement: {
+            project: 'ephy',
+            kind: 'decision' as const,
+            year_month: '2026-09',
+            confidence: 0.94,
+            preferred_filename: 'synthetic-memory.md',
+            candidates: [{ project: 'ephy', kind: 'decision', confidence: 0.94, reason: 'Durable decision.' }],
+            consultation_required: false,
+            consultation_question: null,
+        },
         source_refs: [{ type: 'synthetic-test', reference: 'fixture://conversation/001' }],
         sensitivity: 'restricted' as const,
         created_at: '2026-08-29T00:00:00Z',
@@ -19,6 +30,11 @@ const proposalReview = {
     proposed_content: '---\ntitle: Synthetic memory\n---\n# Synthetic\n\nBody.',
     diff: '--- canonical\n+++ proposal',
     current_sha256: null,
+    resolved_doc_id: 'doc:created',
+    resolved_relative_path: 'content/projects/ephy/decision/2026-09/synthetic-memory.md',
+    routing_reason: 'Project-first policy selected project=ephy.',
+    placement_alternatives: [],
+    content_warnings: [],
 };
 
 function renderDom(): void {
@@ -41,13 +57,13 @@ function renderDom(): void {
 
 describe('EphyReview', () => {
     const acceptedReceipt = {
-        schema_version: '1.0',
+        schema_version: '1.1',
         candidate_id: 'candidate-create-001',
         result: 'accepted',
         doc_id: 'doc:created',
-        relative_path: 'content/ephy/new-memory.md',
+        relative_path: 'content/projects/ephy/decision/2026-09/synthetic-memory.md',
         resulting_sha256: 'a'.repeat(64),
-        processed_at: '2026-08-29T00:01:00Z',
+        processed_at: '2026-09-01T00:01:00Z',
         error_code: null,
         message: null,
     };
@@ -71,7 +87,9 @@ describe('EphyReview', () => {
         expect(metadata).toContain('Operation: create');
         expect(metadata).toContain('Sensitivity: restricted');
         expect(metadata).toContain('fixture://conversation/001');
-        expect(metadata).toContain('content/ephy/new-memory.md');
+        expect(metadata).toContain('content/projects/ephy/decision/2026-09/synthetic-memory.md');
+        expect(metadata).toContain('Confidence: 0.94');
+        expect(metadata).toContain('Project-first policy');
         expect(document.getElementById('ephyProposalPreview')?.textContent).toContain('# Synthetic');
     });
 

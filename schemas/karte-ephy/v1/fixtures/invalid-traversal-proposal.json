@@ -1,12 +1,30 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "candidate_id": "candidate-invalid-001",
-  "operation": "create",
-  "target_doc_id": null,
+  "operation": "append",
+  "target_doc_id": "doc:invalid-001",
   "target_relative_path": "content/../outside.md",
-  "base_sha256": null,
+  "base_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "append_position": "document_end",
   "proposed_frontmatter": {},
-  "proposed_body": "Synthetic invalid fixture.",
+  "proposed_body": "Synthetic invalid fragment.",
+  "placement": {
+    "project": "ephy",
+    "kind": "note",
+    "year_month": "2026-09",
+    "confidence": 1,
+    "preferred_filename": "outside.md",
+    "candidates": [
+      {
+        "project": "ephy",
+        "kind": "note",
+        "confidence": 1,
+        "reason": "Synthetic traversal fixture."
+      }
+    ],
+    "consultation_required": false,
+    "consultation_question": null
+  },
   "source_refs": [
     {
       "type": "synthetic-test",
@@ -14,5 +32,5 @@
     }
   ],
   "sensitivity": "restricted",
-  "created_at": "2026-08-29T00:03:00Z"
+  "created_at": "2026-09-01T00:03:00Z"
 }

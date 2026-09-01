@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.1",
+  "candidate_id": "candidate-append-001",
+  "operation": "append",
+  "target_doc_id": "doc:synthetic-001",
+  "target_relative_path": "content/projects/ephy/note/2026-09/existing.md",
+  "base_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "append_position": "document_end",
+  "proposed_frontmatter": {
+    "tags": "fixture, reviewed, appended"
+  },
+  "proposed_body": "## Reviewed addition\n\nThis fragment is appended after human review.",
+  "placement": {
+    "project": "ephy",
+    "kind": "note",
+    "year_month": "2026-09",
+    "confidence": 0.97,
+    "preferred_filename": "existing.md",
+    "candidates": [
+      {
+        "project": "ephy",
+        "kind": "note",
+        "confidence": 0.97,
+        "reason": "The target doc_id and subject both match the existing note."
+      }
+    ],
+    "consultation_required": false,
+    "consultation_question": null
+  },
+  "source_refs": [
+    {
+      "type": "synthetic-test",
+      "reference": "fixture://conversation/002"
+    }
+  ],
+  "sensitivity": "internal",
+  "created_at": "2026-09-01T00:01:00Z"
+}
+

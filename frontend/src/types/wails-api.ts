@@ -138,14 +138,25 @@ export interface EphySourceRef {
 }
 
 export interface EphyProposal {
-    schema_version: '1.0';
+    schema_version: '1.1';
     candidate_id: string;
-    operation: 'create' | 'update';
+    operation: 'create' | 'append';
     target_doc_id: string | null;
-    target_relative_path: string;
+    target_relative_path: string | null;
     base_sha256: string | null;
+    append_position: 'document_end' | null;
     proposed_frontmatter: Record<string, unknown>;
     proposed_body: string;
+    placement: {
+        project: string;
+        kind: 'note' | 'meeting' | 'decision' | 'plan' | 'task' | 'research' | 'reference' | 'report' | 'person' | 'organization' | 'journal';
+        year_month: string;
+        confidence: number;
+        preferred_filename: string;
+        candidates: Array<{ project: string; kind: string; confidence: number; reason: string }>;
+        consultation_required: boolean;
+        consultation_question: string | null;
+    };
     source_refs: EphySourceRef[];
     sensitivity: 'public' | 'internal' | 'confidential' | 'restricted';
     created_at: string;
@@ -157,6 +168,11 @@ export interface EphyProposalReview {
     proposed_content: string;
     diff: string;
     current_sha256: string | null;
+    resolved_doc_id: string;
+    resolved_relative_path: string;
+    routing_reason: string;
+    placement_alternatives: string[];
+    content_warnings: string[];
 }
 
 export interface EphyProposalError {
@@ -172,7 +188,7 @@ export interface EphyInbox {
 }
 
 export interface EphyReceipt {
-    schema_version: '1.0';
+    schema_version: '1.1';
     candidate_id: string;
     result: 'accepted' | 'rejected' | 'conflict' | 'invalid';
     doc_id: string | null;
