@@ -131,6 +131,74 @@ export interface ClipResult {
     warnings: string[];
 }
 
+export interface EphySourceRef {
+    type: string;
+    reference: string;
+    sha256?: string;
+}
+
+export interface EphyProposal {
+    schema_version: '1.1';
+    candidate_id: string;
+    operation: 'create' | 'append';
+    target_doc_id: string | null;
+    target_relative_path: string | null;
+    base_sha256: string | null;
+    append_position: 'document_end' | null;
+    proposed_frontmatter: Record<string, unknown>;
+    proposed_body: string;
+    placement: {
+        project: string;
+        kind: 'note' | 'meeting' | 'decision' | 'plan' | 'task' | 'research' | 'reference' | 'report' | 'person' | 'organization' | 'journal';
+        year_month: string;
+        confidence: number;
+        preferred_filename: string;
+        candidates: Array<{ project: string; kind: string; confidence: number; reason: string }>;
+        consultation_required: boolean;
+        consultation_question: string | null;
+    };
+    source_refs: EphySourceRef[];
+    sensitivity: 'public' | 'internal' | 'confidential' | 'restricted';
+    created_at: string;
+}
+
+export interface EphyProposalReview {
+    proposal: EphyProposal;
+    current_content: string;
+    proposed_content: string;
+    diff: string;
+    current_sha256: string | null;
+    resolved_doc_id: string;
+    resolved_relative_path: string;
+    routing_reason: string;
+    placement_alternatives: string[];
+    content_warnings: string[];
+}
+
+export interface EphyProposalError {
+    filename: string;
+    candidate_id?: string;
+    code: string;
+    message: string;
+}
+
+export interface EphyInbox {
+    proposals: EphyProposalReview[];
+    errors: EphyProposalError[];
+}
+
+export interface EphyReceipt {
+    schema_version: '1.1';
+    candidate_id: string;
+    result: 'accepted' | 'rejected' | 'conflict' | 'invalid';
+    doc_id: string | null;
+    relative_path: string | null;
+    resulting_sha256: string | null;
+    processed_at: string;
+    error_code: string | null;
+    message: string | null;
+}
+
 // Wails App API
 export interface WailsAppAPI {
     GetFileList(): Promise<FileItem[]>;
@@ -181,6 +249,9 @@ export interface WailsAppAPI {
     ImportCsvBase64(filename: string, base64Data: string): Promise<string>;
     SaveEventLogs(logsJson: string): Promise<boolean>;
     ClipURL(request: ClipRequest): Promise<ClipResult>;
+    ListEphyProposals(): Promise<EphyInbox>;
+    AcceptEphyProposal(candidateId: string, editedFrontmatter: Record<string, unknown>, editedBody: string): Promise<EphyReceipt>;
+    RejectEphyProposal(candidateId: string, message: string): Promise<EphyReceipt>;
 }
 
 // Wails Runtime API

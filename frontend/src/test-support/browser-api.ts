@@ -141,6 +141,38 @@ export function createBrowserApi() {
             return true;
         },
 
+        async ListEphyProposals() {
+            return { proposals: [], errors: [] };
+        },
+
+        async AcceptEphyProposal(candidateId) {
+            return {
+                schema_version: '1.0',
+                candidate_id: candidateId,
+                result: 'accepted',
+                doc_id: 'doc:mock',
+                relative_path: 'content/mock.md',
+                resulting_sha256: '0'.repeat(64),
+                processed_at: new Date().toISOString(),
+                error_code: null,
+                message: 'Accepted after human review.',
+            };
+        },
+
+        async RejectEphyProposal(candidateId, message) {
+            return {
+                schema_version: '1.0',
+                candidate_id: candidateId,
+                result: 'rejected',
+                doc_id: null,
+                relative_path: 'content/mock.md',
+                resulting_sha256: null,
+                processed_at: new Date().toISOString(),
+                error_code: null,
+                message,
+            };
+        },
+
         async ClipURL(request) {
             console.log('Mock ClipURL called:', request);
             return {

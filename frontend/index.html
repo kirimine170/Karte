@@ -28,6 +28,7 @@
         <button class="btn" id="saveBtn">保存</button>
         <button class="btn" id="newBtn">新規</button>
         <button class="btn" id="webClipBtn">Web Clip</button>
+        <button class="btn" id="ephyReviewBtn">Ephy候補</button>
         <button class="btn" id="exportPdfBtn">PDFエクスポート</button>
         <button class="btn" id="customCssBtn">Custom CSS</button>
         <span id="customCssStatus" class="custom-css-status"></span>
@@ -385,6 +386,45 @@
       </div>
     </div>
     
+  </div>
+
+  <!-- Ephy proposal review modal -->
+  <div id="ephyReviewModal" class="modal" style="display:none;" aria-hidden="true">
+    <div class="modal-content ephy-review-content">
+      <h3>Ephy記憶候補のreview</h3>
+      <p>候補は明示的に採用するまでcanonical Markdownへ反映されません．</p>
+      <div id="ephyProposalErrors" class="ephy-proposal-errors" style="display:none;"></div>
+      <label for="ephyProposalSelect">保留中の候補</label>
+      <select id="ephyProposalSelect" class="ephy-proposal-select"></select>
+      <div class="ephy-review-grid">
+        <section>
+          <h4>確認情報</h4>
+          <pre id="ephyProposalMetadata" class="ephy-review-pre"></pre>
+        </section>
+        <section>
+          <h4>Frontmatter（JSON）</h4>
+          <textarea id="ephyFrontmatterEditor" class="ephy-review-editor" spellcheck="false"></textarea>
+        </section>
+      </div>
+      <section>
+        <h4>Markdown本文</h4>
+        <textarea id="ephyBodyEditor" class="ephy-review-editor ephy-body-editor" spellcheck="false"></textarea>
+      </section>
+      <section>
+        <h4>完成preview（create）</h4>
+        <pre id="ephyProposalPreview" class="ephy-review-pre ephy-review-preview"></pre>
+      </section>
+      <section>
+        <h4>canonicalとの差分（update）</h4>
+        <pre id="ephyProposalDiff" class="ephy-review-pre ephy-review-diff"></pre>
+      </section>
+      <div class="modal-buttons">
+        <button id="ephyAcceptBtn" class="btn">提案どおり採用</button>
+        <button id="ephyEditAcceptBtn" class="btn">編集内容で採用</button>
+        <button id="ephyRejectBtn" class="btn btn-secondary">破棄</button>
+        <button id="ephyReviewCloseBtn" class="btn btn-secondary">閉じる</button>
+      </div>
+    </div>
   </div>
 
   <script type="module" src="/src/main.ts"></script>

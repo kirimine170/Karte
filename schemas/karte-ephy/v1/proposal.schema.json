@@ -1,0 +1,330 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ephy.local/schemas/karte-ephy/v1/proposal.schema.json",
+  "title": "Karte change proposal v1.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "operation",
+    "target_doc_id",
+    "target_relative_path",
+    "base_sha256",
+    "append_position",
+    "proposed_frontmatter",
+    "proposed_body",
+    "placement",
+    "source_refs",
+    "sensitivity",
+    "created_at"
+  ],
+  "$defs": {
+    "document_kind": {
+      "enum": [
+        "note",
+        "meeting",
+        "decision",
+        "plan",
+        "task",
+        "research",
+        "reference",
+        "report",
+        "person",
+        "organization",
+        "journal"
+      ]
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "placement_candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "kind",
+        "confidence",
+        "reason"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "#/$defs/project"
+        },
+        "kind": {
+          "$ref": "#/$defs/document_kind"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "const": "1.1"
+    },
+    "candidate_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "operation": {
+      "enum": [
+        "create",
+        "append"
+      ]
+    },
+    "target_doc_id": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "target_relative_path": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 12,
+          "maxLength": 1024,
+          "pattern": "^content/[^\\\\]+\\.md$",
+          "not": {
+            "pattern": "(^|/)\\.\\.(/|$)"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "base_sha256": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "append_position": {
+      "oneOf": [
+        {
+          "const": "document_end"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "proposed_frontmatter": {
+      "type": "object",
+      "maxProperties": 64,
+      "additionalProperties": true
+    },
+    "proposed_body": {
+      "type": "string",
+      "maxLength": 1048576
+    },
+    "placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "kind",
+        "year_month",
+        "confidence",
+        "preferred_filename",
+        "candidates",
+        "consultation_required",
+        "consultation_question"
+      ],
+      "properties": {
+        "project": {
+          "$ref": "#/$defs/project"
+        },
+        "kind": {
+          "$ref": "#/$defs/document_kind"
+        },
+        "year_month": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "preferred_filename": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 131,
+          "pattern": "^[a-z0-9][a-z0-9._-]*\\.md$"
+        },
+        "candidates": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/placement_candidate"
+          }
+        },
+        "consultation_required": {
+          "type": "boolean"
+        },
+        "consultation_question": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "consultation_required": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "consultation_question": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "consultation_question": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "source_refs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "reference"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "reference": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    "sensitivity": {
+      "enum": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "create"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target_doc_id": {
+            "type": "null"
+          },
+          "target_relative_path": {
+            "type": "null"
+          },
+          "base_sha256": {
+            "type": "null"
+          },
+          "append_position": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "append"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "target_doc_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "target_relative_path": {
+            "type": "string",
+            "pattern": "^content/[^\\\\]+\\.md$"
+          },
+          "base_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "append_position": {
+            "const": "document_end"
+          }
+        }
+      }
+    }
+  ]
+}

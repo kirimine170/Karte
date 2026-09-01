@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ephy.local/schemas/karte-ephy/v1/receipt.schema.json",
+  "title": "Karte proposal receipt v1.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "result",
+    "doc_id",
+    "relative_path",
+    "resulting_sha256",
+    "processed_at",
+    "error_code",
+    "message"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.1"
+    },
+    "candidate_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "result": {
+      "enum": [
+        "accepted",
+        "rejected",
+        "conflict",
+        "invalid"
+      ]
+    },
+    "doc_id": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "relative_path": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 12,
+          "maxLength": 1024,
+          "pattern": "^content/[^\\\\]+\\.md$",
+          "not": {
+            "pattern": "(^|/)\\.\\.(/|$)"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "resulting_sha256": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "processed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "error_code": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "message": {
+      "oneOf": [
+        {
+          "type": "string",
+          "maxLength": 2048
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "result": {
+            "const": "accepted"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "doc_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "relative_path": {
+            "type": "string",
+            "minLength": 12
+          },
+          "resulting_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "error_code": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ]
+}

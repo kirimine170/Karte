@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.1",
+  "candidate_id": "candidate-append-001",
+  "result": "accepted",
+  "doc_id": "doc:synthetic-001",
+  "relative_path": "content/projects/ephy/note/2026-09/existing.md",
+  "resulting_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "processed_at": "2026-09-01T00:04:00Z",
+  "error_code": null,
+  "message": "Accepted after human review."
+}
