@@ -377,12 +377,3 @@ func atomicWriteJSON(destination string, value any) error {
 	}
 	return syncDirectory(dir)
 }
-
-func syncDirectory(dir string) error {
-	handle, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer handle.Close()
-	return handle.Sync()
-}
