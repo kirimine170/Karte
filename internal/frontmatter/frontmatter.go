@@ -36,8 +36,27 @@ func (fm *FrontMatter) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		fm.Title = title
 		delete(raw, "title")
 	}
-	if tags, ok := raw["tags"].(string); ok {
-		fm.Tags = tags
+	if tagsValue, exists := raw["tags"]; exists {
+		switch tags := tagsValue.(type) {
+		case nil:
+			fm.Tags = ""
+		case string:
+			fm.Tags = tags
+		case []string:
+			fm.Tags = strings.Join(tags, ",")
+		case []any:
+			values := make([]string, 0, len(tags))
+			for _, value := range tags {
+				text, ok := value.(string)
+				if !ok {
+					return fmt.Errorf("frontmatter tags must contain strings")
+				}
+				values = append(values, text)
+			}
+			fm.Tags = strings.Join(values, ",")
+		default:
+			return fmt.Errorf("frontmatter tags must be a string or string list")
+		}
 		delete(raw, "tags")
 	}
 	if theme, ok := raw["theme"].(string); ok {
