@@ -1,0 +1,20 @@
+{
+  "protocol_version": "1.0",
+  "request_id": "context-search-synthetic-001",
+  "operation": "search",
+  "actor": {
+    "type": "ephy",
+    "id": "ephy"
+  },
+  "scope": {
+    "projects": ["ephy"],
+    "tags": ["architecture"],
+    "sensitivity_ceiling": "internal"
+  },
+  "query": {
+    "text": "personal context boundary",
+    "top_k": 5
+  },
+  "doc_id": null,
+  "created_at": "2026-09-01T00:00:00Z"
+}

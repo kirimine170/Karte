@@ -1,0 +1,30 @@
+{
+  "protocol_version": "1.0",
+  "request_id": "context-read-synthetic-001",
+  "request_sha256": "fe294774d869b3b9747212e39e80664899fd20ab2b48a95051d31a367e602aee",
+  "operation": "read",
+  "status": "ok",
+  "results": [],
+  "document": {
+    "doc_id": "doc:synthetic-context-001",
+    "title": "Synthetic context boundary",
+    "project": "ephy",
+    "kind": "decision",
+    "tags": ["architecture"],
+    "sensitivity": "internal",
+    "relative_path": "content/projects/ephy/decision/2026-09/synthetic-context.md",
+    "updated_at": "2026-09-01T00:00:00Z",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "body": "Karte owns durable Personal Context and Ephy uses it as a client.\n",
+    "provenance": [
+      {
+        "type": "canonical",
+        "reference": "content/projects/ephy/decision/2026-09/synthetic-context.md",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ]
+  },
+  "diagnostics": [],
+  "error": null,
+  "processed_at": "2026-09-01T00:00:01Z"
+}
