@@ -4,6 +4,7 @@ import { useUIStore } from '../stores/index';
 import { eventLogger } from '../utils/event-logger';
 
 export class EphyReview extends BaseComponent {
+    private static readonly POLL_INTERVAL_MS = 5000;
     private readonly api: WailsAppAPI;
     private readonly unsubscribe: Array<() => void> = [];
     private proposals: EphyProposalReview[] = [];
@@ -21,6 +22,7 @@ export class EphyReview extends BaseComponent {
     private editAcceptButton: HTMLButtonElement | null = null;
     private rejectButton: HTMLButtonElement | null = null;
     private closeButton: HTMLButtonElement | null = null;
+    private pollTimer: number | null = null;
 
     constructor(api: WailsAppAPI, parent?: HTMLElement) {
         super(parent);
@@ -61,6 +63,12 @@ export class EphyReview extends BaseComponent {
             this.unsubscribe.push(this.addEventListener(this.rejectButton, 'click', () => void this.reject()));
         }
         this.updateButtons();
+        void this.refresh(true);
+        this.pollTimer = window.setInterval(() => {
+            if (this.modal?.getAttribute('aria-hidden') !== 'false') {
+                void this.refresh(true);
+            }
+        }, EphyReview.POLL_INTERVAL_MS);
     }
 
     async open(): Promise<void> {
@@ -78,10 +86,11 @@ export class EphyReview extends BaseComponent {
         }
     }
 
-    async refresh(): Promise<void> {
+    async refresh(silent = false): Promise<void> {
         try {
             const inbox = await this.api.ListEphyProposals();
             this.proposals = inbox.proposals || [];
+            this.updateOpenButton();
             if (this.errors) {
                 this.errors.textContent = (inbox.errors || [])
                     .map((item) => `${item.filename}: ${item.code} — ${item.message}`)
@@ -99,9 +108,18 @@ export class EphyReview extends BaseComponent {
             }
             this.selectProposal(this.proposals[0]?.proposal.candidate_id || '');
         } catch (error) {
-            useUIStore.getState().setStatusMessage('Ephy候補の読み込みに失敗しました', 4000);
-            eventLogger.log('EphyReview', 'load-error', { error: String(error) });
+            if (!silent) {
+                useUIStore.getState().setStatusMessage('Ephy候補の読み込みに失敗しました', 4000);
+                eventLogger.log('EphyReview', 'load-error', { error: String(error) });
+            }
         }
+    }
+
+    private updateOpenButton(): void {
+        if (!this.openButton) return;
+        const count = this.proposals.length;
+        this.openButton.textContent = count > 0 ? `Ephy候補 (${count})` : 'Ephy候補';
+        this.openButton.setAttribute('aria-label', count > 0 ? `Ephyからの保留候補 ${count}件` : 'Ephyからの保留候補');
     }
 
     private selectProposal(candidateId: string): void {
@@ -212,6 +230,10 @@ export class EphyReview extends BaseComponent {
     }
 
     destroy(): void {
+        if (this.pollTimer !== null) {
+            window.clearInterval(this.pollTimer);
+            this.pollTimer = null;
+        }
         this.unsubscribe.forEach((unsubscribe) => unsubscribe());
         this.unsubscribe.length = 0;
     }

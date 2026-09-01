@@ -4,6 +4,10 @@
 
 Ephy atomically publishes proposal JSON to `KARTE_DATA_DIR/.mdsys/ephy/outbox/pending`．Karte's `Ephy候補` review opens validated candidates and displays operation，Karte-resolved target，placement reason and confidence，alternatives，`base_sha256`，source references，sensitivity，and either a complete create preview or an append diff．The reviewer can accept the original proposal，edit frontmatter／Markdown fragment and accept，or reject it．No action runs automatically．
 
+Karte checks the pending outbox every five seconds while the review dialog is closed．The top-bar action displays `Ephy候補 (N)` when validated pending proposals exist．Opening the dialog refreshes immediately，and background refresh is suspended while the reviewer is editing so a poll cannot overwrite reviewed frontmatter or body text．
+
+For a local unpackaged acceptance build，run `bash scripts/build_local_app.sh` and start `build/bin/karte` with the intended `KARTE_DATA_DIR`．A compatible Wails CLI may instead create the packaged application with `wails build`．
+
 Acceptance is the only path that calls Karte's existing `SaveFile` method．Create derives a deterministic Karte-owned `doc_id` from the unique candidate identity，then applies `content/projects/<project>/<kind>/<YYYY-MM>/<preferred_filename>`．A path owned by another `doc_id` receives `--<doc_id先頭8文字>` before `.md`，extending the prefix only on another collision．Append verifies `target_doc_id`，project，kind，and the SHA-256 of current canonical file bytes before appending the reviewed fragment at document end．A mismatch produces a conflict receipt and does not write canonical content．
 
 ## Placement and consultation

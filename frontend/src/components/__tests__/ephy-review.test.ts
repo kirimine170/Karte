@@ -91,6 +91,8 @@ describe('EphyReview', () => {
         expect(metadata).toContain('Confidence: 0.94');
         expect(metadata).toContain('Project-first policy');
         expect(document.getElementById('ephyProposalPreview')?.textContent).toContain('# Synthetic');
+        expect(document.getElementById('ephyReviewBtn')?.textContent).toBe('Ephy候補 (1)');
+        component.destroy();
     });
 
     it('supports accept，edit-and-accept，and reject without automatic action', async () => {
@@ -121,5 +123,24 @@ describe('EphyReview', () => {
             'candidate-create-001',
             'Rejected after human review.',
         ));
+        component.destroy();
+    });
+
+    it('checks for new proposals while the review dialog is closed', async () => {
+        vi.useFakeTimers();
+        api.ListEphyProposals
+            .mockResolvedValueOnce({ proposals: [], errors: [] })
+            .mockResolvedValue({ proposals: [proposalReview], errors: [] });
+        const component = new EphyReview(api);
+        component.init();
+        await vi.waitFor(() => expect(api.ListEphyProposals).toHaveBeenCalledTimes(1));
+        expect(document.getElementById('ephyReviewBtn')?.textContent).toBe('Ephy候補');
+
+        await vi.advanceTimersByTimeAsync(5000);
+        await Promise.resolve();
+        expect(document.getElementById('ephyReviewBtn')?.textContent).toBe('Ephy候補 (1)');
+
+        component.destroy();
+        vi.useRealTimers();
     });
 });
