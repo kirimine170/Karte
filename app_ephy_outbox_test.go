@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"karte/internal/contextcore"
 	"karte/internal/ephyoutbox"
 )
 
@@ -188,6 +189,113 @@ func TestAcceptEphyCreatePreservesYAMLListTags(t *testing.T) {
 	if !strings.Contains(string(canonical), `tags: "e2e, karte-integration"`) {
 		t.Fatalf("accepted canonical Markdown lost YAML list tags: %s", canonical)
 	}
+}
+
+func TestAcceptedEphyDocumentSurvivesRestartAndContextSearchRead(t *testing.T) {
+	app, dataRoot := newEphyTestApp(t)
+	proposal := writePendingFixture(t, dataRoot, "create-proposal.json")
+	receipt, err := app.AcceptEphyProposal(proposal.CandidateID, proposal.ProposedFrontmatter, proposal.ProposedBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.DocID == nil || receipt.RelativePath == nil || receipt.ResultingSHA256 == nil {
+		t.Fatalf("accepted receipt is incomplete: %#v", receipt)
+	}
+	canonical, err := os.ReadFile(filepath.Join(dataRoot, filepath.FromSlash(*receipt.RelativePath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ephyoutbox.SHA256Bytes(canonical) != *receipt.ResultingSHA256 {
+		t.Fatal("receipt hash does not match persisted Markdown")
+	}
+
+	// A new App and Processor model a Karte restart: no in-memory state from the
+	// accepting instance is reused.
+	restarted := NewApp()
+	restarted.root = dataRoot
+	restarted.dataDir = dataRoot
+	processor, err := contextcore.NewProcessor(dataRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted.contextProcessor = processor
+
+	search := contextcore.Request{
+		ProtocolVersion: contextcore.ProtocolVersion,
+		RequestID:       "accepted-restart-search",
+		Operation:       "search",
+		Actor:           contextcore.Actor{Type: "ephy", ID: "ephy"},
+		Scope:           contextcore.Scope{Projects: []string{"ephy"}, SensitivityCeiling: "internal"},
+		Query:           &contextcore.SearchQuery{Text: "synthetic placement decision", TopK: 5},
+		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
+	}
+	writeContextRequest(t, dataRoot, search)
+	summary, err := restarted.ProcessContextRequests()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Processed != 1 || summary.Failed != 0 {
+		t.Fatalf("search was not processed after restart: %#v", summary)
+	}
+	searchResponse := readContextResponse(t, dataRoot, search.RequestID)
+	if searchResponse.Status != "ok" || len(searchResponse.Results) != 1 || searchResponse.Results[0].DocID != *receipt.DocID {
+		t.Fatalf("accepted document was not searchable after restart: %#v", searchResponse)
+	}
+
+	read := contextcore.Request{
+		ProtocolVersion: contextcore.ProtocolVersion,
+		RequestID:       "accepted-restart-read",
+		Operation:       "read",
+		Actor:           contextcore.Actor{Type: "ephy", ID: "ephy"},
+		Scope:           contextcore.Scope{Projects: []string{"ephy"}, SensitivityCeiling: "internal"},
+		DocID:           receipt.DocID,
+		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
+	}
+	writeContextRequest(t, dataRoot, read)
+	summary, err = restarted.ProcessContextRequests()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Processed != 1 || summary.Failed != 0 {
+		t.Fatalf("read was not processed after restart: %#v", summary)
+	}
+	readResponse := readContextResponse(t, dataRoot, read.RequestID)
+	if readResponse.Status != "ok" || readResponse.Document == nil {
+		t.Fatalf("accepted document was not readable after restart: %#v", readResponse)
+	}
+	if readResponse.Document.DocID != *receipt.DocID || readResponse.Document.RelativePath != *receipt.RelativePath ||
+		readResponse.Document.SHA256 != *receipt.ResultingSHA256 || !strings.Contains(readResponse.Document.Body, proposal.ProposedBody) {
+		t.Fatalf("readback does not match accepted Markdown and receipt: %#v", readResponse.Document)
+	}
+}
+
+func writeContextRequest(t *testing.T, dataRoot string, request contextcore.Request) {
+	t.Helper()
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestsDir := filepath.Join(dataRoot, ".mdsys", "context", "v1", "requests")
+	if err := os.MkdirAll(requestsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(requestsDir, request.RequestID+".json"), encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readContextResponse(t *testing.T, dataRoot, requestID string) contextcore.Response {
+	t.Helper()
+	path := filepath.Join(dataRoot, ".mdsys", "context", "v1", "responses", requestID+".json")
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response contextcore.Response
+	if err := json.Unmarshal(encoded, &response); err != nil {
+		t.Fatal(err)
+	}
+	return response
 }
 
 func TestAcceptEphyProposalRecoversCrashAfterCanonicalSave(t *testing.T) {

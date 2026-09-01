@@ -26,6 +26,82 @@ func TestDefaultDataDirRequiresLocalAppDataOnWindows(t *testing.T) {
 	}
 }
 
+func TestConfiguredDataDirResolvesAbsoluteAndRelativePaths(t *testing.T) {
+	placed := t.TempDir()
+	absolute := filepath.Join(t.TempDir(), "personal context")
+	configPath := filepath.Join(placed, DataDirConfigName)
+	if err := os.WriteFile(configPath, []byte(absolute+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, configured, err := ConfiguredDataDir(placed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !configured || got != absolute {
+		t.Fatalf("ConfiguredDataDir() = %q, %v; want %q, true", got, configured, absolute)
+	}
+
+	if err := os.WriteFile(configPath, []byte(filepath.Join("..", "shared")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, configured, err = ConfiguredDataDir(placed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.Abs(filepath.Join(placed, "..", "shared"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !configured || got != want {
+		t.Fatalf("ConfiguredDataDir() = %q, %v; want %q, true", got, configured, want)
+	}
+}
+
+func TestConfiguredDataDirRejectsEmptyOrMultilineConfig(t *testing.T) {
+	placed := t.TempDir()
+	configPath := filepath.Join(placed, DataDirConfigName)
+	for _, value := range []string{"", "one\ntwo\n"} {
+		if err := os.WriteFile(configPath, []byte(value), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, configured, err := ConfiguredDataDir(placed); !configured || err == nil {
+			t.Fatalf("ConfiguredDataDir(%q) configured=%v err=%v; want configured error", value, configured, err)
+		}
+	}
+}
+
+func TestConfiguredDataDirReportsMissingConfig(t *testing.T) {
+	if got, configured, err := ConfiguredDataDir(t.TempDir()); err != nil || configured || got != "" {
+		t.Fatalf("ConfiguredDataDir() = %q, %v, %v; want empty, false, nil", got, configured, err)
+	}
+}
+
+func TestRuntimePIDLifecycleDoesNotRemoveNewerOwner(t *testing.T) {
+	dataDir := t.TempDir()
+	path, err := WriteRuntimePID(dataDir, 101)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ReadRuntimePID(dataDir); err != nil || got != 101 {
+		t.Fatalf("ReadRuntimePID() = %d, %v; want 101, nil", got, err)
+	}
+	if _, err := WriteRuntimePID(dataDir, 202); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveRuntimePID(dataDir, 101); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ReadRuntimePID(dataDir); err != nil || got != 202 {
+		t.Fatalf("older owner removed marker: pid=%d err=%v", got, err)
+	}
+	if err := RemoveRuntimePID(dataDir, 202); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("runtime marker still exists: %v", err)
+	}
+}
+
 func TestMigrateLegacyDataDirCopiesWithoutDeletingSource(t *testing.T) {
 	root := t.TempDir()
 	legacy := filepath.Join(root, "portable", "karte_data")

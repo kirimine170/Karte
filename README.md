@@ -80,6 +80,7 @@ wails dev
 1. **プロジェクトの初期化**
    - Windowsでは`%LOCALAPPDATA%\Karte\karte_data`、macOS／Linuxでは従来どおりアプリケーション隣接の`karte_data`を使用します
    - `KARTE_DATA_DIR`を設定すると保存先を明示的に上書きできます
+   - Ephy同梱版ではアプリ隣接の`.karte-data-dir`を読み，環境変数がない手動再起動でも同じPersonal Context保管庫を再度開きます
    - `content/`ディレクトリにMarkdownファイルを配置してください
 
 2. **ファイルの編集**

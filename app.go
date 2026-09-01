@@ -526,6 +526,19 @@ func (a *App) startup(ctx context.Context) {
 		}
 	}
 
+	if a.dataDir == "" {
+		configuredDataDir, configured, configErr := runtimepath.ConfiguredDataDir(appPlacedDir)
+		if configErr != nil {
+			runtime.LogError(ctx, fmt.Sprintf("Failed to resolve persisted data directory: %v", configErr))
+			return
+		}
+		if configured {
+			a.root = filepath.Dir(configuredDataDir)
+			a.dataDir = configuredDataDir
+			a.logInfo(fmt.Sprintf("Using persisted data directory: %s", a.dataDir))
+		}
+	}
+
 	// Initialize the runtime data directory unless it was explicitly overridden
 	// or resolved to the development workspace above.
 	if a.dataDir == "" {
@@ -557,6 +570,12 @@ func (a *App) startup(ctx context.Context) {
 		runtime.LogError(ctx, fmt.Sprintf("Failed to initialize data directory: %v", err))
 		return
 	}
+	_, runtimePIDErr := runtimepath.WriteRuntimePID(a.dataDir, os.Getpid())
+	if runtimePIDErr != nil {
+		runtime.LogError(ctx, fmt.Sprintf("Failed to publish runtime identity: %v", runtimePIDErr))
+		return
+	}
+	a.logInfo("Published data-root runtime identity")
 	if processor, processorErr := contextcore.NewProcessor(a.dataDir); processorErr != nil {
 		a.logError(fmt.Sprintf("Failed to initialize Personal Context processor: %v", processorErr))
 	} else {
@@ -636,6 +655,11 @@ func (a *App) shutdown(ctx context.Context) {
 	// Cleanup recording if active
 	if a.isRecording {
 		a.cleanupRecording()
+	}
+	if strings.TrimSpace(a.dataDir) != "" {
+		if err := runtimepath.RemoveRuntimePID(a.dataDir, os.Getpid()); err != nil {
+			a.logError(fmt.Sprintf("Failed to remove runtime identity: %v", err))
+		}
 	}
 }
 
