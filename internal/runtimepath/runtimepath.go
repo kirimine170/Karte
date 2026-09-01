@@ -5,8 +5,103 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
+
+const (
+	DataDirConfigName = ".karte-data-dir"
+	runtimePIDPath    = ".mdsys/runtime/karte.pid"
+)
+
+// ConfiguredDataDir resolves an optional application-adjacent data directory
+// pointer. This keeps a packaged Karte on the same workspace when it is opened
+// again without the environment inherited from its launcher.
+func ConfiguredDataDir(appPlacedDir string) (string, bool, error) {
+	configPath := filepath.Join(appPlacedDir, DataDirConfigName)
+	raw, err := os.ReadFile(configPath)
+	if os.IsNotExist(err) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", true, fmt.Errorf("read data directory config: %w", err)
+	}
+	value := strings.TrimSpace(string(raw))
+	if value == "" {
+		return "", true, fmt.Errorf("data directory config is empty: %s", configPath)
+	}
+	if strings.ContainsAny(value, "\r\n\x00") {
+		return "", true, fmt.Errorf("data directory config must contain one path: %s", configPath)
+	}
+	if !filepath.IsAbs(value) {
+		value = filepath.Join(appPlacedDir, value)
+	}
+	abs, err := filepath.Abs(value)
+	if err != nil {
+		return "", true, fmt.Errorf("resolve configured data directory: %w", err)
+	}
+	return filepath.Clean(abs), true, nil
+}
+
+// WriteRuntimePID records which Karte process owns a data directory. Launchers
+// use the data-root-local marker to avoid reusing a Karte opened on another
+// workspace merely because its executable path is identical.
+func WriteRuntimePID(dataDir string, pid int) (string, error) {
+	if pid <= 0 {
+		return "", fmt.Errorf("invalid runtime pid: %d", pid)
+	}
+	path := filepath.Join(dataDir, filepath.FromSlash(runtimePIDPath))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("create runtime marker directory: %w", err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".karte.pid.*")
+	if err != nil {
+		return "", fmt.Errorf("create runtime marker: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := fmt.Fprintf(tmp, "%d\n", pid); err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("write runtime marker: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("close runtime marker: %w", err)
+	}
+	if err := replaceRuntimePID(tmpPath, path); err != nil {
+		return "", fmt.Errorf("publish runtime marker: %w", err)
+	}
+	return path, nil
+}
+
+// ReadRuntimePID reads the data-root-local Karte process marker.
+func ReadRuntimePID(dataDir string) (int, error) {
+	path := filepath.Join(dataDir, filepath.FromSlash(runtimePIDPath))
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid <= 0 {
+		return 0, fmt.Errorf("invalid runtime marker %s", path)
+	}
+	return pid, nil
+}
+
+// RemoveRuntimePID removes the marker only when it still names this process.
+// This prevents an older instance from clearing a newer instance's marker.
+func RemoveRuntimePID(dataDir string, pid int) error {
+	current, err := ReadRuntimePID(dataDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if current != pid {
+		return nil
+	}
+	return os.Remove(filepath.Join(dataDir, filepath.FromSlash(runtimePIDPath)))
+}
 
 // DefaultDataDir returns the default root and workspace paths for a packaged
 // application. Windows keeps writable state under LocalAppData; other

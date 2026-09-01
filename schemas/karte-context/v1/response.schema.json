@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://karte.local/schemas/context/v1/response.schema.json",
+  "title": "Karte Context Protocol V1 Response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "request_id",
+    "request_sha256",
+    "operation",
+    "status",
+    "results",
+    "document",
+    "diagnostics",
+    "error",
+    "processed_at"
+  ],
+  "$defs": {
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "reference", "sha256"],
+      "properties": {
+        "type": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "reference": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["doc_id", "title", "project", "kind", "tags", "sensitivity", "relative_path", "updated_at", "sha256", "provenance"],
+      "properties": {
+        "doc_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "title": { "type": "string", "minLength": 1 },
+        "project": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "sensitivity": { "enum": ["public", "internal", "confidential", "restricted"] },
+        "relative_path": { "type": "string", "pattern": "^content/.+\\.md$" },
+        "updated_at": { "type": "string", "format": "date-time" },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "provenance": { "type": "array", "items": { "$ref": "#/$defs/provenance" } }
+      }
+    }
+  },
+  "properties": {
+    "protocol_version": { "const": "1.0" },
+    "request_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "request_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "operation": { "enum": ["search", "read", "invalid"] },
+    "status": { "enum": ["ok", "invalid", "denied", "not_found", "conflict"] },
+    "results": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "allOf": [
+          { "$ref": "#/$defs/metadata" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["snippet", "score"],
+            "properties": {
+              "doc_id": true,
+              "title": true,
+              "project": true,
+              "kind": true,
+              "tags": true,
+              "sensitivity": true,
+              "relative_path": true,
+              "updated_at": true,
+              "sha256": true,
+              "provenance": true,
+              "snippet": { "type": "string", "maxLength": 2048 },
+              "score": { "type": "number", "minimum": 0 }
+            }
+          }
+        ]
+      }
+    },
+    "document": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/metadata" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["body"],
+              "properties": {
+                "doc_id": true,
+                "title": true,
+                "project": true,
+                "kind": true,
+                "tags": true,
+                "sensitivity": true,
+                "relative_path": true,
+                "updated_at": true,
+                "sha256": true,
+                "provenance": true,
+                "body": { "type": "string", "maxLength": 2097152 }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "count"],
+        "properties": {
+          "code": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "count": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    "error": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {
+            "code": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "message": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        }
+      ]
+    },
+    "processed_at": { "type": "string", "format": "date-time" }
+  }
+}

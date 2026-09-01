@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://karte.local/schemas/context/v1/request.schema.json",
+  "title": "Karte Context Protocol V1 Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "request_id",
+    "operation",
+    "actor",
+    "scope",
+    "query",
+    "doc_id",
+    "created_at"
+  ],
+  "properties": {
+    "protocol_version": { "const": "1.0" },
+    "request_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "operation": { "enum": ["search", "read"] },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "enum": ["ephy", "human", "tool"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projects", "tags", "sensitivity_ceiling"],
+      "properties": {
+        "projects": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "anyOf": [
+              { "const": "*" },
+              { "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" }
+            ]
+          }
+        },
+        "tags": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+        },
+        "sensitivity_ceiling": { "enum": ["public", "internal", "confidential", "restricted"] }
+      }
+    },
+    "query": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text", "top_k"],
+          "properties": {
+            "text": { "type": "string", "minLength": 1, "maxLength": 2048 },
+            "top_k": { "type": "integer", "minimum": 1, "maximum": 20 }
+          }
+        }
+      ]
+    },
+    "doc_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 256 },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "operation": { "const": "search" } } },
+      "then": {
+        "properties": {
+          "query": { "type": "object" },
+          "doc_id": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "operation": { "const": "read" } } },
+      "then": {
+        "properties": {
+          "query": { "type": "null" },
+          "doc_id": { "type": "string", "minLength": 1, "maxLength": 256 }
+        }
+      }
+    }
+  ]
+}

@@ -31,6 +31,7 @@ import (
 	"karte/internal/audio"
 	boardpkg "karte/internal/board"
 	"karte/internal/clip"
+	"karte/internal/contextcore"
 	"karte/internal/docid"
 	"karte/internal/ephyoutbox"
 	fm "karte/internal/frontmatter"
@@ -109,6 +110,9 @@ type App struct {
 
 	ephySaveFile     func(path, content string) error
 	ephyWriteReceipt func(store *ephyoutbox.Store, receipt ephyoutbox.Receipt) error
+
+	contextProcessorMu sync.Mutex
+	contextProcessor   *contextcore.Processor
 }
 
 type webClipConversionJob struct {
@@ -522,6 +526,19 @@ func (a *App) startup(ctx context.Context) {
 		}
 	}
 
+	if a.dataDir == "" {
+		configuredDataDir, configured, configErr := runtimepath.ConfiguredDataDir(appPlacedDir)
+		if configErr != nil {
+			runtime.LogError(ctx, fmt.Sprintf("Failed to resolve persisted data directory: %v", configErr))
+			return
+		}
+		if configured {
+			a.root = filepath.Dir(configuredDataDir)
+			a.dataDir = configuredDataDir
+			a.logInfo(fmt.Sprintf("Using persisted data directory: %s", a.dataDir))
+		}
+	}
+
 	// Initialize the runtime data directory unless it was explicitly overridden
 	// or resolved to the development workspace above.
 	if a.dataDir == "" {
@@ -553,6 +570,18 @@ func (a *App) startup(ctx context.Context) {
 		runtime.LogError(ctx, fmt.Sprintf("Failed to initialize data directory: %v", err))
 		return
 	}
+	_, runtimePIDErr := runtimepath.WriteRuntimePID(a.dataDir, os.Getpid())
+	if runtimePIDErr != nil {
+		runtime.LogError(ctx, fmt.Sprintf("Failed to publish runtime identity: %v", runtimePIDErr))
+		return
+	}
+	a.logInfo("Published data-root runtime identity")
+	if processor, processorErr := contextcore.NewProcessor(a.dataDir); processorErr != nil {
+		a.logError(fmt.Sprintf("Failed to initialize Personal Context processor: %v", processorErr))
+	} else {
+		a.contextProcessor = processor
+		go a.runContextProcessor(ctx)
+	}
 
 	a.asrInitDone = make(chan struct{})
 	go func() {
@@ -573,6 +602,42 @@ func (a *App) startup(ctx context.Context) {
 	// }
 }
 
+func (a *App) runContextProcessor(ctx context.Context) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if summary, err := a.ProcessContextRequests(); err != nil {
+			a.logError(fmt.Sprintf("Personal Context request processing failed: %v", err))
+		} else if summary.Processed > 0 || summary.Failed > 0 {
+			a.logInfo(fmt.Sprintf("Personal Context requests processed=%d failed=%d", summary.Processed, summary.Failed))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// ProcessContextRequests runs the same Karte-owned search／read processor used
+// by the background loop. The response contains counts only and never query or
+// document text，so callers can expose it as a safe diagnostic action.
+func (a *App) ProcessContextRequests() (contextcore.ProcessSummary, error) {
+	a.contextProcessorMu.Lock()
+	defer a.contextProcessorMu.Unlock()
+	if a.contextProcessor == nil {
+		if strings.TrimSpace(a.dataDir) == "" {
+			return contextcore.ProcessSummary{}, fmt.Errorf("Personal Context processor is not initialized")
+		}
+		processor, err := contextcore.NewProcessor(a.dataDir)
+		if err != nil {
+			return contextcore.ProcessSummary{}, err
+		}
+		a.contextProcessor = processor
+	}
+	return a.contextProcessor.ProcessPending(20)
+}
+
 // shutdown is invoked by Wails when the app is closing.
 func (a *App) shutdown(ctx context.Context) {
 	a.webClipConversionMu.Lock()
@@ -590,6 +655,11 @@ func (a *App) shutdown(ctx context.Context) {
 	// Cleanup recording if active
 	if a.isRecording {
 		a.cleanupRecording()
+	}
+	if strings.TrimSpace(a.dataDir) != "" {
+		if err := runtimepath.RemoveRuntimePID(a.dataDir, os.Getpid()); err != nil {
+			a.logError(fmt.Sprintf("Failed to remove runtime identity: %v", err))
+		}
 	}
 }
 
