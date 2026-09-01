@@ -81,6 +81,9 @@ viewport:
 	if doc.Type != BoardType {
 		t.Fatalf("unexpected type: %s", doc.Type)
 	}
+	if len(doc.Tags) != 2 || doc.Tags[0] != "design" || doc.Tags[1] != "board" {
+		t.Fatalf("unexpected board tags: %#v", doc.Tags)
+	}
 	if len(doc.Cards) != 2 {
 		t.Fatalf("expected 2 cards, got %d", len(doc.Cards))
 	}

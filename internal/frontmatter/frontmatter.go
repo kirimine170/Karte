@@ -38,8 +38,12 @@ func (fm *FrontMatter) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	}
 	if tagsValue, exists := raw["tags"]; exists {
 		switch tags := tagsValue.(type) {
+		case nil:
+			fm.Tags = ""
 		case string:
 			fm.Tags = tags
+		case []string:
+			fm.Tags = strings.Join(tags, ",")
 		case []any:
 			values := make([]string, 0, len(tags))
 			for _, value := range tags {

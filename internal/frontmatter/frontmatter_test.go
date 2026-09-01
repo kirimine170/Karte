@@ -50,3 +50,17 @@ func TestParseAndFormatFrontMatterPreservesYAMLListTags(t *testing.T) {
 		t.Fatalf("unexpected body: %q", body)
 	}
 }
+
+func TestParseFrontMatterAllowsEmptyTags(t *testing.T) {
+	content := "---\ndoc_id: doc:empty-tags\ntags:\n---\nbody\n"
+	parsed, body := ParseFrontMatter(content)
+	if parsed == nil {
+		t.Fatal("frontmatter with empty tags should parse")
+	}
+	if parsed.DocID != "doc:empty-tags" || parsed.Tags != "" {
+		t.Fatalf("frontmatter metadata changed: %#v", parsed)
+	}
+	if strings.TrimSpace(body) != "body" {
+		t.Fatalf("unexpected body: %q", body)
+	}
+}

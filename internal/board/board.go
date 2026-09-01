@@ -142,7 +142,7 @@ func Parse(path, content string) (*Document, error) {
 		Version:    extractRawInt(parsedFM.Raw, "version", 1),
 		Created:    extractRawString(parsedFM.Raw, "created"),
 		Updated:    extractRawString(parsedFM.Raw, "updated"),
-		Tags:       extractRawStringSlice(parsedFM.Raw, "tags"),
+		Tags:       fm.NormalizeTags(parsedFM.Tags),
 		Notes:      strings.TrimSpace(sections["notes"]),
 		RawContent: content,
 	}
@@ -534,16 +534,6 @@ func extractRawInt(raw map[string]any, key string, defaultValue int) int {
 		}
 	}
 	return defaultValue
-}
-
-func extractRawStringSlice(raw map[string]any, key string) []string {
-	if raw == nil {
-		return nil
-	}
-	if value, ok := raw[key]; ok {
-		return anyToStringSlice(value)
-	}
-	return nil
 }
 
 func extractMapString(m map[string]any, key string) string {
