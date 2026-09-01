@@ -28,6 +28,14 @@ export default defineConfig({
     resolve: {
         alias: {
             '@': path.resolve(__dirname, './src'),
+            '../../wailsjs/wailsjs/go/main/App': path.resolve(
+                __dirname,
+                'src/test-support/wails-stubs.ts'
+            ),
+            '../../wailsjs/wailsjs/runtime/runtime': path.resolve(
+                __dirname,
+                'src/test-support/wails-runtime-stub.ts'
+            ),
         },
     },
 });
