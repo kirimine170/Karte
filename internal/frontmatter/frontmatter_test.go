@@ -32,3 +32,21 @@ func TestNormalizePrintoutFallback(t *testing.T) {
 		t.Fatalf("expected infinite fallback, got %q", got)
 	}
 }
+
+func TestParseAndFormatFrontMatterPreservesYAMLListTags(t *testing.T) {
+	content := "---\ntitle: Ephy proposal\ntags:\n  - e2e\n  - karte-integration\n  - e2e\n---\nbody\n"
+	parsed, body := ParseFrontMatter(content)
+	if parsed == nil {
+		t.Fatal("frontmatter should parse")
+	}
+	if parsed.Tags != "e2e,karte-integration,e2e" {
+		t.Fatalf("unexpected parsed tags: %q", parsed.Tags)
+	}
+	formatted := FormatFrontMatter(parsed)
+	if !strings.Contains(formatted, `tags: "e2e, karte-integration"`) {
+		t.Fatalf("formatted frontmatter lost YAML list tags: %s", formatted)
+	}
+	if strings.TrimSpace(body) != "body" {
+		t.Fatalf("unexpected body: %q", body)
+	}
+}

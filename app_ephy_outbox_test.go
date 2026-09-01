@@ -157,6 +157,39 @@ func TestAcceptEphyCreateUsesSaveFileAndRecoversReceiptRetry(t *testing.T) {
 	}
 }
 
+func TestAcceptEphyCreatePreservesYAMLListTags(t *testing.T) {
+	app, dataRoot := newEphyTestApp(t)
+	fixture, _ := readProposalFixture(t, "create-proposal.json")
+	var payload map[string]any
+	if err := json.Unmarshal(fixture, &payload); err != nil {
+		t.Fatal(err)
+	}
+	frontmatter, ok := payload["proposed_frontmatter"].(map[string]any)
+	if !ok {
+		t.Fatal("fixture proposed_frontmatter is not a mapping")
+	}
+	frontmatter["tags"] = []any{"e2e", "karte-integration", "e2e"}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := writePendingPayload(t, dataRoot, encoded)
+	receipt, err := app.AcceptEphyProposal(proposal.CandidateID, proposal.ProposedFrontmatter, proposal.ProposedBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.RelativePath == nil {
+		t.Fatal("accepted receipt has no relative path")
+	}
+	canonical, err := os.ReadFile(filepath.Join(dataRoot, filepath.FromSlash(*receipt.RelativePath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(canonical), `tags: "e2e, karte-integration"`) {
+		t.Fatalf("accepted canonical Markdown lost YAML list tags: %s", canonical)
+	}
+}
+
 func TestAcceptEphyProposalRecoversCrashAfterCanonicalSave(t *testing.T) {
 	app, dataRoot := newEphyTestApp(t)
 	proposal := writePendingFixture(t, dataRoot, "create-proposal.json")
