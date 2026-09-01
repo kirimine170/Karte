@@ -219,6 +219,9 @@ export class App {
         // ファイル変更イベント
         this.runtime.EventsOn('file-changed', (path: unknown) => {
             console.log('File changed:', path);
+            this.refreshFileList().catch((error) => {
+                console.error('Failed to refresh file list after file change:', error);
+            });
             this.refreshPreview();
             this.refreshGraph();
         });
