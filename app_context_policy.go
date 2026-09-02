@@ -43,32 +43,47 @@ func (a *App) authorizeEphyProposal(proposal ephyoutbox.Proposal, editedFrontmat
 			_ = contextcore.RecordAudit(a.dataDir, "proposal:"+proposal.CandidateID+":propose", ephyContextActor, string(contextcore.CapabilityPropose), "denied", 0, "classification_mismatch")
 			return policy, contextcore.Resource{}, fmt.Errorf("proposal policy denied")
 		}
-		canonical.ProvenanceTypes = append(canonical.ProvenanceTypes, proposalProvenanceTypes(proposal)...)
-		original = canonical
-		if tags, ok, tagsErr := policyTagsFromFrontmatter(proposal.ProposedFrontmatter); tagsErr != nil {
-			return policy, contextcore.Resource{}, tagsErr
-		} else if ok {
-			original.Tags = tags
+		canonicalDecision, decisionErr := a.recordPolicyDecision(policy, proposal.CandidateID+":canonical", ephyContextActor, contextcore.CapabilityPropose, canonical)
+		if decisionErr != nil {
+			return policy, contextcore.Resource{}, decisionErr
 		}
-		finalResource = original
-	}
-	if editedFrontmatter != nil {
-		if tags, ok, tagsErr := policyTagsFromFrontmatter(editedFrontmatter); tagsErr != nil {
-			return policy, contextcore.Resource{}, tagsErr
-		} else if ok {
-			finalResource.Tags = tags
+		if !canonicalDecision.Allowed {
+			return policy, contextcore.Resource{}, fmt.Errorf("proposal policy denied")
 		}
-		if sensitivity, ok := editedFrontmatter["sensitivity"].(string); ok && strings.TrimSpace(sensitivity) != "" {
-			finalResource.Sensitivity = strings.ToLower(strings.TrimSpace(sensitivity))
+		finalResource = canonical
+		finalResource.ProvenanceTypes = append(finalResource.ProvenanceTypes, proposalProvenanceTypes(proposal)...)
+		patch := proposal.ProposedFrontmatter
+		if editedFrontmatter != nil {
+			patch = editedFrontmatter
 		}
-	}
-
-	ephyDecision, err := a.recordPolicyDecision(policy, proposal.CandidateID, ephyContextActor, contextcore.CapabilityPropose, original)
-	if err != nil {
-		return policy, contextcore.Resource{}, err
-	}
-	if !ephyDecision.Allowed {
-		return policy, contextcore.Resource{}, fmt.Errorf("proposal policy denied")
+		if err := applyAppendPolicyPatch(&finalResource, patch); err != nil {
+			return policy, contextcore.Resource{}, err
+		}
+		resultDecision, decisionErr := a.recordPolicyDecision(policy, proposal.CandidateID+":result", ephyContextActor, contextcore.CapabilityPropose, finalResource)
+		if decisionErr != nil {
+			return policy, contextcore.Resource{}, decisionErr
+		}
+		if !resultDecision.Allowed {
+			return policy, contextcore.Resource{}, fmt.Errorf("proposal policy denied")
+		}
+	} else {
+		if editedFrontmatter != nil {
+			if tags, ok, tagsErr := policyTagsFromFrontmatter(editedFrontmatter); tagsErr != nil {
+				return policy, contextcore.Resource{}, tagsErr
+			} else if ok {
+				finalResource.Tags = tags
+			}
+			if sensitivity, ok := editedFrontmatter["sensitivity"].(string); ok && strings.TrimSpace(sensitivity) != "" {
+				finalResource.Sensitivity = strings.ToLower(strings.TrimSpace(sensitivity))
+			}
+		}
+		ephyDecision, decisionErr := a.recordPolicyDecision(policy, proposal.CandidateID, ephyContextActor, contextcore.CapabilityPropose, original)
+		if decisionErr != nil {
+			return policy, contextcore.Resource{}, decisionErr
+		}
+		if !ephyDecision.Allowed {
+			return policy, contextcore.Resource{}, fmt.Errorf("proposal policy denied")
+		}
 	}
 	humanDecision, err := a.recordPolicyDecision(policy, proposal.CandidateID, localHumanActor, contextcore.CapabilityReview, finalResource)
 	if err != nil {
@@ -78,6 +93,31 @@ func (a *App) authorizeEphyProposal(proposal ephyoutbox.Proposal, editedFrontmat
 		return policy, contextcore.Resource{}, fmt.Errorf("proposal policy denied")
 	}
 	return policy, finalResource, nil
+}
+
+func applyAppendPolicyPatch(resource *contextcore.Resource, patch map[string]any) error {
+	for key, expected := range map[string]string{"project": resource.Project, "kind": resource.Kind} {
+		value, exists := patch[key]
+		if !exists {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok || strings.ToLower(strings.TrimSpace(text)) != expected {
+			return fmt.Errorf("proposal policy denied")
+		}
+	}
+	if tags, ok, err := policyTagsFromFrontmatter(patch); err != nil {
+		return err
+	} else if ok {
+		resource.Tags = tags
+	}
+	if value, exists := patch["sensitivity"]; exists {
+		text, ok := value.(string)
+		if !ok || strings.ToLower(strings.TrimSpace(text)) != resource.Sensitivity {
+			return fmt.Errorf("proposal policy denied")
+		}
+	}
+	return nil
 }
 
 func (a *App) recordPolicyDecision(policy contextcore.Policy, correlation string, actor contextcore.Actor, capability contextcore.Capability, resource contextcore.Resource) (contextcore.AuthorizationDecision, error) {

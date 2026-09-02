@@ -494,6 +494,82 @@ func TestAppendCannotDowngradeCanonicalSensitivity(t *testing.T) {
 	}
 }
 
+func TestAppendCannotReplaceDeniedCanonicalTagBeforeAuthorization(t *testing.T) {
+	app, dataRoot := newEphyTestApp(t)
+	canonicalPath, canonical := writeAppendTarget(t, dataRoot)
+	canonical = []byte(strings.Replace(string(canonical), "tags: fixture, reviewed", "tags: do-not-share", 1))
+	if err := os.WriteFile(canonicalPath, canonical, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policyDir := filepath.Join(dataRoot, ".mdsys", "context", "v1")
+	if err := os.MkdirAll(policyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	policy := `{"protocol_version":"1.0","actors":{"ephy":{"sensitivity_ceiling":"internal","projects":["*"],"denied_tags":["do-not-share"],"provenance_types":["*"],"capabilities":["propose"]},"human":{"sensitivity_ceiling":"restricted","projects":["*"],"provenance_types":["*"],"capabilities":["review"]}}}`
+	if err := os.WriteFile(filepath.Join(policyDir, "policy.json"), []byte(policy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	proposal := writePendingPayload(t, dataRoot, appendProposalWithHash(t, canonical))
+	inbox, err := app.ListEphyProposals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox.Proposals) != 0 || len(inbox.Errors) != 1 || inbox.Errors[0].Code != "proposal_policy_denied" {
+		t.Fatalf("denied canonical tag was bypassed by the append patch: %#v", inbox)
+	}
+	if _, err := app.AcceptEphyProposal(proposal.CandidateID, proposal.ProposedFrontmatter, proposal.ProposedBody); err == nil || !strings.Contains(err.Error(), "policy") {
+		t.Fatalf("append with a denied canonical tag reached acceptance: %v", err)
+	}
+	current, err := os.ReadFile(canonicalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(current) != string(canonical) {
+		t.Fatal("denied append changed canonical content")
+	}
+}
+
+func TestAppendClassificationPatchMustMatchPathDerivedClassification(t *testing.T) {
+	for key, value := range map[string]string{"project": "master", "kind": "decision"} {
+		t.Run(key, func(t *testing.T) {
+			app, dataRoot := newEphyTestApp(t)
+			canonicalPath, canonical := writeAppendTarget(t, dataRoot)
+			canonical = []byte(strings.Replace(strings.Replace(string(canonical), "project: ephy\n", "", 1), "kind: note\n", "", 1))
+			if err := os.WriteFile(canonicalPath, canonical, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			payload := appendProposalWithHash(t, canonical)
+			var decoded map[string]any
+			if err := json.Unmarshal(payload, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			decoded["proposed_frontmatter"].(map[string]any)[key] = value
+			encoded, err := json.Marshal(decoded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			proposal := writePendingPayload(t, dataRoot, encoded)
+			inbox, err := app.ListEphyProposals()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(inbox.Proposals) != 0 || len(inbox.Errors) != 1 || inbox.Errors[0].Code != "proposal_policy_denied" {
+				t.Fatalf("path-derived %s classification was bypassed: %#v", key, inbox)
+			}
+			if _, err := app.AcceptEphyProposal(proposal.CandidateID, proposal.ProposedFrontmatter, proposal.ProposedBody); err == nil || !strings.Contains(err.Error(), "policy") {
+				t.Fatalf("mismatched path-derived %s reached acceptance: %v", key, err)
+			}
+			current, err := os.ReadFile(canonicalPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(current) != string(canonical) {
+				t.Fatalf("denied %s patch changed canonical content", key)
+			}
+		})
+	}
+}
+
 func TestDocumentExportUsesPolicyAndAuditDoesNotStorePath(t *testing.T) {
 	app, dataRoot := newEphyTestApp(t)
 	relativePath := "content/projects/private/note/2026-09/restricted-export-secret.md"

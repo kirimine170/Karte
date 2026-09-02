@@ -2340,7 +2340,7 @@ func (a *App) resolveEphyProposal(proposal ephyoutbox.Proposal) (*ephyResolvedPr
 	if _, ok := frontmatter["kind"]; !ok {
 		resolved.Warnings = append(resolved.Warnings, "Canonical frontmatter has no kind field.")
 	}
-	resolved.ProposedContent, err = buildEphyAppendContent(frontmatter, body, proposal.ProposedFrontmatter, proposal.ProposedBody, docID)
+	resolved.ProposedContent, err = buildEphyAppendContent(frontmatter, body, proposal.ProposedFrontmatter, proposal.ProposedBody, docID, proposal.Placement.Project, proposal.Placement.Kind)
 	return resolved, err
 }
 
@@ -2453,7 +2453,7 @@ func (a *App) AcceptEphyProposal(candidateID string, editedFrontmatter map[strin
 		if matchErr := validateEphyAppendTarget(proposal, currentFrontmatter); matchErr != nil {
 			return a.finishEphyConflict(store, proposal.CandidateID, proposal.TargetDocID, proposal.TargetRelativePath, "target_content_mismatch", matchErr.Error())
 		}
-		prepared, err = buildEphyAppendContent(currentFrontmatter, currentBody, frontmatter, body, docID)
+		prepared, err = buildEphyAppendContent(currentFrontmatter, currentBody, frontmatter, body, docID, proposal.Placement.Project, proposal.Placement.Kind)
 	}
 	if err != nil {
 		return nil, err
@@ -2675,7 +2675,7 @@ func validateEphyAppendTarget(proposal ephyoutbox.Proposal, frontmatter map[stri
 	return nil
 }
 
-func buildEphyAppendContent(currentFrontmatter map[string]any, currentBody string, patch map[string]any, fragment, docID string) (string, error) {
+func buildEphyAppendContent(currentFrontmatter map[string]any, currentBody string, patch map[string]any, fragment, docID, project, kind string) (string, error) {
 	frontmatter := cloneStringMap(currentFrontmatter)
 	for key, value := range patch {
 		if key == "doc_id" {
@@ -2683,8 +2683,15 @@ func buildEphyAppendContent(currentFrontmatter map[string]any, currentBody strin
 				return "", fmt.Errorf("append patch cannot change doc_id")
 			}
 		}
-		if (key == "project" || key == "kind") && frontmatter[key] != nil && frontmatter[key] != value {
-			return "", fmt.Errorf("append patch cannot move a document between project or kind directories")
+		if key == "project" || key == "kind" {
+			expected := project
+			if key == "kind" {
+				expected = kind
+			}
+			text, ok := value.(string)
+			if !ok || strings.ToLower(strings.TrimSpace(text)) != expected {
+				return "", fmt.Errorf("append patch cannot move a document between project or kind directories")
+			}
 		}
 		if key == "sensitivity" {
 			currentSensitivity := "internal"
