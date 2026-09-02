@@ -193,9 +193,17 @@ while IFS= read -r -d '' model; do
   fi
 done < <(find "$app_bundle/Contents/Resources" -type f -name '*.onnx' -print0)
 
-if [[ $model_count -eq 0 ]]; then
+require_asr_models=${KARTE_REQUIRE_ASR_MODELS:-1}
+if [[ "$require_asr_models" != "0" && "$require_asr_models" != "1" ]]; then
+  echo "KARTE_REQUIRE_ASR_MODELS must be 0 or 1" >&2
+  exit 1
+fi
+if [[ $model_count -eq 0 && "$require_asr_models" == "1" ]]; then
   echo "No ONNX models were packaged in $app_bundle" >&2
   exit 1
+fi
+if [[ $model_count -eq 0 ]]; then
+  echo "No ONNX models were packaged; continuing with runtime-only PR artifact"
 fi
 
 codesign_identity=${MACOS_CODESIGN_IDENTITY:--}

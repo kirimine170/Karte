@@ -204,9 +204,11 @@ jobs:
         run: go run ./cmd/buildmatrix --targets ${{ matrix.target }} --clean
 
       - name: Bundle and verify macOS runtime dependencies
-        # PR builds compile and package without the large ASR model payload.
-        # Main and manual builds fetch and verify the pinned upstream archive.
-        if: runner.os == 'macOS' && github.event_name != 'pull_request'
+        # PR builds omit the large ASR model payload but still bundle every
+        # runtime dylib，so their artifacts can be launched for native UAT.
+        if: runner.os == 'macOS'
+        env:
+          KARTE_REQUIRE_ASR_MODELS: ${{ github.event_name == 'pull_request' && '0' || '1' }}
         run: ./scripts/package-macos-runtime.sh "${{ matrix.artifact_path }}/Karte.app" "${{ matrix.target }}"
 
       - name: Verify final macOS application code seal
