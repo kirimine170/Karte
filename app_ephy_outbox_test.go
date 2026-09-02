@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -191,6 +192,69 @@ func TestAcceptEphyCreatePreservesYAMLListTags(t *testing.T) {
 	}
 }
 
+func TestProposalAuthorizationAuditsListAndAcceptSeparately(t *testing.T) {
+	app, dataRoot := newEphyTestApp(t)
+	proposal := writePendingFixture(t, dataRoot, "create-proposal.json")
+	if _, err := app.ListEphyProposals(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.AcceptEphyProposal(proposal.CandidateID, proposal.ProposedFrontmatter, proposal.ProposedBody); err != nil {
+		t.Fatal(err)
+	}
+	auditFiles, err := filepath.Glob(filepath.Join(dataRoot, ".mdsys", "context", "v1", "audit", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(auditFiles) != 4 {
+		t.Fatalf("list and accept authorization audits were deduplicated: files=%#v", auditFiles)
+	}
+	correlations := map[string]bool{}
+	actorOperations := map[string]int{}
+	for _, path := range auditFiles {
+		encoded, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		var event contextcore.AuditEvent
+		if err := json.Unmarshal(encoded, &event); err != nil {
+			t.Fatal(err)
+		}
+		correlations[event.CorrelationSHA256] = true
+		actorOperations[event.ActorType+":"+event.Operation]++
+	}
+	if len(correlations) != 4 || actorOperations["ephy:propose"] != 2 || actorOperations["human:review"] != 2 {
+		t.Fatalf("authorization audit phases are incomplete: correlations=%d actorOperations=%#v", len(correlations), actorOperations)
+	}
+}
+
+func TestCreateProposalDeduplicatesSourceProvenanceTypes(t *testing.T) {
+	app, dataRoot := newEphyTestApp(t)
+	fixture, _ := readProposalFixture(t, "create-proposal.json")
+	var payload map[string]any
+	if err := json.Unmarshal(fixture, &payload); err != nil {
+		t.Fatal(err)
+	}
+	sourceRefs := payload["source_refs"].([]any)
+	payload["source_refs"] = append(sourceRefs, map[string]any{
+		"type": "synthetic-test", "reference": "fixture://conversation/duplicate-type",
+	})
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := writePendingPayload(t, dataRoot, encoded)
+	inbox, err := app.ListEphyProposals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox.Proposals) != 1 || len(inbox.Errors) != 0 {
+		t.Fatalf("duplicate provenance type made proposal unreviewable: %#v", inbox)
+	}
+	if _, err := app.AcceptEphyProposal(proposal.CandidateID, proposal.ProposedFrontmatter, proposal.ProposedBody); err != nil {
+		t.Fatalf("duplicate provenance type blocked acceptance: %v", err)
+	}
+}
+
 func TestAcceptedEphyDocumentSurvivesRestartAndContextSearchRead(t *testing.T) {
 	app, dataRoot := newEphyTestApp(t)
 	proposal := writePendingFixture(t, dataRoot, "create-proposal.json")
@@ -368,6 +432,28 @@ func TestAcceptEphyAppendUsesMatchingDocIDContentAndByteHash(t *testing.T) {
 	}
 }
 
+func TestAppendProposalDeduplicatesCanonicalProvenanceType(t *testing.T) {
+	app, dataRoot := newEphyTestApp(t)
+	_, canonical := writeAppendTarget(t, dataRoot)
+	payload := appendProposalWithHash(t, canonical)
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	sourceRefs := decoded["source_refs"].([]any)
+	decoded["source_refs"] = append(sourceRefs, map[string]any{
+		"type": "canonical", "reference": "fixture://canonical/reference",
+	})
+	encoded, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := writePendingPayload(t, dataRoot, encoded)
+	if _, err := app.AcceptEphyProposal(proposal.CandidateID, proposal.ProposedFrontmatter, proposal.ProposedBody); err != nil {
+		t.Fatalf("canonical provenance type blocked append acceptance: %v", err)
+	}
+}
+
 func TestAcceptEphyAppendStopsOnStaleBaseHash(t *testing.T) {
 	app, dataRoot := newEphyTestApp(t)
 	canonicalPath, canonical := writeAppendTarget(t, dataRoot)
@@ -410,8 +496,290 @@ func TestListEphyAppendRejectsProjectOrKindMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inbox.Proposals) != 0 || len(inbox.Errors) != 1 || !strings.Contains(inbox.Errors[0].Message, "project") {
+	if len(inbox.Proposals) != 0 || len(inbox.Errors) != 1 || inbox.Errors[0].Code != "proposal_policy_denied" || strings.Contains(inbox.Errors[0].Message, "master") {
 		t.Fatalf("content mismatch was not rejected: %#v", inbox)
+	}
+}
+
+func TestProposalPolicyDenialDoesNotExposeRestrictedPayload(t *testing.T) {
+	app, dataRoot := newEphyTestApp(t)
+	fixture, _ := readProposalFixture(t, "create-proposal.json")
+	var payload map[string]any
+	if err := json.Unmarshal(fixture, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["sensitivity"] = "restricted"
+	payload["proposed_body"] = "Restricted proposal body must stay hidden."
+	frontmatter := payload["proposed_frontmatter"].(map[string]any)
+	frontmatter["title"] = "Restricted proposal title"
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePendingPayload(t, dataRoot, encoded)
+	inbox, err := app.ListEphyProposals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox.Proposals) != 0 || len(inbox.Errors) != 1 || inbox.Errors[0].Code != "proposal_policy_denied" {
+		t.Fatalf("restricted proposal was exposed: %#v", inbox)
+	}
+	serialized, err := json.Marshal(inbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"Restricted proposal body", "Restricted proposal title", "synthetic-placement-decision.md"} {
+		if strings.Contains(string(serialized), secret) {
+			t.Fatalf("denied proposal disclosed %q: %s", secret, serialized)
+		}
+	}
+	proposal, err := ephyoutbox.DecodeProposal(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.RejectEphyProposal(proposal.CandidateID, "deny"); err == nil || !strings.Contains(err.Error(), "policy") {
+		t.Fatalf("restricted proposal was directly rejected outside policy: %v", err)
+	}
+	if store, err := ephyoutbox.NewStore(dataRoot); err != nil {
+		t.Fatal(err)
+	} else if existing, readErr := store.ReadReceipt(proposal.CandidateID); readErr != nil || existing != nil {
+		t.Fatalf("denied rejection wrote a receipt: receipt=%#v err=%v", existing, readErr)
+	}
+}
+
+func TestAppendCannotDowngradeCanonicalSensitivity(t *testing.T) {
+	app, dataRoot := newEphyTestApp(t)
+	canonicalPath, canonical := writeAppendTarget(t, dataRoot)
+	canonical = []byte(strings.Replace(string(canonical), "kind: note\n", "kind: note\nsensitivity: confidential\n", 1))
+	if err := os.WriteFile(canonicalPath, canonical, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	payload := appendProposalWithHash(t, canonical)
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	decoded["sensitivity"] = "internal"
+	patch := decoded["proposed_frontmatter"].(map[string]any)
+	patch["sensitivity"] = "internal"
+	encoded, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := writePendingPayload(t, dataRoot, encoded)
+	if _, err := app.AcceptEphyProposal(proposal.CandidateID, proposal.ProposedFrontmatter, proposal.ProposedBody); err == nil || !strings.Contains(err.Error(), "policy") {
+		t.Fatalf("sensitivity downgrade was not denied: %v", err)
+	}
+	current, err := os.ReadFile(canonicalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(current) != string(canonical) {
+		t.Fatal("denied sensitivity downgrade changed canonical content")
+	}
+}
+
+func TestAppendCannotReplaceDeniedCanonicalTagBeforeAuthorization(t *testing.T) {
+	app, dataRoot := newEphyTestApp(t)
+	canonicalPath, canonical := writeAppendTarget(t, dataRoot)
+	canonical = []byte(strings.Replace(string(canonical), "tags: fixture, reviewed", "tags: do-not-share", 1))
+	if err := os.WriteFile(canonicalPath, canonical, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policyDir := filepath.Join(dataRoot, ".mdsys", "context", "v1")
+	if err := os.MkdirAll(policyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	policy := `{"protocol_version":"1.0","actors":{"ephy":{"sensitivity_ceiling":"internal","projects":["*"],"denied_tags":["do-not-share"],"provenance_types":["*"],"capabilities":["propose"]},"human":{"sensitivity_ceiling":"restricted","projects":["*"],"provenance_types":["*"],"capabilities":["review"]}}}`
+	if err := os.WriteFile(filepath.Join(policyDir, "policy.json"), []byte(policy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	proposal := writePendingPayload(t, dataRoot, appendProposalWithHash(t, canonical))
+	inbox, err := app.ListEphyProposals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox.Proposals) != 0 || len(inbox.Errors) != 1 || inbox.Errors[0].Code != "proposal_policy_denied" {
+		t.Fatalf("denied canonical tag was bypassed by the append patch: %#v", inbox)
+	}
+	if _, err := app.AcceptEphyProposal(proposal.CandidateID, proposal.ProposedFrontmatter, proposal.ProposedBody); err == nil || !strings.Contains(err.Error(), "policy") {
+		t.Fatalf("append with a denied canonical tag reached acceptance: %v", err)
+	}
+	current, err := os.ReadFile(canonicalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(current) != string(canonical) {
+		t.Fatal("denied append changed canonical content")
+	}
+}
+
+func TestAppendClassificationPatchMustMatchPathDerivedClassification(t *testing.T) {
+	for key, value := range map[string]string{"project": "master", "kind": "decision"} {
+		t.Run(key, func(t *testing.T) {
+			app, dataRoot := newEphyTestApp(t)
+			canonicalPath, canonical := writeAppendTarget(t, dataRoot)
+			canonical = []byte(strings.Replace(strings.Replace(string(canonical), "project: ephy\n", "", 1), "kind: note\n", "", 1))
+			if err := os.WriteFile(canonicalPath, canonical, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			payload := appendProposalWithHash(t, canonical)
+			var decoded map[string]any
+			if err := json.Unmarshal(payload, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			decoded["proposed_frontmatter"].(map[string]any)[key] = value
+			encoded, err := json.Marshal(decoded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			proposal := writePendingPayload(t, dataRoot, encoded)
+			inbox, err := app.ListEphyProposals()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(inbox.Proposals) != 0 || len(inbox.Errors) != 1 || inbox.Errors[0].Code != "proposal_policy_denied" {
+				t.Fatalf("path-derived %s classification was bypassed: %#v", key, inbox)
+			}
+			if _, err := app.AcceptEphyProposal(proposal.CandidateID, proposal.ProposedFrontmatter, proposal.ProposedBody); err == nil || !strings.Contains(err.Error(), "policy") {
+				t.Fatalf("mismatched path-derived %s reached acceptance: %v", key, err)
+			}
+			current, err := os.ReadFile(canonicalPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(current) != string(canonical) {
+				t.Fatalf("denied %s patch changed canonical content", key)
+			}
+		})
+	}
+}
+
+func TestDocumentExportUsesPolicyAndAuditDoesNotStorePath(t *testing.T) {
+	app, dataRoot := newEphyTestApp(t)
+	relativePath := "content/projects/private/note/2026-09/restricted-export-secret.md"
+	canonical := `---
+title: "Restricted export title"
+tags: person:secret-export
+doc_id: "doc:restricted-export"
+project: private
+kind: note
+sensitivity: restricted
+---
+Restricted export body.
+`
+	absPath := filepath.Join(dataRoot, filepath.FromSlash(relativePath))
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(absPath, []byte(canonical), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policyDir := filepath.Join(dataRoot, ".mdsys", "context", "v1")
+	if err := os.MkdirAll(policyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	policy := `{"protocol_version":"1.0","actors":{"human":{"sensitivity_ceiling":"internal","projects":["*"],"provenance_types":["canonical"],"capabilities":["review","export"]}}}`
+	if err := os.WriteFile(filepath.Join(policyDir, "policy.json"), []byte(policy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.authorizeDocumentExport(relativePath); err == nil {
+		t.Fatal("restricted export was allowed above the human ceiling")
+	}
+	auditFiles, err := filepath.Glob(filepath.Join(policyDir, "audit", "*.json"))
+	if err != nil || len(auditFiles) != 1 {
+		t.Fatalf("export audit is missing: files=%#v err=%v", auditFiles, err)
+	}
+	auditData, err := os.ReadFile(auditFiles[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{relativePath, "Restricted export title", "person:secret-export", "doc:restricted-export", "Restricted export body"} {
+		if strings.Contains(string(auditData), secret) {
+			t.Fatalf("export audit disclosed %q: %s", secret, auditData)
+		}
+	}
+}
+
+func TestContextGraphAndHTMLExportLogsDoNotPersistContentIdentifiers(t *testing.T) {
+	app, dataRoot := newEphyTestApp(t)
+	app.ctx = nil
+	relativePath := "content/projects/ephy/note/2026-09/private-log-path.md"
+	canonical := `---
+title: "Private log title"
+tags: person:private-log-person
+doc_id: "doc:private-log-id"
+project: ephy
+kind: note
+sensitivity: internal
+---
+Private log body payload.
+`
+	absPath := filepath.Join(dataRoot, filepath.FromSlash(relativePath))
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(absPath, []byte(canonical), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app.logFilePath = filepath.Join(dataRoot, "app.log")
+	if _, err := app.GetGraphData(); err != nil {
+		t.Fatal(err)
+	}
+	exportedURL, err := app.ExportPreviewHTML(relativePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exportedPath := strings.TrimPrefix(exportedURL, "file://")
+	exportedData, err := os.ReadFile(exportedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(exportedData), "Private log body payload") {
+		t.Fatalf("export did not render the canonical document: %s", exportedData)
+	}
+	exportedInfo, err := os.Stat(exportedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && exportedInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("HTML export permissions are too broad: %o", exportedInfo.Mode().Perm())
+	}
+	logData, err := os.ReadFile(app.logFilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{relativePath, "Private log title", "person:private-log-person", "doc:private-log-id", "Private log body payload"} {
+		if strings.Contains(string(logData), secret) {
+			t.Fatalf("durable app log disclosed %q: %s", secret, logData)
+		}
+	}
+}
+
+func TestRootDocumentCreatedByUIUsesLegacyClassificationForExport(t *testing.T) {
+	app, _ := newEphyTestApp(t)
+	app.ctx = nil
+	if created, err := app.CreateNewFile("root-export"); err != nil || !created {
+		t.Fatalf("root document was not created: created=%v err=%v", created, err)
+	}
+	const relativePath = "content/root-export.md"
+	loaded, err := app.LoadFile(relativePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(loaded, "doc_id:") {
+		t.Fatalf("root document did not receive doc_id: %s", loaded)
+	}
+	exportedURL, err := app.ExportPreviewHTML(relativePath)
+	if err != nil {
+		t.Fatalf("legacy-classified root document could not be exported: %v", err)
+	}
+	exported, err := os.ReadFile(strings.TrimPrefix(exportedURL, "file://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(exported), "Start writing your content here") {
+		t.Fatalf("root document export lost canonical body: %s", exported)
 	}
 }
 

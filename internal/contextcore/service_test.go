@@ -78,6 +78,135 @@ This body must not appear in the default Ephy scope.
 	}
 }
 
+func TestRestrictedAndUnknownDocIDsAreIndistinguishableToScopedActor(t *testing.T) {
+	dataDir := newContextFixture(t)
+	writeContextDocument(t, dataDir, "content/projects/ephy/note/2026-09/hidden.md", `---
+title: "Hidden title"
+tags: person:alice
+doc_id: "doc:hidden-existence"
+project: ephy
+kind: note
+sensitivity: restricted
+---
+Hidden body.
+`)
+	writeContextDocument(t, dataDir, "content/projects/ephy/note/2026-09/invalid.md", "missing frontmatter")
+	service, err := NewService(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := Request{
+		ProtocolVersion: ProtocolVersion, RequestID: "read-hidden", Operation: "read",
+		Actor: Actor{Type: "ephy", ID: "ephy"}, Scope: Scope{Projects: []string{"ephy"}, SensitivityCeiling: "restricted"},
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	for _, docID := range []string{"doc:hidden-existence", "doc:does-not-exist"} {
+		request.DocID = &docID
+		document, diagnostics, status, readErr := service.Read(request, DefaultPolicy())
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if status != "denied" || document != nil || len(diagnostics) != 0 {
+			t.Fatalf("scoped read disclosed existence for %s: status=%s document=%#v diagnostics=%#v", docID, status, document, diagnostics)
+		}
+	}
+
+	fullyScopedEphyPolicy := DefaultPolicy()
+	fullyScopedEphyPolicy.Actors["ephy"] = ActorPolicy{
+		SensitivityCeiling: "restricted", Projects: []string{"*"}, ProvenanceTypes: []string{"*"},
+		Capabilities: []Capability{CapabilityRead},
+	}
+	missingForEphy := "doc:still-does-not-exist"
+	request.DocID = &missingForEphy
+	request.Scope = Scope{Projects: []string{"*"}, SensitivityCeiling: "restricted"}
+	document, diagnostics, status, err := service.Read(request, fullyScopedEphyPolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "denied" || document != nil || len(diagnostics) != 0 {
+		t.Fatalf("fully scoped Ephy read disclosed non-existence: status=%s document=%#v diagnostics=%#v", status, document, diagnostics)
+	}
+
+	human := request
+	human.Actor = Actor{Type: "human", ID: "local-human"}
+	human.Scope = Scope{Projects: []string{"*"}, SensitivityCeiling: "restricted"}
+	missing := "doc:does-not-exist"
+	human.DocID = &missing
+	_, _, status, err = service.Read(human, DefaultPolicy())
+	if err != nil || status != "not_found" {
+		t.Fatalf("fully authorized human did not receive not_found: status=%s err=%v", status, err)
+	}
+}
+
+func TestContextAuditContainsMetadataOnly(t *testing.T) {
+	dataDir := newContextFixture(t)
+	writeContextDocument(t, dataDir, "content/projects/ephy/note/2026-09/secret-path-name.md", `---
+title: "Secret audit title"
+tags: person:secret-name
+doc_id: "doc:secret-audit-id"
+project: ephy
+kind: note
+sensitivity: internal
+---
+Secret audit body payload.
+`)
+	processor, err := NewProcessor(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := Request{
+		ProtocolVersion: ProtocolVersion, RequestID: "audit-metadata-only", Operation: "search",
+		Actor: Actor{Type: "ephy", ID: "runtime-secret-actor"}, Scope: Scope{Projects: []string{"ephy"}, SensitivityCeiling: "internal"},
+		Query: &SearchQuery{Text: "Secret audit body payload", TopK: 3}, CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestPath := filepath.Join(dataDir, ".mdsys", "context", "v1", "requests", request.RequestID+".json")
+	if err := os.WriteFile(requestPath, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if summary, processErr := processor.ProcessPending(1); processErr != nil || summary.Processed != 1 {
+		t.Fatalf("audit fixture was not processed: summary=%#v err=%v", summary, processErr)
+	}
+	auditFiles, err := filepath.Glob(filepath.Join(dataDir, ".mdsys", "context", "v1", "audit", "*.json"))
+	if err != nil || len(auditFiles) != 1 {
+		t.Fatalf("audit event missing: files=%#v err=%v", auditFiles, err)
+	}
+	auditData, err := os.ReadFile(auditFiles[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		for _, path := range []string{filepath.Dir(auditFiles[0]), auditFiles[0]} {
+			info, statErr := os.Stat(path)
+			if statErr != nil {
+				t.Fatal(statErr)
+			}
+			want := os.FileMode(0o600)
+			if info.IsDir() {
+				want = 0o700
+			}
+			if info.Mode().Perm() != want {
+				t.Fatalf("context audit permissions are too broad: %s=%o", path, info.Mode().Perm())
+			}
+		}
+	}
+	for _, secret := range []string{"Secret audit body payload", "Secret audit title", "secret-path-name", "doc:secret-audit-id", "person:secret-name", "runtime-secret-actor"} {
+		if strings.Contains(string(auditData), secret) {
+			t.Fatalf("audit disclosed %q: %s", secret, auditData)
+		}
+	}
+	var event AuditEvent
+	if err := json.Unmarshal(auditData, &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Operation != "search" || event.Status != "ok" || event.ResultCount != 1 || event.ActorIDSHA256 == "" || event.CorrelationSHA256 == "" {
+		t.Fatalf("audit metadata is incomplete: %#v", event)
+	}
+}
+
 func TestServiceExcludesDuplicateDocIDAndSymlink(t *testing.T) {
 	dataDir := newContextFixture(t)
 	for _, name := range []string{"one.md", "two.md"} {

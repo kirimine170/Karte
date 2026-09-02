@@ -33,8 +33,7 @@ func NewRealtimeService(cfg *Config) (*RealtimeService, error) {
 // NewRealtimeServiceWithLogger creates a new real-time ASR service with custom logger
 func NewRealtimeServiceWithLogger(cfg *Config, logFunc LogFunc) (*RealtimeService, error) {
 	log := func(format string, args ...interface{}) {
-		msg := fmt.Sprintf("[RealtimeASR] "+format, args...)
-		fmt.Printf("%s\n", msg)
+		fmt.Printf("[RealtimeASR] operational event\n")
 		if logFunc != nil {
 			logFunc(format, args...)
 		}
@@ -224,7 +223,7 @@ func (s *RealtimeService) Flush() string {
 
 	res := s.recognizer.GetResult(s.stream)
 	finalText := res.Text
-	fmt.Printf("[RealtimeASR] Flush result: %q\n", finalText)
+	fmt.Printf("[RealtimeASR] Flush result available\n")
 
 	// Reset for next use
 	s.recognizer.Reset(s.stream)
@@ -245,8 +244,7 @@ func (s *RealtimeService) Reset() {
 
 // onlineRecognizerConfig builds OnlineRecognizerConfig from Config
 func (c *Config) onlineRecognizerConfig() *sherpa.OnlineRecognizerConfig {
-	fmt.Printf("[RealtimeASR] onlineRecognizerConfig: Building config with Tokens=%s, Encoder=%s, Decoder=%s, Joiner=%s\n",
-		c.Model.Tokens, c.Model.Encoder, c.Model.Decoder, c.Model.Joiner)
+	fmt.Printf("[RealtimeASR] onlineRecognizerConfig: Building config\n")
 
 	modelCfg := sherpa.OnlineModelConfig{
 		Tokens:     c.Model.Tokens,

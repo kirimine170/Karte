@@ -4,6 +4,8 @@
 
 Ephy atomically publishes proposal JSON to `KARTE_DATA_DIR/.mdsys/ephy/outbox/pending`．Karte's `Ephy候補` review opens validated candidates and displays operation，Karte-resolved target，placement reason and confidence，alternatives，`base_sha256`，source references，sensitivity，and either a complete create preview or an append diff．The reviewer can accept the original proposal，edit frontmatter／Markdown fragment and accept，or reject it．No action runs automatically．
 
+Proposal表示前とaccept直前に[Personal Context privacy policy](adr/ADR-0004-personal-context-privacy-provenance-policy.md)を再評価する．Ephy actorには`propose`，local humanには`review` capabilityが必要である．appendはcanonical project／kind／sensitivityと一致しなければならず，append patchで`sensitivity`を変更できない．policy denialはtitle，body，path，tag，canonical documentの存在をUIへ返さない．
+
 Karte checks the pending outbox every five seconds while the review dialog is closed．The top-bar action displays `Ephy候補 (N)` when validated pending proposals exist．Opening the dialog refreshes immediately，and background refresh is suspended while the reviewer is editing so a poll cannot overwrite reviewed frontmatter or body text．
 
 For a local unpackaged acceptance build，run `bash scripts/build_local_app.sh` and start `build/bin/karte` with the intended `KARTE_DATA_DIR`．A compatible Wails CLI may instead create the packaged application with `wails build`．

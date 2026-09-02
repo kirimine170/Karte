@@ -16,6 +16,31 @@ export interface EventLoggerConfig {
     maxLogs?: number; // 最大ログ数（メモリ保護）
 }
 
+const SAFE_STRING_KEYS = new Set(['theme', 'tab', 'reason', 'stage', 'mode', 'strategy', 'kind', 'status']);
+const SAFE_CODE_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+const SAFE_ERROR_CODES = new Set(['no-content', 'no-file-selected', 'pdf-readonly', 'board-autosave']);
+
+function sanitizeEventState(state: any): Record<string, boolean | number | string> | undefined {
+    if (!state || typeof state !== 'object' || Array.isArray(state)) {
+        return undefined;
+    }
+    const sanitized: Record<string, boolean | number | string> = {};
+    for (const [key, value] of Object.entries(state)) {
+        if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) {
+            sanitized[key] = value;
+            continue;
+        }
+        if (key === 'error' && typeof value === 'string') {
+            sanitized.error = SAFE_ERROR_CODES.has(value) ? value : 'redacted';
+            continue;
+        }
+        if (SAFE_STRING_KEYS.has(key) && typeof value === 'string' && SAFE_CODE_PATTERN.test(value)) {
+            sanitized[key] = value;
+        }
+    }
+    return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
+
 class EventLogger {
     private logs: EventLog[] = [];
     private isTestMode: boolean;
@@ -40,10 +65,13 @@ class EventLogger {
      * イベントログを記録
      */
     log(component: string, action: string, state?: any): void {
+        const safeState = sanitizeEventState(state);
+        const safeComponent = SAFE_CODE_PATTERN.test(component) ? component : 'unknown';
+        const safeAction = SAFE_CODE_PATTERN.test(action) ? action : 'unknown';
         const logEntry: EventLog = {
-            component,
-            action,
-            state,
+            component: safeComponent,
+            action: safeAction,
+            ...(safeState ? { state: safeState } : {}),
             timestamp: Date.now(),
         };
 
@@ -56,7 +84,7 @@ class EventLogger {
         }
 
         // 常にconsole.logで出力（開発・デバッグ用）
-        console.log(`[${component}] ${action}`, state ? state : '');
+        console.log(`[${safeComponent}] ${safeAction}`, safeState || '');
     }
 
     /**
@@ -127,8 +155,8 @@ class EventLogger {
                 // this.logs = []; // 必要に応じてコメントアウト
             }
             return result;
-        } catch (error) {
-            console.error('EventLogger: Failed to save logs to backend:', error);
+        } catch (_error) {
+            console.error('EventLogger: Failed to save logs to backend');
             return false;
         } finally {
             this.pendingSave = false;
@@ -143,8 +171,8 @@ class EventLogger {
         const interval = intervalMs || this.config.autoSaveInterval || 60000;
         this.autoSaveInterval = window.setInterval(() => {
             if (this.logs.length > 0) {
-                this.saveToBackend().catch(err => {
-                    console.error('EventLogger: Auto-save failed:', err);
+                this.saveToBackend().catch(_error => {
+                    console.error('EventLogger: Auto-save failed');
                 });
             }
         }, interval);
@@ -170,4 +198,3 @@ class EventLogger {
 
 // シングルトンインスタンス（後でAPIを設定する）
 export const eventLogger = new EventLogger();
-

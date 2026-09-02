@@ -701,8 +701,7 @@ func processInlineFormatting(text string) string {
 		titleMatch := regexp.MustCompile(`__LINK_TITLE_START__(.*?)__LINK_TITLE_END__`).FindStringSubmatch(content)
 
 		if len(urlMatch) < 2 || len(textMatch) < 2 {
-			// Log error for debugging
-			fmt.Printf("[Marp] Failed to parse link placeholder: content=%q\n", content)
+			fmt.Printf("[Marp] Failed to parse link placeholder\n")
 			return match // Return original if parsing fails
 		}
 
@@ -733,8 +732,6 @@ func processInlineFormatting(text string) string {
 		}
 		linkTag += fmt.Sprintf(`>%s</a>`, linkText)
 
-		fmt.Printf("[Marp] Generated link tag: %s (url: %s, text: %s, title: %s)\n", linkTag, linkURL, linkText, linkTitle)
-
 		return linkTag
 	})
 
@@ -760,8 +757,7 @@ func processInlineFormatting(text string) string {
 		titleMatch := regexp.MustCompile(`__IMAGE_TITLE_START__(.*?)__IMAGE_TITLE_END__`).FindStringSubmatch(content)
 
 		if len(pathMatch) < 2 || len(altMatch) < 2 {
-			// Log error for debugging
-			fmt.Printf("[Marp] Failed to parse image placeholder: content=%q\n", content)
+			fmt.Printf("[Marp] Failed to parse image placeholder\n")
 			return match // Return original if parsing fails
 		}
 
@@ -799,8 +795,6 @@ func processInlineFormatting(text string) string {
 			imgTag += fmt.Sprintf(` title="%s"`, imgTitle)
 		}
 		imgTag += `>`
-
-		fmt.Printf("[Marp] Generated img tag: %s (path: %s, title: %s)\n", imgTag, imgPath, imgTitle)
 
 		return imgTag
 	})

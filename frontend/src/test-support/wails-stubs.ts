@@ -27,11 +27,11 @@ export async function CreateNewFile() {
   return true;
 }
 
-export async function ExportPDF() {
+export async function ExportPDF(_relativePath) {
   return '';
 }
 
-export async function ExportPreviewHTML() {
+export async function ExportPreviewHTML(_relativePath) {
   return '';
 }
 

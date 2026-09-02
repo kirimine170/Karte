@@ -61,6 +61,7 @@ var (
 		".webp": {},
 	}
 	backupImageExtCandidates = []string{".jpg", ".jpeg", ".png", ".gif"}
+	eventLogTokenPattern     = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]{0,63}$`)
 )
 
 //go:embed frontend/src/printout/generated/pagination-runtime.js
@@ -167,42 +168,79 @@ type webClipMetadataProcessing struct {
 // 	docID string
 // }
 
-// logInfo writes info logs to both Wails runtime and app log file
-func (a *App) logInfo(msg string) {
-	if a.ctx != nil {
-		runtime.LogInfo(a.ctx, msg)
-	}
-	a.appendLog("INFO", msg)
+// logInfo records only the calling operation. The original message can contain
+// Personal Context content and must not cross the logging boundary.
+func (a *App) logInfo(_ string) {
+	a.writeOperationalLog("INFO", operationalLogCaller(2))
 }
 
-// logError writes error logs to both Wails runtime and app log file
-func (a *App) logError(msg string) {
-	if a.ctx != nil {
-		runtime.LogError(a.ctx, msg)
-	}
-	a.appendLog("ERROR", msg)
+// logError records only the calling operation. Error values can contain paths，
+// titles，queries，or document content and therefore are deliberately discarded.
+func (a *App) logError(_ string) {
+	a.writeOperationalLog("ERROR", operationalLogCaller(2))
 }
 
-// LogJS logs a message from JavaScript to the app log file
-// This allows JavaScript code to write logs that appear in app.log
+// LogJS records only JavaScript event level metadata. The supplied message is
+// discarded because frontend errors and state may contain Personal Context data.
 func (a *App) LogJS(level, msg string) {
-	// Prepend [JS] prefix to distinguish from Go logs
-	formattedMsg := fmt.Sprintf("[JS] %s", msg)
+	_ = msg
 	switch strings.ToUpper(level) {
 	case "ERROR", "ERR":
-		runtime.LogError(a.ctx, formattedMsg)
-		a.appendLog("ERROR", formattedMsg)
+		a.writeOperationalLog("ERROR", "javascript")
 	case "WARN", "WARNING":
-		runtime.LogWarning(a.ctx, formattedMsg)
-		a.appendLog("WARN", formattedMsg)
+		a.writeOperationalLog("WARN", "javascript")
 	case "DEBUG":
-		runtime.LogDebug(a.ctx, formattedMsg)
-		a.appendLog("DEBUG", formattedMsg)
+		a.writeOperationalLog("DEBUG", "javascript")
 	default:
-		// Default to INFO
-		runtime.LogInfo(a.ctx, formattedMsg)
-		a.appendLog("INFO", formattedMsg)
+		a.writeOperationalLog("INFO", "javascript")
 	}
+}
+
+func operationalLogCaller(skip int) string {
+	programCounter, _, _, ok := goruntime.Caller(skip)
+	if !ok {
+		return "unknown"
+	}
+	function := goruntime.FuncForPC(programCounter)
+	if function == nil {
+		return "unknown"
+	}
+	name := function.Name()
+	if slash := strings.LastIndex(name, "/"); slash >= 0 {
+		name = name[slash+1:]
+	}
+	var safe strings.Builder
+	for _, character := range name {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("._-", character) {
+			safe.WriteRune(character)
+		} else {
+			safe.WriteByte('_')
+		}
+		if safe.Len() >= 96 {
+			break
+		}
+	}
+	if safe.Len() == 0 {
+		return "unknown"
+	}
+	return safe.String()
+}
+
+func (a *App) writeOperationalLog(level, operation string) {
+	message := "operation=" + operation
+	if a.ctx != nil {
+		switch level {
+		case "ERROR":
+			runtime.LogError(a.ctx, message)
+		case "WARN":
+			runtime.LogWarning(a.ctx, message)
+		case "DEBUG":
+			runtime.LogDebug(a.ctx, message)
+		default:
+			runtime.LogInfo(a.ctx, message)
+		}
+	}
+	a.appendLog(level, message)
 }
 
 func (a *App) appendLog(level, msg string) {
@@ -215,15 +253,21 @@ func (a *App) appendLog(level, msg string) {
 	if fs == nil {
 		fs = OSFileSystem{}
 	}
-	f, err := fs.OpenFile(a.logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := fs.OpenFile(a.logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
-		// fallback to std logger if file can't be opened
-		log.Printf("log open error: %v", err)
+		log.Printf("operational log unavailable")
 		return
 	}
 	defer f.Close()
+	if privateFile, ok := f.(interface{ Chmod(os.FileMode) error }); ok {
+		_ = privateFile.Chmod(0o600)
+	}
 	_, _ = f.Write([]byte(line))
 }
+
+// logPrivate deliberately discards content-bearing diagnostics. Personal Context
+// titles，paths，doc_id values，tags，links，and bodies must never reach durable logs.
+func (a *App) logPrivate(_ string) {}
 
 // FileItem represents a markdown file in the content directory
 type FileItem struct {
@@ -483,7 +527,7 @@ func (a *App) startup(ctx context.Context) {
 	// Determine base directory from executable location
 	exePath, err := os.Executable()
 	if err != nil {
-		runtime.LogError(ctx, fmt.Sprintf("Failed to get executable path: %v", err))
+		a.logError("executable path unavailable")
 		return
 	}
 	exeDir := filepath.Dir(exePath)
@@ -529,7 +573,7 @@ func (a *App) startup(ctx context.Context) {
 	if a.dataDir == "" {
 		configuredDataDir, configured, configErr := runtimepath.ConfiguredDataDir(appPlacedDir)
 		if configErr != nil {
-			runtime.LogError(ctx, fmt.Sprintf("Failed to resolve persisted data directory: %v", configErr))
+			a.logError("persisted data directory unavailable")
 			return
 		}
 		if configured {
@@ -548,7 +592,7 @@ func (a *App) startup(ctx context.Context) {
 			os.Getenv("LOCALAPPDATA"),
 		)
 		if pathErr != nil {
-			runtime.LogError(ctx, fmt.Sprintf("Failed to resolve data directory: %v", pathErr))
+			a.logError("default data directory unavailable")
 			return
 		}
 		a.root = defaultRoot
@@ -558,7 +602,7 @@ func (a *App) startup(ctx context.Context) {
 			legacyDataDir := filepath.Join(appPlacedDir, "karte_data")
 			migrated, migrationErr := runtimepath.MigrateLegacyDataDir(legacyDataDir, a.dataDir)
 			if migrationErr != nil {
-				runtime.LogError(ctx, fmt.Sprintf("Failed to migrate legacy data directory: %v", migrationErr))
+				a.logError("legacy data directory migration failed")
 				return
 			}
 			if migrated {
@@ -567,12 +611,12 @@ func (a *App) startup(ctx context.Context) {
 		}
 	}
 	if err := a.initializeDataDirectory(); err != nil {
-		runtime.LogError(ctx, fmt.Sprintf("Failed to initialize data directory: %v", err))
+		a.logError("data directory initialization failed")
 		return
 	}
 	_, runtimePIDErr := runtimepath.WriteRuntimePID(a.dataDir, os.Getpid())
 	if runtimePIDErr != nil {
-		runtime.LogError(ctx, fmt.Sprintf("Failed to publish runtime identity: %v", runtimePIDErr))
+		a.logError("runtime identity publication failed")
 		return
 	}
 	a.logInfo("Published data-root runtime identity")
@@ -586,7 +630,7 @@ func (a *App) startup(ctx context.Context) {
 	a.asrInitDone = make(chan struct{})
 	go func() {
 		if err := a.initASRService(); err != nil {
-			runtime.LogError(ctx, fmt.Sprintf("Failed to initialize ASR service: %v", err))
+			a.logError("ASR initialization failed")
 		} else if a.asrService != nil || a.realtimeService != nil {
 			a.logInfo("ASR service initialized")
 		}
@@ -1460,7 +1504,7 @@ func (a *App) ClipURL(req clip.ClipRequest) (clip.ClipResult, error) {
 
 	a.logInfo(fmt.Sprintf("ClipURL: imported %s to %s", result.SourceURL, result.MarkdownPath))
 	if err := a.BuildSite(); err != nil {
-		runtime.LogError(a.ctx, fmt.Sprintf("Failed to build site after web clip: %v", err))
+		a.logError("site build failed after web clip")
 	}
 	a.emitEvent("file-changed", result.MarkdownPath)
 	a.enqueueWebClipAssetConversion(result.MarkdownPath, result.AssetDir)
@@ -1988,7 +2032,7 @@ func (a *App) saveBoardDocument(doc *boardpkg.Document) (*boardpkg.Document, err
 	}
 
 	if err := a.BuildSite(); err != nil {
-		runtime.LogError(a.ctx, fmt.Sprintf("Failed to build site after board save: %v", err))
+		a.logError("site build failed after board save")
 	}
 	runtime.EventsEmit(a.ctx, "file-changed", doc.Path)
 
@@ -2002,25 +2046,25 @@ func (a *App) saveBoardDocument(doc *boardpkg.Document) (*boardpkg.Document, err
 // LoadFile loads the content of a markdown file
 // For PDF files, returns an empty string since PDFs are not editable
 func (a *App) LoadFile(path string) (string, error) {
-	runtime.LogInfo(a.ctx, fmt.Sprintf("LoadFile called with path: %s", path))
+	a.logPrivate(fmt.Sprintf("LoadFile called with path: %s", path))
 
 	absPath, ok := a.resolveContentPath(path)
 	if !ok {
-		runtime.LogError(a.ctx, fmt.Sprintf("Invalid path: %s", path))
+		a.logError("file path is invalid")
 		return "", fmt.Errorf("invalid path: %s", path)
 	}
 
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Resolved path: %s", absPath))
+	a.logPrivate(fmt.Sprintf("Resolved path: %s", absPath))
 
 	// Check if this is a PDF file
 	if strings.HasSuffix(strings.ToLower(path), ".pdf") {
-		runtime.LogInfo(a.ctx, fmt.Sprintf("PDF file detected, returning empty string"))
+		a.logInfo("PDF file detected，returning empty content")
 		return "", nil
 	}
 
 	content, err := os.ReadFile(absPath)
 	if err != nil {
-		runtime.LogError(a.ctx, fmt.Sprintf("Failed to read file %s: %v", absPath, err))
+		a.logError("file read failed")
 		return "", fmt.Errorf("failed to read file: %v", err)
 	}
 
@@ -2041,7 +2085,7 @@ func (a *App) LoadFile(path string) (string, error) {
 		}
 	}
 
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Successfully loaded file, content length: %d", len(contentStr)))
+	a.logInfo(fmt.Sprintf("Successfully loaded file (content length: %d)", len(contentStr)))
 	return contentStr, nil
 }
 
@@ -2216,6 +2260,10 @@ func (a *App) ListEphyProposals() (*ephyoutbox.Inbox, error) {
 			inbox.Errors = append(inbox.Errors, ephyProposalError(proposal, "processed_"+receipt.Result, "proposal already has a final receipt"))
 			continue
 		}
+		if _, _, policyErr := a.authorizeEphyProposal(proposal, nil, "list"); policyErr != nil {
+			inbox.Errors = append(inbox.Errors, ephyProposalError(proposal, "proposal_policy_denied", "proposal is not available under the active Personal Context policy"))
+			continue
+		}
 		resolved, resolveErr := a.resolveEphyProposal(proposal)
 		if resolveErr != nil {
 			inbox.Errors = append(inbox.Errors, ephyProposalError(proposal, "proposal_not_reviewable", resolveErr.Error()))
@@ -2272,6 +2320,7 @@ func (a *App) resolveEphyProposal(proposal ephyoutbox.Proposal) (*ephyResolvedPr
 		frontmatter["doc_id"] = docID
 		frontmatter["project"] = proposal.Placement.Project
 		frontmatter["kind"] = proposal.Placement.Kind
+		frontmatter["sensitivity"] = proposal.Sensitivity
 		resolved.ProposedContent, err = renderEphyProposalContent(frontmatter, proposal.ProposedBody)
 		return resolved, err
 	}
@@ -2291,7 +2340,7 @@ func (a *App) resolveEphyProposal(proposal ephyoutbox.Proposal) (*ephyResolvedPr
 	if _, ok := frontmatter["kind"]; !ok {
 		resolved.Warnings = append(resolved.Warnings, "Canonical frontmatter has no kind field.")
 	}
-	resolved.ProposedContent, err = buildEphyAppendContent(frontmatter, body, proposal.ProposedFrontmatter, proposal.ProposedBody, docID)
+	resolved.ProposedContent, err = buildEphyAppendContent(frontmatter, body, proposal.ProposedFrontmatter, proposal.ProposedBody, docID, proposal.Placement.Project, proposal.Placement.Kind)
 	return resolved, err
 }
 
@@ -2317,6 +2366,9 @@ func (a *App) AcceptEphyProposal(candidateID string, editedFrontmatter map[strin
 	}
 	if err := proposal.RequirePublishable(); err != nil {
 		return nil, err
+	}
+	if _, _, policyErr := a.authorizeEphyProposal(proposal, editedFrontmatter, "accept"); policyErr != nil {
+		return nil, fmt.Errorf("proposal is not available under the active Personal Context policy")
 	}
 	transaction, err := store.ReadTransaction(candidateID)
 	if err != nil {
@@ -2387,6 +2439,11 @@ func (a *App) AcceptEphyProposal(candidateID string, editedFrontmatter map[strin
 		frontmatter["doc_id"] = docID
 		frontmatter["project"] = proposal.Placement.Project
 		frontmatter["kind"] = proposal.Placement.Kind
+		if sensitivity, ok := frontmatter["sensitivity"].(string); !ok || strings.TrimSpace(sensitivity) == "" {
+			frontmatter["sensitivity"] = proposal.Sensitivity
+		} else {
+			frontmatter["sensitivity"] = strings.ToLower(strings.TrimSpace(sensitivity))
+		}
 		prepared, err = renderEphyProposalContent(frontmatter, body)
 	} else {
 		currentFrontmatter, currentBody, parseErr := parseEphyCanonicalContent(string(current))
@@ -2396,7 +2453,7 @@ func (a *App) AcceptEphyProposal(candidateID string, editedFrontmatter map[strin
 		if matchErr := validateEphyAppendTarget(proposal, currentFrontmatter); matchErr != nil {
 			return a.finishEphyConflict(store, proposal.CandidateID, proposal.TargetDocID, proposal.TargetRelativePath, "target_content_mismatch", matchErr.Error())
 		}
-		prepared, err = buildEphyAppendContent(currentFrontmatter, currentBody, frontmatter, body, docID)
+		prepared, err = buildEphyAppendContent(currentFrontmatter, currentBody, frontmatter, body, docID, proposal.Placement.Project, proposal.Placement.Kind)
 	}
 	if err != nil {
 		return nil, err
@@ -2455,6 +2512,9 @@ func (a *App) RejectEphyProposal(candidateID, message string) (*ephyoutbox.Recei
 	proposal, err := store.ReadPending(candidateID)
 	if err != nil {
 		return nil, err
+	}
+	if _, _, policyErr := a.authorizeEphyProposal(proposal, nil, "reject"); policyErr != nil {
+		return nil, fmt.Errorf("proposal is not available under the active Personal Context policy")
 	}
 	if len(message) > 2048 {
 		return nil, fmt.Errorf("rejection message is too long")
@@ -2595,10 +2655,27 @@ func validateEphyAppendTarget(proposal ephyoutbox.Proposal, frontmatter map[stri
 			}
 		}
 	}
+	canonicalSensitivity := "internal"
+	if value, exists := frontmatter["sensitivity"]; exists {
+		text, ok := value.(string)
+		if !ok || strings.TrimSpace(text) == "" {
+			return fmt.Errorf("canonical sensitivity is invalid")
+		}
+		canonicalSensitivity = strings.ToLower(strings.TrimSpace(text))
+	}
+	if proposal.Sensitivity != canonicalSensitivity {
+		return fmt.Errorf("proposal sensitivity does not match the canonical document")
+	}
+	if value, exists := proposal.ProposedFrontmatter["sensitivity"]; exists {
+		text, ok := value.(string)
+		if !ok || strings.ToLower(strings.TrimSpace(text)) != canonicalSensitivity {
+			return fmt.Errorf("append patch cannot change sensitivity")
+		}
+	}
 	return nil
 }
 
-func buildEphyAppendContent(currentFrontmatter map[string]any, currentBody string, patch map[string]any, fragment, docID string) (string, error) {
+func buildEphyAppendContent(currentFrontmatter map[string]any, currentBody string, patch map[string]any, fragment, docID, project, kind string) (string, error) {
 	frontmatter := cloneStringMap(currentFrontmatter)
 	for key, value := range patch {
 		if key == "doc_id" {
@@ -2606,8 +2683,25 @@ func buildEphyAppendContent(currentFrontmatter map[string]any, currentBody strin
 				return "", fmt.Errorf("append patch cannot change doc_id")
 			}
 		}
-		if (key == "project" || key == "kind") && frontmatter[key] != nil && frontmatter[key] != value {
-			return "", fmt.Errorf("append patch cannot move a document between project or kind directories")
+		if key == "project" || key == "kind" {
+			expected := project
+			if key == "kind" {
+				expected = kind
+			}
+			text, ok := value.(string)
+			if !ok || strings.ToLower(strings.TrimSpace(text)) != expected {
+				return "", fmt.Errorf("append patch cannot move a document between project or kind directories")
+			}
+		}
+		if key == "sensitivity" {
+			currentSensitivity := "internal"
+			if existing, ok := frontmatter[key].(string); ok && strings.TrimSpace(existing) != "" {
+				currentSensitivity = strings.ToLower(strings.TrimSpace(existing))
+			}
+			text, ok := value.(string)
+			if !ok || strings.ToLower(strings.TrimSpace(text)) != currentSensitivity {
+				return "", fmt.Errorf("append patch cannot change sensitivity")
+			}
 		}
 		frontmatter[key] = value
 	}
@@ -3906,28 +4000,72 @@ func (a *App) SaveCsvFile(path string, data [][]string) error {
 	return nil
 }
 
-// SaveEventLogs saves event logs from the frontend to a JSON file
+const maxFrontendEventLogBytes = 1024 * 1024
+
+type frontendEventLog struct {
+	Component string          `json:"component"`
+	Action    string          `json:"action"`
+	State     json.RawMessage `json:"state,omitempty"`
+	Timestamp int64           `json:"timestamp"`
+}
+
+type persistedEventLog struct {
+	Component string `json:"component"`
+	Action    string `json:"action"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+// SaveEventLogs persists only stable event metadata. Frontend state can contain
+// queries，paths，candidate IDs，or error text，so it is never written to disk.
 func (a *App) SaveEventLogs(logsJson string) (bool, error) {
 	if logsJson == "" {
 		return false, fmt.Errorf("logs data is empty")
 	}
+	if len(logsJson) > maxFrontendEventLogBytes {
+		return false, fmt.Errorf("logs data exceeds size limit")
+	}
+	var incoming []frontendEventLog
+	decoder := json.NewDecoder(strings.NewReader(logsJson))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&incoming); err != nil {
+		return false, fmt.Errorf("logs data is invalid")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return false, fmt.Errorf("logs data contains trailing JSON")
+	}
+	if len(incoming) == 0 || len(incoming) > 10000 {
+		return false, fmt.Errorf("logs data has an invalid record count")
+	}
+	logs := make([]persistedEventLog, 0, len(incoming))
+	for _, event := range incoming {
+		if !eventLogTokenPattern.MatchString(event.Component) || !eventLogTokenPattern.MatchString(event.Action) || event.Timestamp <= 0 {
+			return false, fmt.Errorf("logs data contains invalid metadata")
+		}
+		logs = append(logs, persistedEventLog{Component: event.Component, Action: event.Action, Timestamp: event.Timestamp})
+	}
+	encoded, err := json.MarshalIndent(logs, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("failed to encode event log metadata")
+	}
+	encoded = append(encoded, '\n')
 
 	// Create .mdsys directory if it doesn't exist
 	mdsysDir := filepath.Join(a.dataDir, ".mdsys")
-	if err := os.MkdirAll(mdsysDir, 0755); err != nil {
+	if err := os.MkdirAll(mdsysDir, 0700); err != nil {
 		return false, fmt.Errorf("failed to create .mdsys directory: %w", err)
 	}
 
 	// Generate filename with timestamp
-	timestamp := time.Now().Format("20060102_150405")
+	timestamp := time.Now().UTC().Format("20060102_150405.000000000")
 	logFilePath := filepath.Join(mdsysDir, fmt.Sprintf("event-logs_%s.json", timestamp))
 
 	// Write logs to file
-	if err := os.WriteFile(logFilePath, []byte(logsJson), 0644); err != nil {
+	if err := os.WriteFile(logFilePath, encoded, 0600); err != nil {
 		return false, fmt.Errorf("failed to write event logs file: %w", err)
 	}
 
-	a.logInfo(fmt.Sprintf("Saved event logs to: %s", logFilePath))
+	a.logInfo(fmt.Sprintf("Saved %d event log metadata records", len(logs)))
 	return true, nil
 }
 
@@ -4578,7 +4716,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 			// Ensure doc_id exists (lazy assignment)
 			contentWithDocID, docID, err := a.ensureDocID(fileContent)
 			if err != nil {
-				a.logError(fmt.Sprintf("Failed to ensure doc_id for %s: %v", filePath, err))
+				a.logPrivate(fmt.Sprintf("Failed to ensure doc_id for %s: %v", filePath, err))
 				// Continue with original content if doc_id generation fails
 			} else {
 				docIDFromEnsure = docID // ensureDocIDで取得したdocIDを保持
@@ -4586,10 +4724,10 @@ func (a *App) GetGraphData() (*GraphData, error) {
 					// Save the updated content with doc_id if it was added
 					absPath := filepath.Join(a.dataDir, filePath)
 					if err := os.WriteFile(absPath, []byte(contentWithDocID), 0644); err != nil {
-						a.logError(fmt.Sprintf("Failed to save file with doc_id: %v", err))
+						a.logPrivate(fmt.Sprintf("Failed to save file with doc_id: %v", err))
 					} else {
 						fileContent = contentWithDocID
-						a.logInfo(fmt.Sprintf("Assigned doc_id to file: %s -> %s", filePath, docID))
+						a.logPrivate(fmt.Sprintf("Assigned doc_id to file: %s -> %s", filePath, docID))
 					}
 				}
 			}
@@ -4600,10 +4738,10 @@ func (a *App) GetGraphData() (*GraphData, error) {
 			// デバッグ: フロントマターのパース結果を確認
 			frontMatter, body := fm.ParseFrontMatter(fileContent)
 			if frontMatter != nil {
-				a.logInfo(fmt.Sprintf("File %s: frontmatter parsed - title: %q, tags: %q, theme: %q, doc_id: %q", filePath, frontMatter.Title, frontMatter.Tags, frontMatter.Theme, frontMatter.DocID))
-				a.logInfo(fmt.Sprintf("File %s: extracted tags: %v", filePath, tags))
+				a.logPrivate(fmt.Sprintf("File %s: frontmatter parsed - title: %q, tags: %q, theme: %q, doc_id: %q", filePath, frontMatter.Title, frontMatter.Tags, frontMatter.Theme, frontMatter.DocID))
+				a.logPrivate(fmt.Sprintf("File %s: extracted tags: %v", filePath, tags))
 			} else {
-				a.logInfo(fmt.Sprintf("File %s: no frontmatter found", filePath))
+				a.logPrivate(fmt.Sprintf("File %s: no frontmatter found", filePath))
 			}
 			markdownBody = body
 			if markdownBody == "" {
@@ -4638,10 +4776,10 @@ func (a *App) GetGraphData() (*GraphData, error) {
 		// ファイル内容を解析してリンクを抽出（フロントマターを除いた本文を使用）
 		if markdownBody != "" {
 			links := a.extractLinks(markdownBody)
-			a.logInfo(fmt.Sprintf("File %s: found %d links", filePath, len(links)))
+			a.logPrivate(fmt.Sprintf("File %s: found %d links", filePath, len(links)))
 			for i, link := range links {
 				targetID := a.resolveLinkTarget(link, filePath)
-				a.logInfo(fmt.Sprintf("  Link %d: %s -> %s (kind: %s)", i+1, link.Target, targetID, link.Kind))
+				a.logPrivate(fmt.Sprintf("  Link %d: %s -> %s (kind: %s)", i+1, link.Target, targetID, link.Kind))
 				if targetID != "" {
 					// エッジの重みをカウント
 					edgeKey := nodeID + "->" + targetID
@@ -4718,7 +4856,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 						ToVersionMode: toVersionMode,
 						ToVersionID:   toVersionID,
 					}
-					a.logInfo(fmt.Sprintf("    Created edge with SourceDocID=%s, TargetDocID=%s, ToVersionMode=%s, TargetUpdated=%v", docID, targetDocID, toVersionMode, targetUpdated))
+					a.logPrivate(fmt.Sprintf("    Created edge with SourceDocID=%s, TargetDocID=%s, ToVersionMode=%s, TargetUpdated=%v", docID, targetDocID, toVersionMode, targetUpdated))
 					sourceHashShort := ""
 					if len(fileHash) >= 8 {
 						sourceHashShort = fileHash[:8]
@@ -4731,11 +4869,11 @@ func (a *App) GetGraphData() (*GraphData, error) {
 					if targetUpdated {
 						updateStatus = " [TARGET UPDATED]"
 					}
-					a.logInfo(fmt.Sprintf("    Created edge: %s -> %s (weight: %d, sourceHash: %s, targetHash: %s)%s", nodeID, targetID, edgeCounts[edgeKey], sourceHashShort, targetHashShort, updateStatus))
+					a.logPrivate(fmt.Sprintf("    Created edge: %s -> %s (weight: %d, sourceHash: %s, targetHash: %s)%s", nodeID, targetID, edgeCounts[edgeKey], sourceHashShort, targetHashShort, updateStatus))
 				}
 			}
 		} else {
-			a.logError(fmt.Sprintf("Failed to read file %s: %v", filePath, err))
+			a.logPrivate(fmt.Sprintf("Failed to read file %s: %v", filePath, err))
 		}
 	}
 
@@ -4774,7 +4912,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 						Tags:   []string{},
 					}
 				}
-				a.logInfo(fmt.Sprintf("Created missing target node: %s", edge.Target))
+				a.logPrivate(fmt.Sprintf("Created missing target node: %s", edge.Target))
 			} else if strings.HasPrefix(edge.Target, "img:/") {
 				path := strings.TrimPrefix(edge.Target, "img:/")
 				title := filepath.Base(path)
@@ -4785,7 +4923,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 				if strings.ToLower(filepath.Ext(path)) == ".webp" {
 					webpTags, err := webpchunk.ReadTagsFromWebP(imageAbsPath)
 					if err != nil {
-						a.logError(fmt.Sprintf("Failed to read tags from WebP chunk for %s: %v", path, err))
+						a.logPrivate(fmt.Sprintf("Failed to read tags from WebP chunk for %s: %v", path, err))
 					} else {
 						tags = webpTags
 					}
@@ -4800,7 +4938,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 					DegOut: 0,
 					Tags:   tags,
 				}
-				a.logInfo(fmt.Sprintf("Created missing image node: %s (tags: %v)", edge.Target, tags))
+				a.logPrivate(fmt.Sprintf("Created missing image node: %s (tags: %v)", edge.Target, tags))
 			}
 		}
 
@@ -4836,7 +4974,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 					Tags:   []string{},
 				}
 			}
-			a.logInfo(fmt.Sprintf("Created missing source node: %s", edge.Source))
+			a.logPrivate(fmt.Sprintf("Created missing source node: %s", edge.Source))
 		}
 	}
 
@@ -4872,21 +5010,21 @@ func (a *App) GetGraphData() (*GraphData, error) {
 			// まず、edge.Target（古いパス）で試す
 			if targetNode, exists := nodes[edge.Target]; exists {
 				currentHash = targetNode.Hash
-				a.logInfo(fmt.Sprintf("Target updated check for edge %s: found hash from nodes[%s]: %s", edgeID, edge.Target, currentHash[:8]))
+				a.logPrivate(fmt.Sprintf("Target updated check for edge %s: found hash from nodes[%s]: %s", edgeID, edge.Target, currentHash[:8]))
 			} else if strings.HasPrefix(edge.Target, "doc:/") {
 				targetPath := strings.TrimPrefix(edge.Target, "doc:/")
 				targetFilePath := filepath.Join(a.dataDir, "content", targetPath)
 				if targetContent, err := os.ReadFile(targetFilePath); err == nil {
 					currentHash = gitvcs.CalculateHash(string(targetContent))
-					a.logInfo(fmt.Sprintf("Target updated check for edge %s: found hash from file %s: %s", edgeID, targetPath, currentHash[:8]))
+					a.logPrivate(fmt.Sprintf("Target updated check for edge %s: found hash from file %s: %s", edgeID, targetPath, currentHash[:8]))
 				} else {
-					a.logInfo(fmt.Sprintf("Target updated check for edge %s: file not found at %s (may be renamed)", edgeID, targetPath))
+					a.logPrivate(fmt.Sprintf("Target updated check for edge %s: file not found at %s (may be renamed)", edgeID, targetPath))
 				}
 			}
 
 			// edge.Targetでファイルが見つからない場合（リネーム後）、TargetDocIDを使って現在のパスを取得
 			if currentHash == "" && edge.TargetDocID != "" {
-				a.logInfo(fmt.Sprintf("Target updated check for edge %s: trying to resolve via TargetDocID %s", edgeID, edge.TargetDocID))
+				a.logPrivate(fmt.Sprintf("Target updated check for edge %s: trying to resolve via TargetDocID %s", edgeID, edge.TargetDocID))
 				docMapPath := filepath.Join(a.dataDir, ".mdsys", "doc_map.json")
 				if docMapData, err := os.ReadFile(docMapPath); err == nil {
 					var docMap map[string]string
@@ -4896,38 +5034,38 @@ func (a *App) GetGraphData() (*GraphData, error) {
 							// currentPathは "content/..." 形式なので、filepath.FromSlashで正規化してから結合
 							normalizedPath := filepath.FromSlash(currentPath)
 							targetFilePath := filepath.Join(a.dataDir, normalizedPath)
-							a.logInfo(fmt.Sprintf("Target updated check: attempting to read file at resolved path (doc_id=%s): %s -> %s", edge.TargetDocID, currentPath, targetFilePath))
+							a.logPrivate(fmt.Sprintf("Target updated check: attempting to read file at resolved path (doc_id=%s): %s -> %s", edge.TargetDocID, currentPath, targetFilePath))
 							if targetContent, err := os.ReadFile(targetFilePath); err == nil {
 								currentHash = gitvcs.CalculateHash(string(targetContent))
-								a.logInfo(fmt.Sprintf("Target updated check: resolved path via doc_map for doc_id %s: %s (hash: %s)", edge.TargetDocID, currentPath, currentHash[:8]))
+								a.logPrivate(fmt.Sprintf("Target updated check: resolved path via doc_map for doc_id %s: %s (hash: %s)", edge.TargetDocID, currentPath, currentHash[:8]))
 							} else {
-								a.logError(fmt.Sprintf("Target updated check: failed to read file at resolved path %s (normalized: %s): %v", currentPath, targetFilePath, err))
+								a.logPrivate(fmt.Sprintf("Target updated check: failed to read file at resolved path %s (normalized: %s): %v", currentPath, targetFilePath, err))
 								// フォールバック: 直接パスを試す（マルチバイト文字の問題の可能性）
 								if targetContent2, err2 := os.ReadFile(filepath.Join(a.dataDir, currentPath)); err2 == nil {
 									currentHash = gitvcs.CalculateHash(string(targetContent2))
-									a.logInfo(fmt.Sprintf("Target updated check: succeeded with direct path join for doc_id %s: %s (hash: %s)", edge.TargetDocID, currentPath, currentHash[:8]))
+									a.logPrivate(fmt.Sprintf("Target updated check: succeeded with direct path join for doc_id %s: %s (hash: %s)", edge.TargetDocID, currentPath, currentHash[:8]))
 								} else {
-									a.logError(fmt.Sprintf("Target updated check: fallback also failed for %s: %v", currentPath, err2))
+									a.logPrivate(fmt.Sprintf("Target updated check: fallback also failed for %s: %v", currentPath, err2))
 								}
 							}
 						} else {
-							a.logInfo(fmt.Sprintf("Target updated check: doc_id %s not found in doc_map", edge.TargetDocID))
+							a.logPrivate(fmt.Sprintf("Target updated check: doc_id %s not found in doc_map", edge.TargetDocID))
 						}
 					} else {
-						a.logError(fmt.Sprintf("Target updated check: failed to parse doc_map.json: %v", err))
+						a.logPrivate(fmt.Sprintf("Target updated check: failed to parse doc_map.json: %v", err))
 					}
 				} else {
-					a.logError(fmt.Sprintf("Target updated check: failed to read doc_map.json: %v", err))
+					a.logPrivate(fmt.Sprintf("Target updated check: failed to read doc_map.json: %v", err))
 				}
 			}
 
 			if currentHash != "" && persistedEdge.TargetHash != currentHash {
 				edge.TargetUpdated = true
-				a.logInfo(fmt.Sprintf("Target updated detected for edge %s: old=%s, new=%s", edgeID, persistedEdge.TargetHash[:8], currentHash[:8]))
+				a.logPrivate(fmt.Sprintf("Target updated detected for edge %s: old=%s, new=%s", edgeID, persistedEdge.TargetHash[:8], currentHash[:8]))
 			} else if currentHash == "" {
-				a.logInfo(fmt.Sprintf("Target updated check for edge %s: currentHash is empty, cannot determine if updated", edgeID))
+				a.logPrivate(fmt.Sprintf("Target updated check for edge %s: currentHash is empty, cannot determine if updated", edgeID))
 			} else {
-				a.logInfo(fmt.Sprintf("Target updated check for edge %s: hash unchanged (old=%s, new=%s)", edgeID, persistedEdge.TargetHash[:8], currentHash[:8]))
+				a.logPrivate(fmt.Sprintf("Target updated check for edge %s: hash unchanged (old=%s, new=%s)", edgeID, persistedEdge.TargetHash[:8], currentHash[:8]))
 			}
 			// 永続化されたハッシュを保持（リンク作成時のハッシュ）
 			edge.TargetHash = persistedEdge.TargetHash
@@ -4947,7 +5085,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 		if strings.ToLower(filepath.Ext(imageItem.Path)) == ".webp" {
 			webpTags, err := webpchunk.ReadTagsFromWebP(imageAbsPath)
 			if err != nil {
-				a.logError(fmt.Sprintf("Failed to read tags from WebP chunk for %s: %v", imageItem.Path, err))
+				a.logPrivate(fmt.Sprintf("Failed to read tags from WebP chunk for %s: %v", imageItem.Path, err))
 			} else {
 				tags = webpTags
 			}
@@ -4957,7 +5095,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 		if existingNode, exists := nodes[imageNodeID]; exists {
 			// Update existing node with tags
 			existingNode.Tags = tags
-			a.logInfo(fmt.Sprintf("Updated image node tags: %s (tags: %v)", imageNodeID, tags))
+			a.logPrivate(fmt.Sprintf("Updated image node tags: %s (tags: %v)", imageNodeID, tags))
 		} else {
 			// Create new image node
 			nodes[imageNodeID] = &GraphNode{
@@ -4969,7 +5107,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 				DegOut: 0,
 				Tags:   tags,
 			}
-			a.logInfo(fmt.Sprintf("Created image node: %s (tags: %v)", imageNodeID, tags))
+			a.logPrivate(fmt.Sprintf("Created image node: %s (tags: %v)", imageNodeID, tags))
 		}
 	}
 
@@ -4989,7 +5127,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 	tagNodeCount := 0
 	for _, node := range nodeList {
 		if len(node.Tags) > 0 {
-			a.logInfo(fmt.Sprintf("Node %s has %d tags: %v", node.ID, len(node.Tags), node.Tags))
+			a.logPrivate(fmt.Sprintf("Node %s has %d tags: %v", node.ID, len(node.Tags), node.Tags))
 		}
 		for _, tag := range node.Tags {
 			if tag == "" {
@@ -5009,7 +5147,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 					Tags:   []string{},
 				}
 				tagNodeCount++
-				a.logInfo(fmt.Sprintf("Creating tag node: %s (label: #%s)", tagID, tag))
+				a.logPrivate(fmt.Sprintf("Creating tag node: %s (label: #%s)", tagID, tag))
 			}
 
 			// ドキュメントノードとタグノードを接続するエッジを作成
@@ -5021,7 +5159,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 				Kind:   "tag",
 				Weight: 1,
 			})
-			a.logInfo(fmt.Sprintf("Created tag edge: %s -> %s", node.ID, tagID))
+			a.logPrivate(fmt.Sprintf("Created tag edge: %s -> %s", node.ID, tagID))
 
 			// タグノードの入次数を増やす
 			tagNodes[tagID].DegIn++
@@ -5039,7 +5177,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 	if linkInfoJSON, err := json.MarshalIndent(edgeList, "", "  "); err == nil {
 		if err := os.MkdirAll(filepath.Dir(linkInfoPath), 0755); err == nil {
 			if err := os.WriteFile(linkInfoPath, linkInfoJSON, 0644); err == nil {
-				a.logInfo(fmt.Sprintf("Saved %d link records to %s", len(edgeList), linkInfoPath))
+				a.logInfo(fmt.Sprintf("Saved %d link records", len(edgeList)))
 			}
 		}
 	}
@@ -5051,7 +5189,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 	// 既存のマッピングを読み込む
 	if data, err := os.ReadFile(docMapPath); err == nil {
 		if err := json.Unmarshal(data, &docMap); err != nil {
-			a.logError(fmt.Sprintf("Failed to parse doc_map.json: %v", err))
+			a.logError("Failed to parse doc_id mappings")
 			docMap = make(map[string]string)
 		}
 	}
@@ -5069,32 +5207,17 @@ func (a *App) GetGraphData() (*GraphData, error) {
 	if docMapJSON, err := json.MarshalIndent(docMap, "", "  "); err == nil {
 		if err := os.MkdirAll(filepath.Dir(docMapPath), 0755); err == nil {
 			if err := os.WriteFile(docMapPath, docMapJSON, 0644); err == nil {
-				a.logInfo(fmt.Sprintf("Saved %d doc_id mappings to %s", len(docMap), docMapPath))
+				a.logInfo(fmt.Sprintf("Saved %d doc_id mappings", len(docMap)))
 			} else {
-				a.logError(fmt.Sprintf("Failed to write doc_map.json: %v", err))
+				a.logError("Failed to write doc_id mappings")
 			}
 		}
 	} else {
-		a.logError(fmt.Sprintf("Failed to marshal doc_map: %v", err))
+		a.logError("Failed to encode doc_id mappings")
 	}
 
 	// デバッグ用：ノードIDとエッジの詳細をログ出力
 	a.logInfo(fmt.Sprintf("Generated graph with %d nodes and %d edges", len(nodeList), len(edgeList)))
-
-	// ノードIDの一覧をログ出力
-	nodeIds := make([]string, 0, len(nodes))
-	for id := range nodes {
-		nodeIds = append(nodeIds, id)
-	}
-	a.logInfo(fmt.Sprintf("Node IDs: %v", nodeIds))
-
-	// エッジの詳細をログ出力
-	for i, edge := range edgeList {
-		if i < 5 { // 最初の5個のエッジのみログ出力
-			a.logInfo(fmt.Sprintf("Edge %d: %s -> %s (kind: %s, weight: %d)",
-				i+1, edge.Source, edge.Target, edge.Kind, edge.Weight))
-		}
-	}
 
 	return &GraphData{
 		Nodes: nodeList,
@@ -5103,62 +5226,63 @@ func (a *App) GetGraphData() (*GraphData, error) {
 	}, nil
 }
 
-// ExportPreviewHTML saves given HTML into karte_data/export and returns a file URL
-func (a *App) ExportPreviewHTML(html string) (string, error) {
-	if html == "" {
-		return "", fmt.Errorf("empty html")
+// ExportPreviewHTML renders the authorized canonical document into karte_data/export.
+func (a *App) ExportPreviewHTML(relativePath string) (string, error) {
+	html, err := a.renderAuthorizedDocumentForExport(relativePath)
+	if err != nil {
+		return "", err
 	}
 	exportDir := filepath.Join(a.dataDir, "export")
-	if err := os.MkdirAll(exportDir, 0755); err != nil {
+	if err := ensurePrivateExportDirectory(exportDir); err != nil {
 		return "", fmt.Errorf("failed to create export dir: %v", err)
 	}
-	filename := fmt.Sprintf("preview-%s.html", time.Now().Format("20060102-150405"))
+	filename := fmt.Sprintf("preview-%s.html", time.Now().UTC().Format("20060102-150405.000000000"))
 	fp := filepath.Join(exportDir, filename)
-	if err := os.WriteFile(fp, []byte(html), 0644); err != nil {
+	if err := os.WriteFile(fp, []byte(html), 0600); err != nil {
 		return "", fmt.Errorf("failed to write export file: %v", err)
 	}
-	a.logInfo(fmt.Sprintf("Exported preview HTML: %s", fp))
+	a.logInfo(fmt.Sprintf("Exported preview HTML (%d bytes)", len(html)))
 	// Build file URL
 	url := "file://" + filepath.ToSlash(fp)
 	return url, nil
 }
 
-// ExportPDF renders given HTML as PDF to karte_data/export and returns the path
-func (a *App) ExportPDF(html string) (pdfURL string, err error) {
-	if html == "" {
-		return "", fmt.Errorf("empty html")
+// ExportPDF renders the authorized canonical document as PDF and returns its path.
+func (a *App) ExportPDF(relativePath string) (pdfURL string, err error) {
+	html, err := a.renderAuthorizedDocumentForExport(relativePath)
+	if err != nil {
+		return "", err
 	}
 
 	defer func() {
 		if r := recover(); r != nil {
-			panicMsg := fmt.Sprintf("PDF export panic: %v", r)
-			a.logError(fmt.Sprintf("ExportPDF panic recovered: %v", r))
+			a.logError("ExportPDF panic recovered")
 			runtime.EventsEmit(a.ctx, "pdf-export-error", map[string]interface{}{
-				"error": panicMsg,
+				"error": "pdf_export_failed",
 			})
-			err = fmt.Errorf("%s", panicMsg)
+			err = fmt.Errorf("PDF export failed")
 		}
 	}()
 
 	pdfPath, err := a.exportPDFInternal(html)
 	if err != nil {
-		a.logError(fmt.Sprintf("ExportPDF failed: %v", err))
+		a.logError("ExportPDF failed")
 		runtime.EventsEmit(a.ctx, "pdf-export-error", map[string]interface{}{
-			"error": err.Error(),
+			"error": "pdf_export_failed",
 		})
-		return "", err
+		return "", fmt.Errorf("PDF export failed")
 	}
 
 	info, err := os.Stat(pdfPath)
 	if err != nil {
-		a.logError(fmt.Sprintf("ExportPDF: Failed to stat PDF file: %v", err))
+		a.logError("ExportPDF output inspection failed")
 		runtime.EventsEmit(a.ctx, "pdf-export-error", map[string]interface{}{
-			"error": fmt.Sprintf("Failed to stat PDF file: %v", err),
+			"error": "pdf_export_failed",
 		})
-		return "", err
+		return "", fmt.Errorf("PDF export failed")
 	}
 
-	a.logInfo(fmt.Sprintf("PDF exported: %s (size: %d bytes)", pdfPath, info.Size()))
+	a.logInfo(fmt.Sprintf("PDF exported (size: %d bytes)", info.Size()))
 	url := strings.ReplaceAll(pdfPath, "\\", "/")
 	runtime.EventsEmit(a.ctx, "pdf-export-completed", map[string]interface{}{
 		"pdfPath": url,
@@ -5166,9 +5290,9 @@ func (a *App) ExportPDF(html string) (pdfURL string, err error) {
 	})
 
 	if err := a.openPDFInViewer(pdfPath); err != nil {
-		a.logError(fmt.Sprintf("PDF open failed: %v", err))
+		a.logError("PDF open failed")
 		runtime.EventsEmit(a.ctx, "pdf-open-error", map[string]interface{}{
-			"error": err.Error(),
+			"error": "pdf_open_failed",
 		})
 	}
 
@@ -5197,7 +5321,7 @@ func (a *App) openPDFInViewer(pdfPath string) error {
 	if strings.ToLower(filepath.Ext(pathToOpen)) != ".pdf" {
 		return fmt.Errorf("not a pdf file: %s", pathToOpen)
 	}
-	a.logInfo(fmt.Sprintf("Opening PDF with default app: %s", pathToOpen))
+	a.logInfo("Opening exported PDF with default app")
 	cmd := exec.Command("open", pathToOpen)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("open pdf: %w", err)
@@ -5210,10 +5334,7 @@ func (a *App) exportPDFInternal(html string) (string, error) {
 	html = a.injectPDFRenderHelpers(html)
 	printoutSpec := printout.ParseFromHTML(html)
 	pageDOMCount := countPrintPageSections(html)
-	readyMeta := extractMetaContent(html, "karte-printout-ready")
-	errorMeta := extractMetaContent(html, "karte-printout-error")
-	pagesMeta := extractMetaContent(html, "karte-printout-pages")
-	a.logInfo(fmt.Sprintf("ExportPDF: resolved printout=%s (finite=%v, pageDOMCount=%d, readyMeta=%q, pageMeta=%q, errorMeta=%q, htmlLen=%d)", printoutSpec.Name, !printoutSpec.Infinite, pageDOMCount, readyMeta, pagesMeta, errorMeta, len(html)))
+	a.logInfo(fmt.Sprintf("ExportPDF: resolved printout=%s (finite=%v, pageDOMCount=%d, htmlLen=%d)", printoutSpec.Name, !printoutSpec.Infinite, pageDOMCount, len(html)))
 	// Convert image URLs to data URIs for PDF export
 	// WKWebView cannot access HTTP URLs, so we need to embed images as data URIs
 	// Track temporary files for cleanup
@@ -5222,9 +5343,9 @@ func (a *App) exportPDFInternal(html string) (string, error) {
 		// Clean up all temporary files
 		for _, tmpFile := range tempFiles {
 			if err := os.Remove(tmpFile); err != nil {
-				a.logError(fmt.Sprintf("Failed to remove temp file: %s, error: %v", tmpFile, err))
+				a.logError("Failed to remove PDF temporary file")
 			} else {
-				a.logInfo(fmt.Sprintf("Cleaned up temp file: %s", tmpFile))
+				a.logInfo("Cleaned up PDF temporary file")
 			}
 		}
 	}()
@@ -5270,25 +5391,7 @@ func (a *App) exportPDFInternal(html string) (string, error) {
 	dataImageCount := strings.Count(html, "data:image")
 	a.logInfo(fmt.Sprintf("PDF export: DEBUG - After conversion: img tags=%d, data:image occurrences=%d", imgTagCount, dataImageCount))
 
-	// HTMLの最初の2000文字をログに出力（画像部分が含まれる可能性が高い）
-	htmlPreview := html
-	if len(htmlPreview) > 2000 {
-		htmlPreview = htmlPreview[:2000] + "...(truncated)"
-	}
-	a.logInfo(fmt.Sprintf("PDF export: DEBUG - HTML preview (first 2000 chars):\n%s", htmlPreview))
-
-	// data:imageが含まれている部分を抽出してログに出力
-	dataImageRegex := regexp.MustCompile(`data:image[^"']+`)
-	dataImageMatches := dataImageRegex.FindAllString(html, 10) // 最初の10個
-	if len(dataImageMatches) > 0 {
-		for i, match := range dataImageMatches {
-			preview := match
-			if len(preview) > 200 {
-				preview = preview[:200] + "...(truncated)"
-			}
-			a.logInfo(fmt.Sprintf("PDF export: DEBUG - data:image[%d] preview: %s", i, preview))
-		}
-	} else {
+	if dataImageCount == 0 {
 		a.logError("PDF export: DEBUG - No data:image found in converted HTML!")
 	}
 
@@ -5300,12 +5403,12 @@ func (a *App) exportPDFInternal(html string) (string, error) {
 	}
 
 	exportDir := filepath.Join(a.dataDir, "export")
-	if err := os.MkdirAll(exportDir, 0755); err != nil {
+	if err := ensurePrivateExportDirectory(exportDir); err != nil {
 		return "", fmt.Errorf("failed to create export dir: %v", err)
 	}
-	base := fmt.Sprintf("export-%s.pdf", time.Now().Format("20060102-150405"))
+	base := fmt.Sprintf("export-%s.pdf", time.Now().UTC().Format("20060102-150405.000000000"))
 	pdfPath := filepath.Join(exportDir, base)
-	a.logInfo(fmt.Sprintf("ExportPDF start: out=%s html.len=%d", pdfPath, len(html)))
+	a.logInfo(fmt.Sprintf("ExportPDF start: html.len=%d", len(html)))
 
 	// WKWebView読み込み開始イベント
 	runtime.EventsEmit(a.ctx, "pdf-export-progress", map[string]interface{}{
@@ -5317,7 +5420,7 @@ func (a *App) exportPDFInternal(html string) (string, error) {
 
 	a.logInfo("ExportPDF: Calling KarteRenderer.ExportHTMLPDF...")
 	if err := exportHTMLToPDFWithRenderer(a.ctx, html, pdfPath); err != nil {
-		a.logError(fmt.Sprintf("ExportPDF failed: %v", err))
+		a.logError("ExportPDF renderer failed")
 		return "", fmt.Errorf("PDF export failed: %w", err)
 	}
 	a.logInfo("ExportPDF: KarteRenderer.ExportHTMLPDF returned successfully")
@@ -5332,22 +5435,32 @@ func (a *App) exportPDFInternal(html string) (string, error) {
 
 	// Verify that the PDF file was actually created
 	if _, err := os.Stat(pdfPath); os.IsNotExist(err) {
-		a.logError(fmt.Sprintf("ExportPDF: PDF file was not created at %s", pdfPath))
+		a.logError("ExportPDF output was not created")
 		return "", fmt.Errorf("PDF file was not created: %s", pdfPath)
 	}
 
 	// Get file info to verify it's not empty
 	info, err := os.Stat(pdfPath)
 	if err != nil {
-		a.logError(fmt.Sprintf("ExportPDF: Failed to stat PDF file: %v", err))
+		a.logError("ExportPDF output inspection failed")
 		return "", fmt.Errorf("failed to stat PDF file: %w", err)
 	}
 	if info.Size() == 0 {
-		a.logError(fmt.Sprintf("ExportPDF: PDF file is empty (0 bytes) at %s", pdfPath))
+		a.logError("ExportPDF output is empty")
 		return "", fmt.Errorf("PDF file is empty: %s", pdfPath)
+	}
+	if err := os.Chmod(pdfPath, 0o600); err != nil {
+		return "", fmt.Errorf("failed to secure PDF file")
 	}
 
 	return pdfPath, nil
+}
+
+func ensurePrivateExportDirectory(exportDir string) error {
+	if err := os.MkdirAll(exportDir, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(exportDir, 0o700)
 }
 
 func exportHTMLToPDFWithRenderer(ctx context.Context, html, pdfPath string) error {
@@ -5729,11 +5842,9 @@ func (a *App) convertImageURLsToDataURIs(html string, totalImages int) (string, 
 			// Extract the image path (remove /image/ prefix)
 			// URL format: /image/data/image/xxx.webp -> actual path: data/image/xxx.webp
 			imgPath = strings.TrimPrefix(imgURL, "/image/")
-			a.logInfo(fmt.Sprintf("PDF export: Converting image URL: %s -> path: %s", imgURL, imgPath))
 		} else if strings.HasPrefix(imgURL, "data/image/") {
 			// Process paths that start with data/image/ directly (e.g., from Marp mode)
 			imgPath = imgURL
-			a.logInfo(fmt.Sprintf("PDF export: Converting image path: %s", imgPath))
 		} else {
 			// Skip other URLs (e.g., http://, https://, data: URIs already)
 			return match
@@ -5758,25 +5869,23 @@ func (a *App) convertImageURLsToDataURIs(html string, totalImages int) (string, 
 			absPath = filepath.Join(a.dataDir, filepath.FromSlash(imgPath))
 		}
 
-		a.logInfo(fmt.Sprintf("PDF export: Resolved absolute path: %s", absPath))
-
 		// Check file size before reading
 		fileInfo, err := os.Stat(absPath)
 		if err != nil {
-			a.logError(fmt.Sprintf("Failed to stat image file for PDF export: %s, error: %v", absPath, err))
+			a.logError("Failed to inspect image file for PDF export")
 			return match // Return original if file cannot be accessed
 		}
 
 		// Check if file size exceeds limit
 		if fileInfo.Size() > maxImageSizeForPDF {
-			a.logError(fmt.Sprintf("Image file too large for PDF export: %s (size: %d bytes, limit: %d bytes)", absPath, fileInfo.Size(), maxImageSizeForPDF))
+			a.logError(fmt.Sprintf("Image file too large for PDF export (size: %d bytes, limit: %d bytes)", fileInfo.Size(), maxImageSizeForPDF))
 			return match // Return original if file is too large
 		}
 
 		// Read image file
 		imgData, err := os.ReadFile(absPath)
 		if err != nil {
-			a.logError(fmt.Sprintf("Failed to read image file for PDF export: %s, error: %v", absPath, err))
+			a.logError("Failed to read image file for PDF export")
 			return match // Return original if file cannot be read
 		}
 		originalSize := len(imgData)
@@ -5801,35 +5910,35 @@ func (a *App) convertImageURLsToDataURIs(html string, totalImages int) (string, 
 			// else{}のコードをそのまま移植。普通にこれで動く
 			img, _, err = image.Decode(bytes.NewReader(imgData))
 			if err != nil {
-				a.logError(fmt.Sprintf("Failed to decode image for PDF export: %s, error: %v", absPath, err))
+				a.logError("Failed to decode image for PDF export")
 				return match // Return original if image cannot be decoded
 			}
 			originalBounds := img.Bounds()
-			a.logInfo(fmt.Sprintf("PDF export: Image size: %s (width: %d, height: %d, file size: %d bytes)", absPath, originalBounds.Dx(), originalBounds.Dy(), originalSize))
+			a.logInfo(fmt.Sprintf("PDF export: Image size (width: %d, height: %d, file size: %d bytes)", originalBounds.Dx(), originalBounds.Dy(), originalSize))
 		} else if ext == ".svg" {
 			// SVGはリサイズできないので、そのまま使用
 			base64Data := base64.StdEncoding.EncodeToString(imgData)
 			dataURI := fmt.Sprintf("data:image/svg+xml;base64,%s", base64Data)
 			dataURISize := len(dataURI)
 			totalDataURISize += int64(dataURISize)
-			a.logInfo(fmt.Sprintf("PDF export: Converted SVG image %d/%d: %s -> data:image/svg+xml (original: %d bytes, data URI: %d bytes)", currentImage, totalImages, imgURL, originalSize, dataURISize))
+			a.logInfo(fmt.Sprintf("PDF export: Converted SVG image %d/%d (original: %d bytes, data URI: %d bytes)", currentImage, totalImages, originalSize, dataURISize))
 			return prefix + dataURI + suffix
 		} else {
 			// For non-WebP images, decode
 			img, _, err = image.Decode(bytes.NewReader(imgData))
 			if err != nil {
-				a.logError(fmt.Sprintf("Failed to decode image for PDF export: %s, error: %v", absPath, err))
+				a.logError("Failed to decode image for PDF export")
 				return match // Return original if image cannot be decoded
 			}
 			originalBounds := img.Bounds()
-			a.logInfo(fmt.Sprintf("PDF export: Image size: %s (width: %d, height: %d, file size: %d bytes)", absPath, originalBounds.Dx(), originalBounds.Dy(), originalSize))
+			a.logInfo(fmt.Sprintf("PDF export: Image size (width: %d, height: %d, file size: %d bytes)", originalBounds.Dx(), originalBounds.Dy(), originalSize))
 		}
 
 		// Create optimized temporary PNG file
 		imageStartTime := time.Now()
 		tmpFile, err := a.createOptimizedImageTempFile(img, absPath)
 		if err != nil {
-			a.logError(fmt.Sprintf("Failed to create optimized temp file for PDF export: %s, error: %v", absPath, err))
+			a.logError("Failed to create optimized image for PDF export")
 			return match // Return original if temp file creation fails
 		}
 
@@ -5839,7 +5948,7 @@ func (a *App) convertImageURLsToDataURIs(html string, totalImages int) (string, 
 		// Read the temporary file and convert to data URI
 		tmpData, err := os.ReadFile(tmpFile)
 		if err != nil {
-			a.logError(fmt.Sprintf("Failed to read temp file for PDF export: %s, error: %v", tmpFile, err))
+			a.logError("Failed to read optimized image for PDF export")
 			return match
 		}
 
@@ -5852,7 +5961,7 @@ func (a *App) convertImageURLsToDataURIs(html string, totalImages int) (string, 
 		dataURI := fmt.Sprintf("data:image/png;base64,%s", base64Data)
 		imageDuration := time.Since(imageStartTime)
 
-		a.logInfo(fmt.Sprintf("PDF export: Converted image %d/%d: %s -> data:image/png (original: %d bytes, temp file: %d bytes, data URI: %d bytes, duration: %v)", currentImage, totalImages, imgURL, originalSize, len(tmpData), dataURISize, imageDuration))
+		a.logInfo(fmt.Sprintf("PDF export: Converted image %d/%d (original: %d bytes, temp file: %d bytes, data URI: %d bytes, duration: %v)", currentImage, totalImages, originalSize, len(tmpData), dataURISize, imageDuration))
 
 		return prefix + dataURI + suffix
 	})
@@ -6593,7 +6702,7 @@ func (a *App) extractLinks(content string) []LinkInfo {
 	// Wikiリンク [[title]] または [[title|display]]
 	wikiLinkRegex := regexp.MustCompile(`\[\[([^|\]]+)(?:\|([^\]]+))?\]\]`)
 	matches := wikiLinkRegex.FindAllStringSubmatch(content, -1)
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d wiki links", len(matches)))
+	a.logInfo(fmt.Sprintf("Found %d wiki links", len(matches)))
 	for _, match := range matches {
 		title := match[1]
 		// .md拡張子を追加
@@ -6601,53 +6710,53 @@ func (a *App) extractLinks(content string) []LinkInfo {
 			title += ".md"
 		}
 		links = append(links, LinkInfo{Target: title, Kind: "wikilink"})
-		runtime.LogInfo(a.ctx, fmt.Sprintf("  Wiki link: %s", title))
+		a.logPrivate(fmt.Sprintf("Wiki link: %s", title))
 	}
 
 	// Markdownリンク [text](url)
 	markdownLinkRegex := regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
 	matches = markdownLinkRegex.FindAllStringSubmatch(content, -1)
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d markdown links", len(matches)))
+	a.logInfo(fmt.Sprintf("Found %d markdown links", len(matches)))
 	for _, match := range matches {
 		url := match[2]
 		if strings.HasSuffix(strings.ToLower(url), ".md") {
 			links = append(links, LinkInfo{Target: url, Kind: "markdown_link"})
-			runtime.LogInfo(a.ctx, fmt.Sprintf("  Markdown link: %s", url))
+			a.logPrivate(fmt.Sprintf("Markdown link: %s", url))
 		}
 	}
 
 	// 画像リンク ![alt](src)
 	imgLinkRegex := regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
 	matches = imgLinkRegex.FindAllStringSubmatch(content, -1)
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d image links", len(matches)))
+	a.logInfo(fmt.Sprintf("Found %d image links", len(matches)))
 	// imgLinkTrimRegex := regexp.MustCompile(`\s*".*?"`)
 	for _, match := range matches {
 		// src := imgLinkTrimRegex.ReplaceAllString(match[2], "")
 		src := match[2]
 		links = append(links, LinkInfo{Target: src, Kind: "img"})
-		runtime.LogInfo(a.ctx, fmt.Sprintf("  Image link: %s", src))
+		a.logPrivate(fmt.Sprintf("Image link: %s", src))
 	}
 
 	// 引用 > text 内のWikiリンク
 	quoteRegex := regexp.MustCompile(`(?m)^>\s*.*?\[\[([^|\]]+)(?:\|([^\]]+))?\]\].*$`)
 	matches = quoteRegex.FindAllStringSubmatch(content, -1)
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Found %d quote blocks with wiki links", len(matches)))
+	a.logInfo(fmt.Sprintf("Found %d quote blocks with wiki links", len(matches)))
 	for _, match := range matches {
 		title := match[1]
 		if !strings.HasSuffix(strings.ToLower(title), ".md") {
 			title += ".md"
 		}
 		links = append(links, LinkInfo{Target: title, Kind: "quote"})
-		runtime.LogInfo(a.ctx, fmt.Sprintf("  Quote link: %s", title))
+		a.logPrivate(fmt.Sprintf("Quote link: %s", title))
 	}
 
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Total links extracted: %d", len(links)))
+	a.logInfo(fmt.Sprintf("Total links extracted: %d", len(links)))
 	return links
 }
 
 // resolveLinkTarget resolves a link target to a node ID
 func (a *App) resolveLinkTarget(link LinkInfo, currentFile string) string {
-	runtime.LogInfo(a.ctx, fmt.Sprintf("Resolving link: %s (kind: %s) from file: %s", link.Target, link.Kind, currentFile))
+	a.logPrivate(fmt.Sprintf("Resolving link: %s (kind: %s) from file: %s", link.Target, link.Kind, currentFile))
 
 	switch link.Kind {
 	case "wikilink", "markdown_link":
@@ -6660,14 +6769,14 @@ func (a *App) resolveLinkTarget(link LinkInfo, currentFile string) string {
 			target = filepath.ToSlash(target)
 		}
 		result := "doc:/" + strings.TrimPrefix(target, "content/")
-		runtime.LogInfo(a.ctx, fmt.Sprintf("  Resolved to: %s", result))
+		a.logPrivate(fmt.Sprintf("Resolved link to: %s", result))
 		return result
 	case "img":
 		result := "img:/" + link.Target
-		runtime.LogInfo(a.ctx, fmt.Sprintf("  Resolved to: %s", result))
+		a.logPrivate(fmt.Sprintf("Resolved link to: %s", result))
 		return result
 	default:
-		runtime.LogInfo(a.ctx, fmt.Sprintf("  No resolution for kind: %s", link.Kind))
+		a.logInfo(fmt.Sprintf("No resolution for link kind: %s", link.Kind))
 		return ""
 	}
 }

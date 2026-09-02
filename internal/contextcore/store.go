@@ -22,6 +22,7 @@ type Store struct {
 	requestsDir  string
 	responsesDir string
 	processedDir string
+	auditDir     string
 }
 
 type PendingRequest struct {
@@ -44,9 +45,9 @@ func NewStore(dataDir string) (*Store, error) {
 	store := &Store{
 		dataRoot: realRoot, protocolRoot: protocolRoot,
 		requestsDir: filepath.Join(protocolRoot, "requests"), responsesDir: filepath.Join(protocolRoot, "responses"),
-		processedDir: filepath.Join(protocolRoot, "processed"),
+		processedDir: filepath.Join(protocolRoot, "processed"), auditDir: filepath.Join(protocolRoot, "audit"),
 	}
-	for _, path := range []string{store.protocolRoot, store.requestsDir, store.responsesDir, store.processedDir} {
+	for _, path := range []string{store.protocolRoot, store.requestsDir, store.responsesDir, store.processedDir, store.auditDir} {
 		if err := store.assertNoSymlinkEscape(path); err != nil {
 			return nil, err
 		}
@@ -55,9 +56,12 @@ func NewStore(dataDir string) (*Store, error) {
 }
 
 func (store *Store) EnsureLayout() error {
-	for _, path := range []string{store.requestsDir, store.responsesDir, store.processedDir} {
+	for _, path := range []string{store.protocolRoot, store.requestsDir, store.responsesDir, store.processedDir, store.auditDir} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			return fmt.Errorf("create context protocol directory: %w", err)
+		}
+		if err := os.Chmod(path, 0o700); err != nil {
+			return fmt.Errorf("secure context protocol directory: %w", err)
 		}
 		if err := store.assertExistingWithinDataRoot(path); err != nil {
 			return err

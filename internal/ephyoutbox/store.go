@@ -51,9 +51,12 @@ func NewStore(dataDir string) (*Store, error) {
 }
 
 func (store *Store) EnsureLayout() error {
-	for _, dir := range []string{store.pendingDir, store.acceptedDir, store.rejectedDir, store.receiptsDir, store.transactionsDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+	for _, dir := range []string{store.outboxRoot, store.pendingDir, store.acceptedDir, store.rejectedDir, store.receiptsDir, store.transactionsDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("create outbox directory: %w", err)
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return fmt.Errorf("secure outbox directory: %w", err)
 		}
 		if err := store.assertExistingWithinDataRoot(dir); err != nil {
 			return err
@@ -349,7 +352,10 @@ func (store *Store) assertExistingWithinDataRoot(candidate string) error {
 
 func atomicWriteJSON(destination string, value any) error {
 	dir := filepath.Dir(destination)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
 	temp, err := os.CreateTemp(dir, "."+filepath.Base(destination)+".*.tmp")

@@ -52,7 +52,7 @@ func (service *Service) Search(request Request, policy Policy) ([]SearchResult, 
 	if err := request.Validate(); err != nil {
 		return nil, nil, "invalid", err
 	}
-	effective, err := policy.Resolve(request.Actor, request.Scope)
+	effective, err := policy.ResolveFor(request.Actor, request.Scope, CapabilitySearch)
 	if err != nil {
 		return nil, nil, "invalid", err
 	}
@@ -103,7 +103,7 @@ func (service *Service) Read(request Request, policy Policy) (*Document, []Diagn
 	if err := request.Validate(); err != nil {
 		return nil, nil, "invalid", err
 	}
-	effective, err := policy.Resolve(request.Actor, request.Scope)
+	effective, err := policy.ResolveFor(request.Actor, request.Scope, CapabilityRead)
 	if err != nil {
 		return nil, nil, "invalid", err
 	}
@@ -119,7 +119,7 @@ func (service *Service) Read(request Request, policy Policy) (*Document, []Diagn
 			continue
 		}
 		if !effective.permits(candidate) {
-			return nil, diagnostics, "denied", nil
+			return nil, []Diagnostic{}, "denied", nil
 		}
 		return &Document{
 			DocID: candidate.DocID, Title: candidate.Title, Project: candidate.Project, Kind: candidate.Kind,
@@ -127,7 +127,35 @@ func (service *Service) Read(request Request, policy Policy) (*Document, []Diagn
 			UpdatedAt: candidate.UpdatedAt, SHA256: candidate.SHA256, Body: candidate.Body, Provenance: candidate.Provenance,
 		}, diagnostics, "ok", nil
 	}
+	if request.Actor.Type != "human" || !effective.hasCompleteVisibility() {
+		return nil, []Diagnostic{}, "denied", nil
+	}
 	return nil, diagnostics, "not_found", nil
+}
+
+func (service *Service) ResourceByRelativePath(relativePath string) (Resource, error) {
+	normalized := filepath.ToSlash(filepath.Clean(strings.TrimSpace(relativePath)))
+	if normalized == "." || normalized == "" || normalized == ".." || strings.HasPrefix(normalized, "../") || !strings.HasPrefix(normalized, "content/") {
+		return Resource{}, fmt.Errorf("canonical document path is invalid")
+	}
+	documents, _, err := service.scan()
+	if err != nil {
+		return Resource{}, err
+	}
+	for _, document := range documents {
+		if document.RelativePath != normalized {
+			continue
+		}
+		resource := Resource{
+			Project: document.Project, Kind: document.Kind, Tags: append([]string(nil), document.Tags...),
+			Sensitivity: document.Sensitivity, SHA256: document.SHA256,
+		}
+		for _, provenance := range document.Provenance {
+			resource.ProvenanceTypes = append(resource.ProvenanceTypes, provenance.Type)
+		}
+		return resource, nil
+	}
+	return Resource{}, fmt.Errorf("canonical document is not available")
 }
 
 func (service *Service) scan() ([]indexedDocument, []Diagnostic, error) {
@@ -260,6 +288,9 @@ func projectKindFromPath(relativePath string) (string, string) {
 	parts := strings.Split(relativePath, "/")
 	if len(parts) >= 5 && parts[0] == "content" && parts[1] == "projects" {
 		return strings.ToLower(parts[2]), strings.ToLower(parts[3])
+	}
+	if len(parts) >= 2 && parts[0] == "content" {
+		return "legacy", "note"
 	}
 	return "", ""
 }
