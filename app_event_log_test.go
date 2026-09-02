@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -50,7 +51,7 @@ func TestSaveEventLogsPersistsMetadataOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("event log permissions are too broad: %o", info.Mode().Perm())
 	}
 }
@@ -84,7 +85,7 @@ func TestOperationalLogsDiscardMessagesAndUsePrivatePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("operational log permissions are too broad: %o", info.Mode().Perm())
 	}
 }

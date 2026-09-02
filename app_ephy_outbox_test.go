@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -580,7 +581,7 @@ Private log body payload.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exportedInfo.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && exportedInfo.Mode().Perm() != 0o600 {
 		t.Fatalf("HTML export permissions are too broad: %o", exportedInfo.Mode().Perm())
 	}
 	logData, err := os.ReadFile(app.logFilePath)
