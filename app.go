@@ -573,8 +573,14 @@ func (a *App) startup(ctx context.Context) {
 	if a.dataDir == "" {
 		configuredDataDir, configured, configErr := runtimepath.ConfiguredDataDir(appPlacedDir)
 		if configErr != nil {
-			a.logError("persisted data directory unavailable")
-			return
+			var recovered bool
+			configuredDataDir, recovered, configErr = runtimepath.RecoverConfiguredDataDir(appPlacedDir)
+			if configErr != nil || !recovered {
+				a.logError("persisted data directory unavailable")
+				return
+			}
+			configured = true
+			a.logInfo("Recovered persisted data directory pointer")
 		}
 		if configured {
 			a.root = filepath.Dir(configuredDataDir)

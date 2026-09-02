@@ -65,6 +65,8 @@ auditは`.mdsys/context/v1/audit`へatomic JSONとして保存する．残せる
 
 Ephy同梱版のlauncherは，選択した絶対`KARTE_DATA_DIR`を`Karte.app`隣接の`.karte-data-dir`へatomicに記録する．Karteの選択順は，明示`KARTE_DATA_DIR`，development workspace，`.karte-data-dir`，platform既定値である．この記録により，DockやFinderからKarteだけを再起動しても空の別保管庫へ切り替わらない．
 
+`.karte-data-dir`は単一行の絶対directory pathだけを受理する．破損した記録から既存の絶対directoryを一意に特定できる場合，Karteは起動時に同じ形式へatomicに修復してから処理を開始する．候補がない場合，または複数候補がある場合は推測せず起動を中止し，誤ったPersonal Contextへ接続しない．
+
 Karteは起動後，現在のPIDを`KARTE_DATA_DIR/.mdsys/runtime/karte.pid`へatomicに公開し，正常終了時は自分がownerである場合だけ削除する．Ephy launcherは実行ファイルのpathだけでなく，期待するdata root内のPID markerと実process identityが一致するKarteだけを再利用する．同じbundleが別data rootで動作中の場合はそのprocessを流用せず，期待root用のinstanceを起動する．`karte.pid`はprocess discovery用のephemeral markerであり，document identity，lock，authorization，またはcanonical stateではない．
 
 ## Compatibility

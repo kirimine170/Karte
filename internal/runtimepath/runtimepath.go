@@ -43,6 +43,88 @@ func ConfiguredDataDir(appPlacedDir string) (string, bool, error) {
 	return filepath.Clean(abs), true, nil
 }
 
+// WriteConfiguredDataDir atomically records the absolute Personal Context root
+// next to a packaged application. Keeping this writer in Karte gives launchers
+// and recovery code one contract for the pointer file.
+func WriteConfiguredDataDir(appPlacedDir, dataDir string) (string, error) {
+	value := strings.TrimSpace(dataDir)
+	if value == "" || strings.ContainsAny(value, "\r\n\x00") {
+		return "", fmt.Errorf("data directory must contain one path")
+	}
+	abs, err := filepath.Abs(value)
+	if err != nil {
+		return "", fmt.Errorf("resolve data directory: %w", err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("inspect data directory: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("data directory must be a directory")
+	}
+	path := filepath.Join(appPlacedDir, DataDirConfigName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("create data directory config parent: %w", err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".karte-data-dir.*")
+	if err != nil {
+		return "", fmt.Errorf("create data directory config: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := fmt.Fprintln(tmp, filepath.Clean(abs)); err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("write data directory config: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("sync data directory config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("close data directory config: %w", err)
+	}
+	if err := replaceRuntimePID(tmpPath, path); err != nil {
+		return "", fmt.Errorf("publish data directory config: %w", err)
+	}
+	return filepath.Clean(abs), nil
+}
+
+// RecoverConfiguredDataDir repairs the observed legacy corruption where an
+// application-adjacent pointer contains directory-listing lines followed by one
+// valid absolute data root. Recovery is deliberately fail-closed when there is
+// no unique existing absolute directory.
+func RecoverConfiguredDataDir(appPlacedDir string) (string, bool, error) {
+	path := filepath.Join(appPlacedDir, DataDirConfigName)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", false, err
+	}
+	unique := map[string]struct{}{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		value := strings.TrimSpace(line)
+		if value == "" || !filepath.IsAbs(value) || strings.ContainsRune(value, '\x00') {
+			continue
+		}
+		abs := filepath.Clean(value)
+		info, statErr := os.Stat(abs)
+		if statErr != nil || !info.IsDir() {
+			continue
+		}
+		unique[abs] = struct{}{}
+	}
+	if len(unique) != 1 {
+		return "", false, fmt.Errorf("data directory config has no unique existing absolute directory")
+	}
+	var recovered string
+	for candidate := range unique {
+		recovered = candidate
+	}
+	if _, err := WriteConfiguredDataDir(appPlacedDir, recovered); err != nil {
+		return "", false, err
+	}
+	return recovered, true, nil
+}
+
 // WriteRuntimePID records which Karte process owns a data directory. Launchers
 // use the data-root-local marker to avoid reusing a Karte opened on another
 // workspace merely because its executable path is identical.

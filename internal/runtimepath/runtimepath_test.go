@@ -76,6 +76,65 @@ func TestConfiguredDataDirReportsMissingConfig(t *testing.T) {
 	}
 }
 
+func TestWriteConfiguredDataDirIsAtomicAndSingleLine(t *testing.T) {
+	placed := t.TempDir()
+	dataDir := t.TempDir()
+	got, err := WriteConfiguredDataDir(placed, dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != dataDir {
+		t.Fatalf("WriteConfiguredDataDir() = %q，want %q", got, dataDir)
+	}
+	raw, err := os.ReadFile(filepath.Join(placed, DataDirConfigName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != dataDir+"\n" {
+		t.Fatalf("pointer = %q，want one absolute path", raw)
+	}
+	if _, err := WriteConfiguredDataDir(placed, "one\ntwo"); err == nil {
+		t.Fatal("multiline data directory was accepted")
+	}
+}
+
+func TestRecoverConfiguredDataDirRepairsUniqueAbsoluteDirectory(t *testing.T) {
+	placed := t.TempDir()
+	dataDir := t.TempDir()
+	configPath := filepath.Join(placed, DataDirConfigName)
+	corrupt := "content\ndata\nlog\npublic\nthemes\n" + dataDir + "\n"
+	if err := os.WriteFile(configPath, []byte(corrupt), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, recovered, err := RecoverConfiguredDataDir(placed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !recovered || got != dataDir {
+		t.Fatalf("RecoverConfiguredDataDir() = %q，%v，want %q，true", got, recovered, dataDir)
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != dataDir+"\n" {
+		t.Fatalf("repaired pointer = %q", raw)
+	}
+}
+
+func TestRecoverConfiguredDataDirRejectsAmbiguousDirectories(t *testing.T) {
+	placed := t.TempDir()
+	first := t.TempDir()
+	second := t.TempDir()
+	configPath := filepath.Join(placed, DataDirConfigName)
+	if err := os.WriteFile(configPath, []byte(first+"\n"+second+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, recovered, err := RecoverConfiguredDataDir(placed); err == nil || recovered {
+		t.Fatalf("ambiguous pointer recovered=%v err=%v", recovered, err)
+	}
+}
+
 func TestRuntimePIDLifecycleDoesNotRemoveNewerOwner(t *testing.T) {
 	dataDir := t.TempDir()
 	path, err := WriteRuntimePID(dataDir, 101)
