@@ -1,9 +1,14 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -15,6 +20,91 @@ type ephyMutationUATAction struct {
 type ephyMutationUATManifest struct {
 	SchemaVersion string                  `json:"schema_version"`
 	Actions       []ephyMutationUATAction `json:"actions"`
+}
+
+type ephyMutationUATCanonicalCheck struct {
+	SchemaVersion string `json:"schema_version"`
+	CandidateID   string `json:"candidate_id"`
+	BeforeCount   int    `json:"before_count"`
+	AfterCount    int    `json:"after_count"`
+	BeforeSHA256  string `json:"before_sha256"`
+	AfterSHA256   string `json:"after_sha256"`
+	TreeUnchanged bool   `json:"tree_unchanged"`
+}
+
+func snapshotCanonicalMarkdown(root string) (map[string]string, error) {
+	contentRoot := filepath.Join(root, "content")
+	snapshot := map[string]string{}
+	err := filepath.WalkDir(contentRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		relativePath, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		digest := sha256.Sum256(content)
+		snapshot[filepath.ToSlash(relativePath)] = hex.EncodeToString(digest[:])
+		return nil
+	})
+	return snapshot, err
+}
+
+func canonicalSnapshotDigest(snapshot map[string]string) string {
+	paths := make([]string, 0, len(snapshot))
+	for path := range snapshot {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	digest := sha256.New()
+	for _, path := range paths {
+		_, _ = digest.Write([]byte(path))
+		_, _ = digest.Write([]byte{0})
+		_, _ = digest.Write([]byte(snapshot[path]))
+		_, _ = digest.Write([]byte{'\n'})
+	}
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
+func TestSnapshotCanonicalMarkdown(t *testing.T) {
+	root := t.TempDir()
+	canonical := filepath.Join(root, "content", "projects", "ephy", "note", "2026-09", "accepted.md")
+	if err := os.MkdirAll(filepath.Dir(canonical), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("# accepted\n")
+	if err := os.WriteFile(canonical, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	uppercaseCanonical := filepath.Join(filepath.Dir(canonical), "accepted-uppercase.MD")
+	uppercaseContent := []byte("# accepted uppercase\n")
+	if err := os.WriteFile(uppercaseCanonical, uppercaseContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(canonical), "ignored.txt"), []byte("ignore"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := snapshotCanonicalMarkdown(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHash := sha256.Sum256(content)
+	wantPath := "content/projects/ephy/note/2026-09/accepted.md"
+	wantUppercaseHash := sha256.Sum256(uppercaseContent)
+	wantUppercasePath := "content/projects/ephy/note/2026-09/accepted-uppercase.MD"
+	if len(snapshot) != 2 ||
+		snapshot[wantPath] != hex.EncodeToString(wantHash[:]) ||
+		snapshot[wantUppercasePath] != hex.EncodeToString(wantUppercaseHash[:]) {
+		t.Fatalf("unexpected canonical snapshot: %#v", snapshot)
+	}
 }
 
 // TestEphyMutationUATBridge is an opt-in bridge for ephy-runtime's cross-app
@@ -66,6 +156,7 @@ func TestEphyMutationUATBridge(t *testing.T) {
 		t.Fatalf("review surface did not expose every UAT proposal: got=%d want=%d", len(reviews), len(manifest.Actions))
 	}
 
+	var canonicalCheck *ephyMutationUATCanonicalCheck
 	for _, action := range manifest.Actions {
 		review, ok := reviews[action.CandidateID]
 		if !ok {
@@ -81,6 +172,10 @@ func TestEphyMutationUATBridge(t *testing.T) {
 				t.Fatalf("accepted receipt is incomplete: %#v", receipt)
 			}
 		case "reject":
+			before, snapshotErr := snapshotCanonicalMarkdown(resolvedRoot)
+			if snapshotErr != nil {
+				t.Fatalf("snapshot canonical tree before reject: %v", snapshotErr)
+			}
 			receipt, rejectErr := app.RejectEphyProposal(action.CandidateID, "Rejected by the cross-app human-review UAT.")
 			if rejectErr != nil {
 				t.Fatalf("reject %s: %v", action.CandidateID, rejectErr)
@@ -88,8 +183,34 @@ func TestEphyMutationUATBridge(t *testing.T) {
 			if receipt.Result != "rejected" || receipt.ResultingSHA256 != nil {
 				t.Fatalf("rejected receipt is invalid: %#v", receipt)
 			}
+			after, snapshotErr := snapshotCanonicalMarkdown(resolvedRoot)
+			if snapshotErr != nil {
+				t.Fatalf("snapshot canonical tree after reject: %v", snapshotErr)
+			}
+			if !reflect.DeepEqual(before, after) {
+				t.Fatalf("reject changed canonical Markdown: before=%#v after=%#v", before, after)
+			}
+			check := ephyMutationUATCanonicalCheck{
+				SchemaVersion: "1.0", CandidateID: action.CandidateID,
+				BeforeCount: len(before), AfterCount: len(after),
+				BeforeSHA256: canonicalSnapshotDigest(before), AfterSHA256: canonicalSnapshotDigest(after),
+				TreeUnchanged: true,
+			}
+			canonicalCheck = &check
 		default:
 			t.Fatalf("unsupported UAT decision %q", action.Decision)
 		}
+	}
+	if canonicalCheck == nil {
+		t.Fatal("mutation UAT did not exercise a reject action")
+	}
+	checkPath := filepath.Join(resolvedRoot, ".mdsys", "ephy", "mutation-uat-canonical-check.json")
+	encodedCheck, err := json.MarshalIndent(canonicalCheck, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedCheck = append(encodedCheck, '\n')
+	if err := os.WriteFile(checkPath, encodedCheck, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

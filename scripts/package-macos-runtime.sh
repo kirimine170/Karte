@@ -206,6 +206,16 @@ if [[ $model_count -eq 0 ]]; then
   echo "No ONNX models were packaged; continuing with runtime-only PR artifact"
 fi
 
+karte_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+source_revision=$(git -C "$karte_root" rev-parse HEAD)
+if [[ ! "$source_revision" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "Could not resolve a full Karte source revision" >&2
+  exit 1
+fi
+provenance_path="$app_bundle/Contents/Resources/karte-build-provenance.json"
+printf '{\n  "schema_version": "1.0",\n  "source_revision": "%s",\n  "target": "%s"\n}\n' \
+  "$source_revision" "$target" > "$provenance_path"
+
 codesign_identity=${MACOS_CODESIGN_IDENTITY:--}
 while IFS= read -r -d '' dylib; do
   codesign --force --sign "$codesign_identity" --timestamp=none "$dylib"

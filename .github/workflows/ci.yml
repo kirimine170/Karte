@@ -209,7 +209,12 @@ jobs:
         if: runner.os == 'macOS'
         env:
           KARTE_REQUIRE_ASR_MODELS: ${{ github.event_name == 'pull_request' && '0' || '1' }}
-        run: ./scripts/package-macos-runtime.sh "${{ matrix.artifact_path }}/Karte.app" "${{ matrix.target }}"
+        run: |
+          ./scripts/package-macos-runtime.sh "${{ matrix.artifact_path }}/Karte.app" "${{ matrix.target }}"
+          provenance="${{ matrix.artifact_path }}/Karte.app/Contents/Resources/karte-build-provenance.json"
+          jq -e --arg revision "$GITHUB_SHA" --arg target "${{ matrix.target }}" \
+            '.schema_version == "1.0" and .source_revision == $revision and .target == $target' \
+            "$provenance"
 
       - name: Verify final macOS application code seal
         if: runner.os == 'macOS'
