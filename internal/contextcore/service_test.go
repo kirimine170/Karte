@@ -111,12 +111,28 @@ Hidden body.
 		}
 	}
 
+	fullyScopedEphyPolicy := DefaultPolicy()
+	fullyScopedEphyPolicy.Actors["ephy"] = ActorPolicy{
+		SensitivityCeiling: "restricted", Projects: []string{"*"}, ProvenanceTypes: []string{"*"},
+		Capabilities: []Capability{CapabilityRead},
+	}
+	missingForEphy := "doc:still-does-not-exist"
+	request.DocID = &missingForEphy
+	request.Scope = Scope{Projects: []string{"*"}, SensitivityCeiling: "restricted"}
+	document, diagnostics, status, err := service.Read(request, fullyScopedEphyPolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "denied" || document != nil || len(diagnostics) != 0 {
+		t.Fatalf("fully scoped Ephy read disclosed non-existence: status=%s document=%#v diagnostics=%#v", status, document, diagnostics)
+	}
+
 	human := request
 	human.Actor = Actor{Type: "human", ID: "local-human"}
 	human.Scope = Scope{Projects: []string{"*"}, SensitivityCeiling: "restricted"}
 	missing := "doc:does-not-exist"
 	human.DocID = &missing
-	_, _, status, err := service.Read(human, DefaultPolicy())
+	_, _, status, err = service.Read(human, DefaultPolicy())
 	if err != nil || status != "not_found" {
 		t.Fatalf("fully authorized human did not receive not_found: status=%s err=%v", status, err)
 	}

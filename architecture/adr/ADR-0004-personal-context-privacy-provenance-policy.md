@@ -29,6 +29,7 @@ actorの`sensitivity_ceiling`を上げるだけでは利用できない．actor�
 - tagはdirectoryと独立した横断filterである．actor policyの`allowed_tags`は少なくとも1件の一致を要求し，`denied_tags`は1件でも一致すれば常にdenyする．これにより`person:<id>`や`organization:<id>`をproject横断で制御できる．
 - `master_projects`はKarteごとのlocal policyで宣言し，名前をprotocolへ固定しない．人物，組織，日記のうち複数projectを横断する情報だけをmaster projectへ置く．単一project内の情報はそのprojectへ置く．
 - master projectは特権的な迂回路ではない．actorのproject allow-listに明示されるか，`*`が指定された場合だけ参照できる．分類不能時はEphyが相談proposalを返し，自動保存しない．
+- 既存UIが作成した`content/`配下の文書で，`doc_id`はあるがproject／kindを持たずproject directoryにも入っていないものは，移行互換のためvirtualに`project=legacy`，`kind=note`として分類する．これはfileを移動せず，actor policyに`legacy`または`*`がなければ参照を許可しない．新規のEphy proposalでは引き続きprojectを必須とする．
 
 ### Provenance
 

@@ -2260,7 +2260,7 @@ func (a *App) ListEphyProposals() (*ephyoutbox.Inbox, error) {
 			inbox.Errors = append(inbox.Errors, ephyProposalError(proposal, "processed_"+receipt.Result, "proposal already has a final receipt"))
 			continue
 		}
-		if _, _, policyErr := a.authorizeEphyProposal(proposal, nil); policyErr != nil {
+		if _, _, policyErr := a.authorizeEphyProposal(proposal, nil, "list"); policyErr != nil {
 			inbox.Errors = append(inbox.Errors, ephyProposalError(proposal, "proposal_policy_denied", "proposal is not available under the active Personal Context policy"))
 			continue
 		}
@@ -2367,7 +2367,7 @@ func (a *App) AcceptEphyProposal(candidateID string, editedFrontmatter map[strin
 	if err := proposal.RequirePublishable(); err != nil {
 		return nil, err
 	}
-	if _, _, policyErr := a.authorizeEphyProposal(proposal, editedFrontmatter); policyErr != nil {
+	if _, _, policyErr := a.authorizeEphyProposal(proposal, editedFrontmatter, "accept"); policyErr != nil {
 		return nil, fmt.Errorf("proposal is not available under the active Personal Context policy")
 	}
 	transaction, err := store.ReadTransaction(candidateID)
@@ -2513,7 +2513,7 @@ func (a *App) RejectEphyProposal(candidateID, message string) (*ephyoutbox.Recei
 	if err != nil {
 		return nil, err
 	}
-	if _, _, policyErr := a.authorizeEphyProposal(proposal, nil); policyErr != nil {
+	if _, _, policyErr := a.authorizeEphyProposal(proposal, nil, "reject"); policyErr != nil {
 		return nil, fmt.Errorf("proposal is not available under the active Personal Context policy")
 	}
 	if len(message) > 2048 {

@@ -192,6 +192,69 @@ func TestAcceptEphyCreatePreservesYAMLListTags(t *testing.T) {
 	}
 }
 
+func TestProposalAuthorizationAuditsListAndAcceptSeparately(t *testing.T) {
+	app, dataRoot := newEphyTestApp(t)
+	proposal := writePendingFixture(t, dataRoot, "create-proposal.json")
+	if _, err := app.ListEphyProposals(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.AcceptEphyProposal(proposal.CandidateID, proposal.ProposedFrontmatter, proposal.ProposedBody); err != nil {
+		t.Fatal(err)
+	}
+	auditFiles, err := filepath.Glob(filepath.Join(dataRoot, ".mdsys", "context", "v1", "audit", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(auditFiles) != 4 {
+		t.Fatalf("list and accept authorization audits were deduplicated: files=%#v", auditFiles)
+	}
+	correlations := map[string]bool{}
+	actorOperations := map[string]int{}
+	for _, path := range auditFiles {
+		encoded, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		var event contextcore.AuditEvent
+		if err := json.Unmarshal(encoded, &event); err != nil {
+			t.Fatal(err)
+		}
+		correlations[event.CorrelationSHA256] = true
+		actorOperations[event.ActorType+":"+event.Operation]++
+	}
+	if len(correlations) != 4 || actorOperations["ephy:propose"] != 2 || actorOperations["human:review"] != 2 {
+		t.Fatalf("authorization audit phases are incomplete: correlations=%d actorOperations=%#v", len(correlations), actorOperations)
+	}
+}
+
+func TestCreateProposalDeduplicatesSourceProvenanceTypes(t *testing.T) {
+	app, dataRoot := newEphyTestApp(t)
+	fixture, _ := readProposalFixture(t, "create-proposal.json")
+	var payload map[string]any
+	if err := json.Unmarshal(fixture, &payload); err != nil {
+		t.Fatal(err)
+	}
+	sourceRefs := payload["source_refs"].([]any)
+	payload["source_refs"] = append(sourceRefs, map[string]any{
+		"type": "synthetic-test", "reference": "fixture://conversation/duplicate-type",
+	})
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := writePendingPayload(t, dataRoot, encoded)
+	inbox, err := app.ListEphyProposals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbox.Proposals) != 1 || len(inbox.Errors) != 0 {
+		t.Fatalf("duplicate provenance type made proposal unreviewable: %#v", inbox)
+	}
+	if _, err := app.AcceptEphyProposal(proposal.CandidateID, proposal.ProposedFrontmatter, proposal.ProposedBody); err != nil {
+		t.Fatalf("duplicate provenance type blocked acceptance: %v", err)
+	}
+}
+
 func TestAcceptedEphyDocumentSurvivesRestartAndContextSearchRead(t *testing.T) {
 	app, dataRoot := newEphyTestApp(t)
 	proposal := writePendingFixture(t, dataRoot, "create-proposal.json")
@@ -366,6 +429,28 @@ func TestAcceptEphyAppendUsesMatchingDocIDContentAndByteHash(t *testing.T) {
 	text := string(updated)
 	if !strings.Contains(text, "Canonical body.") || !strings.Contains(text, "Reviewed addition") || !strings.Contains(text, `doc_id: "doc:synthetic-001"`) {
 		t.Fatalf("canonical append is incorrect: %s", text)
+	}
+}
+
+func TestAppendProposalDeduplicatesCanonicalProvenanceType(t *testing.T) {
+	app, dataRoot := newEphyTestApp(t)
+	_, canonical := writeAppendTarget(t, dataRoot)
+	payload := appendProposalWithHash(t, canonical)
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	sourceRefs := decoded["source_refs"].([]any)
+	decoded["source_refs"] = append(sourceRefs, map[string]any{
+		"type": "canonical", "reference": "fixture://canonical/reference",
+	})
+	encoded, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := writePendingPayload(t, dataRoot, encoded)
+	if _, err := app.AcceptEphyProposal(proposal.CandidateID, proposal.ProposedFrontmatter, proposal.ProposedBody); err != nil {
+		t.Fatalf("canonical provenance type blocked append acceptance: %v", err)
 	}
 }
 
@@ -668,6 +753,33 @@ Private log body payload.
 		if strings.Contains(string(logData), secret) {
 			t.Fatalf("durable app log disclosed %q: %s", secret, logData)
 		}
+	}
+}
+
+func TestRootDocumentCreatedByUIUsesLegacyClassificationForExport(t *testing.T) {
+	app, _ := newEphyTestApp(t)
+	app.ctx = nil
+	if created, err := app.CreateNewFile("root-export"); err != nil || !created {
+		t.Fatalf("root document was not created: created=%v err=%v", created, err)
+	}
+	const relativePath = "content/root-export.md"
+	loaded, err := app.LoadFile(relativePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(loaded, "doc_id:") {
+		t.Fatalf("root document did not receive doc_id: %s", loaded)
+	}
+	exportedURL, err := app.ExportPreviewHTML(relativePath)
+	if err != nil {
+		t.Fatalf("legacy-classified root document could not be exported: %v", err)
+	}
+	exported, err := os.ReadFile(strings.TrimPrefix(exportedURL, "file://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(exported), "Start writing your content here") {
+		t.Fatalf("root document export lost canonical body: %s", exported)
 	}
 }
 

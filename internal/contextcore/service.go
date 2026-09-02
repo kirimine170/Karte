@@ -127,7 +127,7 @@ func (service *Service) Read(request Request, policy Policy) (*Document, []Diagn
 			UpdatedAt: candidate.UpdatedAt, SHA256: candidate.SHA256, Body: candidate.Body, Provenance: candidate.Provenance,
 		}, diagnostics, "ok", nil
 	}
-	if !effective.hasCompleteVisibility() {
+	if request.Actor.Type != "human" || !effective.hasCompleteVisibility() {
 		return nil, []Diagnostic{}, "denied", nil
 	}
 	return nil, diagnostics, "not_found", nil
@@ -288,6 +288,9 @@ func projectKindFromPath(relativePath string) (string, string) {
 	parts := strings.Split(relativePath, "/")
 	if len(parts) >= 5 && parts[0] == "content" && parts[1] == "projects" {
 		return strings.ToLower(parts[2]), strings.ToLower(parts[3])
+	}
+	if len(parts) >= 2 && parts[0] == "content" {
+		return "legacy", "note"
 	}
 	return "", ""
 }
