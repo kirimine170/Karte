@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -38,7 +39,7 @@ func snapshotCanonicalMarkdown(root string) (map[string]string, error) {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
 			return nil
 		}
 		content, err := os.ReadFile(path)
@@ -82,6 +83,11 @@ func TestSnapshotCanonicalMarkdown(t *testing.T) {
 	if err := os.WriteFile(canonical, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	uppercaseCanonical := filepath.Join(filepath.Dir(canonical), "accepted-uppercase.MD")
+	uppercaseContent := []byte("# accepted uppercase\n")
+	if err := os.WriteFile(uppercaseCanonical, uppercaseContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(filepath.Dir(canonical), "ignored.txt"), []byte("ignore"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +98,11 @@ func TestSnapshotCanonicalMarkdown(t *testing.T) {
 	}
 	wantHash := sha256.Sum256(content)
 	wantPath := "content/projects/ephy/note/2026-09/accepted.md"
-	if len(snapshot) != 1 || snapshot[wantPath] != hex.EncodeToString(wantHash[:]) {
+	wantUppercaseHash := sha256.Sum256(uppercaseContent)
+	wantUppercasePath := "content/projects/ephy/note/2026-09/accepted-uppercase.MD"
+	if len(snapshot) != 2 ||
+		snapshot[wantPath] != hex.EncodeToString(wantHash[:]) ||
+		snapshot[wantUppercasePath] != hex.EncodeToString(wantUppercaseHash[:]) {
 		t.Fatalf("unexpected canonical snapshot: %#v", snapshot)
 	}
 }
