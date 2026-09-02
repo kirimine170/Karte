@@ -108,6 +108,9 @@ func main() {
 			if err := packageTemplateIntoAppBundle(projectRoot, t.ArtifactDir); err != nil {
 				log.Fatalf("failed to package karte_data_template for %s: %v", t.Name, err)
 			}
+			if err := signAndVerifyAppBundle(ctx, t.ArtifactDir); err != nil {
+				log.Fatalf("failed to seal macOS app bundle for %s: %v", t.Name, err)
+			}
 		}
 
 		fmt.Printf("✅ %s artifacts stored in %s\n", t.Name, t.ArtifactDir)
@@ -558,6 +561,24 @@ func moveArtifacts(destDir string) error {
 // 現状の build/targets.json では "darwin", "darwin-arm64", "darwin-amd64" が対象。
 func isDarwinTarget(name string) bool {
 	return strings.HasPrefix(name, "darwin")
+}
+
+func signAndVerifyAppBundle(ctx context.Context, artifactDir string) error {
+	appBundle := filepath.Join(artifactDir, "Karte.app")
+	if info, err := os.Stat(appBundle); err != nil || !info.IsDir() {
+		return fmt.Errorf("macOS app bundle not found: %s", appBundle)
+	}
+	identity := strings.TrimSpace(os.Getenv("MACOS_CODESIGN_IDENTITY"))
+	if identity == "" {
+		identity = "-"
+	}
+	if err := runCommand(ctx, ".", nil, "codesign", "--force", "--deep", "--sign", identity, "--timestamp=none", appBundle); err != nil {
+		return fmt.Errorf("sign %s: %w", appBundle, err)
+	}
+	if err := runCommand(ctx, ".", nil, "codesign", "--verify", "--deep", "--strict", "--verbose=2", appBundle); err != nil {
+		return fmt.Errorf("verify %s: %w", appBundle, err)
+	}
+	return nil
 }
 
 // packageTemplateIntoAppBundle replicates the packaging logic from the old package.sh:

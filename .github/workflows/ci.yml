@@ -209,6 +209,10 @@ jobs:
         if: runner.os == 'macOS' && github.event_name != 'pull_request'
         run: ./scripts/package-macos-runtime.sh "${{ matrix.artifact_path }}/Karte.app" "${{ matrix.target }}"
 
+      - name: Verify final macOS application code seal
+        if: runner.os == 'macOS'
+        run: codesign --verify --deep --strict --verbose=2 "${{ matrix.artifact_path }}/Karte.app"
+
       - name: Archive artifact (macOS)
         if: runner.os == 'macOS'
         run: |
