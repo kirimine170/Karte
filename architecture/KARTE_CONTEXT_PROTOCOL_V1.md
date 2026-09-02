@@ -44,9 +44,13 @@ Requestはactor，project allow-list，tag filter，sensitivity ceilingを宣言
 
 frontmatterに`sensitivity`がない文書は`internal`として扱う．不明な値，missing／duplicate `doc_id`，malformed frontmatter，symlinkはindexから除外し，本文を含まないdiagnosticにする．
 
+判定の正本は[ADR-0004](adr/ADR-0004-personal-context-privacy-provenance-policy.md)である．actor policyはcapability，project，横断tag，sensitivity，provenance typeを交差する．既定ではEphyが`search`／`read`／`propose`，local humanが`search`／`read`／`review`／`export`を持ち，`learn`は全actorでdefault denyとする．
+
+scopeが限定されたactorへのreadは，denyされた`doc_id`と存在しない`doc_id`を同じ`status=denied`として返す．完全な可視性を持つhumanだけが確定的な`not_found`を受け取れる．append proposalはcanonical project／kind／sensitivityと一致しなければならず，append patchで`sensitivity`を変更できない．exportはcanonical relative pathだけを受け取り，policy判定時のcanonical SHA-256と再読込した本文を照合してKarte内でrenderする．
+
 ## Logging
 
-通常logに残せるのはprotocol version，request ID，operation，status，duration，result count，error codeである．query text，snippet，title，path，document body，tag，person／organization名は保存しない．
+auditは`.mdsys/context/v1/audit`へatomic JSONとして保存する．残せるのはaudit version，event ID，correlation hash，actor type，actor ID hash，operation，status，result count，error code，timestampである．query text，doc_id，snippet，title，path，document body，tag，person／organization名は保存しない．
 
 ## Failure model
 

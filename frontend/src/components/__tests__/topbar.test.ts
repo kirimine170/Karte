@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Topbar } from '../topbar';
 import { useUIStore } from '../../stores/ui-store';
 import { useModalStore } from '../../stores/modal-store';
+import { useDocStore } from '../../stores/doc-store';
 import { eventLogger } from '../../utils/event-logger';
 import { clearLogs, expectLogSequence, expectLogContainsSequence } from '../../test-support/log-verifier';
 
@@ -18,6 +19,7 @@ const mockApi = {
 
 describe('Topbar', () => {
     beforeEach(() => {
+		vi.clearAllMocks();
         // ログをクリア
         clearLogs();
         
@@ -43,6 +45,12 @@ describe('Topbar', () => {
             conflictModal: { visible: false, conflictInfo: null },
             imagePreviewModal: { visible: false, imagePath: '', imageName: '', metadata: '', systemMetadata: '' },
         });
+		useDocStore.setState({
+			currentPath: 'content/projects/ephy/note/2026-09/context.md',
+			markdownContent: '# Context',
+			previewHtml: '<h1>Context</h1>',
+			hasUnsavedChanges: false,
+		});
 
         document.body.innerHTML = `
             <div class="bar">
@@ -156,4 +164,28 @@ describe('Topbar', () => {
             { component: 'Topbar', action: 'csv-toggle' }
         ]);
     });
+
+	it('passes canonical document identity to the export policy boundary', async () => {
+		mockApi.ExportPDF.mockResolvedValue('/mock/context.pdf');
+		const topbar = new Topbar(mockApi);
+		await (topbar as any).handleExportPDF();
+		expect(mockApi.ExportPDF).toHaveBeenCalledWith(
+			'content/projects/ephy/note/2026-09/context.md',
+		);
+	});
+
+	it('saves unsaved canonical content before exporting it', async () => {
+		mockApi.SaveFile.mockResolvedValue(undefined);
+		mockApi.ExportPDF.mockResolvedValue('/mock/context.pdf');
+		useDocStore.setState({ hasUnsavedChanges: true });
+		const topbar = new Topbar(mockApi);
+		await (topbar as any).handleExportPDF();
+		expect(mockApi.SaveFile).toHaveBeenCalledWith(
+			'content/projects/ephy/note/2026-09/context.md',
+			'# Context',
+		);
+		expect(mockApi.SaveFile.mock.invocationCallOrder[0]).toBeLessThan(
+			mockApi.ExportPDF.mock.invocationCallOrder[0],
+		);
+	});
 });

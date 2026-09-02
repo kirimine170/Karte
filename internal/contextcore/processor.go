@@ -73,6 +73,9 @@ func (processor *Processor) processOne(pending PendingRequest, policy Policy) er
 		if writeErr := processor.store.WriteResponse(response); writeErr != nil {
 			return writeErr
 		}
+		if auditErr := processor.writeRequestAudit(requestID, Actor{Type: "unknown"}, response); auditErr != nil {
+			return auditErr
+		}
 		return processor.store.ArchiveRequest(pending, requestID)
 	}
 	if strings.TrimSuffix(pending.Filename, ".json") != request.RequestID {
@@ -83,6 +86,9 @@ func (processor *Processor) processOne(pending PendingRequest, policy Policy) er
 	} else if existing != nil {
 		if existing.RequestSHA256 != pending.SHA256 {
 			return fmt.Errorf("request_id was reused with different content")
+		}
+		if err := processor.writeRequestAudit(request.RequestID, request.Actor, *existing); err != nil {
+			return err
 		}
 		return processor.store.ArchiveRequest(pending, request.RequestID)
 	}
@@ -112,5 +118,24 @@ func (processor *Processor) processOne(pending PendingRequest, policy Policy) er
 	if err := processor.store.WriteResponse(response); err != nil {
 		return err
 	}
+	if err := processor.writeRequestAudit(request.RequestID, request.Actor, response); err != nil {
+		return err
+	}
 	return processor.store.ArchiveRequest(pending, request.RequestID)
+}
+
+func (processor *Processor) writeRequestAudit(correlation string, actor Actor, response Response) error {
+	errorCode := ""
+	if response.Error != nil {
+		errorCode = response.Error.Code
+	}
+	resultCount := len(response.Results)
+	if response.Document != nil {
+		resultCount = 1
+	}
+	event, err := NewAuditEvent(correlation, actor, response.Operation, response.Status, resultCount, errorCode, response.ProcessedAt)
+	if err != nil {
+		return err
+	}
+	return processor.store.WriteAudit(event)
 }

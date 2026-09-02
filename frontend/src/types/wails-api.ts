@@ -212,8 +212,8 @@ export interface WailsAppAPI {
     PreviewMarkdownForPath?(path: string, content: string): Promise<string>;
     GetGraphData(): Promise<GraphData>;
     CreateNewFile(filename: string): Promise<boolean>;
-    ExportPDF(html: string): Promise<string>;
-    ExportPreviewHTML(html: string): Promise<string>;
+    ExportPDF(relativePath: string): Promise<string>;
+    ExportPreviewHTML(relativePath: string): Promise<string>;
     GetCustomCSS(): Promise<string>;
     SetCustomCSS(css: string): Promise<boolean>;
     ClearCustomCSS(): Promise<boolean>;

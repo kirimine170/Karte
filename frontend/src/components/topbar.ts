@@ -416,19 +416,19 @@ export class Topbar extends BaseComponent {
         const docStore = useDocStore.getState();
         const exportStore = useExportStore.getState();
 
-        const renderedHtml = await this.getRenderedPreviewHtml();
-        const exportHtml = renderedHtml || docStore.previewHtml;
-
-        if (!exportHtml) {
+        if (!docStore.currentPath) {
             eventLogger.log('Topbar', 'export-pdf-error', { error: 'no-content' });
             useUIStore.getState().setStatusMessage('エクスポートするコンテンツがありません', 2000);
+            return;
+        }
+        if (docStore.hasUnsavedChanges && !(await this.handleSave())) {
             return;
         }
 
         try {
             eventLogger.log('Topbar', 'export-pdf-start');
             exportStore.setPdfExportProgress(true, 0, 'PDFを生成中...');
-            const path = await this.api.ExportPDF(exportHtml);
+            const path = await this.api.ExportPDF(docStore.currentPath);
             exportStore.setPdfExportProgress(false);
             eventLogger.log('Topbar', 'export-pdf-success', { path });
             useUIStore.getState().setStatusMessage(`PDFをエクスポートしました: ${path}`, 3000);

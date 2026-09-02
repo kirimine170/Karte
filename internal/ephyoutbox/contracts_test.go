@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -54,6 +55,17 @@ func TestStoreListsPendingAndRejectsDuplicateCandidate(t *testing.T) {
 	}
 	if err := store.EnsureLayout(); err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		for _, dir := range []string{store.outboxRoot, store.pendingDir, store.acceptedDir, store.rejectedDir, store.receiptsDir, store.transactionsDir} {
+			info, err := os.Stat(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode().Perm() != 0o700 {
+				t.Fatalf("outbox directory permissions are too broad: %s=%o", filepath.Base(dir), info.Mode().Perm())
+			}
+		}
 	}
 	payload := fixtureBytes(t, "create-proposal.json")
 	if err := os.WriteFile(filepath.Join(store.pendingDir, "candidate-create-001.json"), payload, 0o644); err != nil {

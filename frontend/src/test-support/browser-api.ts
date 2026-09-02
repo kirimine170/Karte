@@ -262,13 +262,13 @@ export function createBrowserApi() {
             return true;
         },
 
-        async ExportPDF(html) {
-            console.log('Mock ExportPDF called, HTML length:', html.length);
+        async ExportPDF(relativePath) {
+            console.log('Mock ExportPDF document:', relativePath);
             return '/mock/path/to/export.pdf';
         },
 
-        async ExportPreviewHTML(html) {
-            console.log('Mock ExportPreviewHTML called, HTML length:', html.length);
+        async ExportPreviewHTML(relativePath) {
+            console.log('Mock ExportPreviewHTML document:', relativePath);
             return 'file:///mock/path/to/preview.html';
         },
 
