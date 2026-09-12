@@ -172,7 +172,7 @@ Runtime保全物は配送のためのものだけであり，独立した検索D
 
 ## 7．共有 fixture と後続 Step の検証対象
 
-Step 3 で Karte の v2 schema directory へ synthetic JSON と期待結果を置き，Runtime の `scripts/check_karte_contract.py`を v1/v2 合計 44 JSON の byte-for-byte 照合へ拡張した．Go／Python の canonical bytes・MAC・意味照合は `scripts/verify_runtime_record_fixtures.py`と Go tests で行う．下表の削除・保持・Runtime queue を含む全項目が実装済みという意味ではない．現在の gate は実装手順と STATUS に記録する．各schemaはunknown field・trailing JSON・重複key・不明版を拒否する．旧15 JSON fixturesは変更せず併走する．schema検査だけでなく，Go／Pythonで同じsemantic outcomeを要求する．
+Step 3 で Karte の v2 schema directory へ synthetic JSON と期待結果を置き，Runtime の `scripts/check_karte_contract.py`を v1/v2 合計 45 JSON の byte-for-byte 照合へ拡張した．Go／Python の canonical bytes・MAC・意味照合は `scripts/verify_runtime_record_fixtures.py`と Go tests で行う．下表の削除・保持・Runtime queue を含む全項目が実装済みという意味ではない．現在の gate は実装手順と STATUS に記録する．各schemaはunknown field・trailing JSON・重複key・不明版を拒否する．旧15 JSON fixturesは変更せず併走する．schema検査だけでなく，Go／Pythonで同じsemantic outcomeを要求する．
 
 | fixture名の予定 | 入力／期待結果 |
 |---|---|
@@ -226,3 +226,27 @@ event payloadのhashは，各objectのASCII schema keyを昇順に並べ，配�
 v2 proposal envelopeには`schema_version`，`candidate_id`，`operation`，`logical_record_key`，`scope_id`，`actor`，`policy_id`／`policy_revision`／`consent_epoch`，`target={doc_id,revision,sha256}`，`events`または`derivation`，`created_at`，`auth={key_id,mac}`を持たせる．createのtargetはnull，append／派生更新は現行targetを必須とする．1proposalは1eventまたは1派生revisionとし，並べ替えと一部成功を避ける．`auth.mac`を除くenvelopeを上の規則でencodeしたbytesがproposal hashとHMAC-SHA-256の入力になる．receiptのproposal hashはこの値を参照する．event hash・proposal hash・canonical hashは別物である．
 
 このeventを許可内で2回送るとcanonical event数は1のまま，同じ適用結果を返す．textだけ「夏」に変えて同じevent IDを再利用した場合は`id_reuse`となる．正式な訂正は新event ID，`event_type=correction`，`corrects.event_id=44444444-4444-4444-8444-444444444444`，`corrects.event_revision=1`を指定し，元eventを残して有効revisionを更新する．そのsource版を参照する旧summary／diaryはstaleとなる．
+
+## C1 Step 2の生成・表示・再生との対応
+
+2026-09-12．`runtime-delivery.scenario.json`を追加し，RuntimeのGo／Frontend／PythonとKarteの採用・読戻しで同じ8ケースを検査する．schema／protocolは**2.0**のまま，既存のunknown field拒否を維持する．Step 3で追加した29 JSONにこのscenario 1件を加え，v1の15 JSONと合わせて45 JSONをbyte照合する．この追記はRuntime recorderや実scopeを有効化しない．
+
+| Runtimeで観測する事実 | v2 `assistant_result`への対応 |
+|---|---|
+| `generation.complete=true` | `assistant.generation=completed`．その後の音声中断でcanceledへ書き換えない |
+| 生成未完了で取消／失敗 | `canceled`／`failed`．INCOMPLETEから継続する途中を成功terminalにしない |
+| assemblerの確定本文をUIが表示 | event `text`と`display=confirmed_full`／`confirmed_prefix`．pending previewやreasoningを入れない |
+| SpeechUnitの全WAVが自然終了し，TTS producerも正常終了 | 当該unitの`state=completed` |
+| 現在再生中のWAVを端末でmute／stop | 当該unitの`state=interrupted`．単語位置を確定しない |
+| 開始だけを確認した進行中のunit | `state=started`．自然終了と同義にしない |
+| 未開始，producer close未確認，または終了確認を失ったunit | `state=unknown`．対応する全体のplayback状態と併せて解釈する |
+
+SpeechUnitはassembler確定時にIDを発行し，TTS待機中のunitも保持する．1つのunitが複数WAVへ分割されるため，最初のWAVの自然終了でunit全体をcompletedにしない．Runtimeの`audio_sequences`，`synthesis_complete`，`playback_started`，unitの原文はこの判定用の一時snapshotであり，v2 envelopeへ未知fieldとして転記しない．v2では既存の`unit_id`と`state`を使う．IDをWAV番号や単語数から推測しない．
+
+全体の`playback=interrupted`は，明示的な割込みで未完了の音声出力を止めた事実を表す．TTS待機中の取消も含み，音声が実際に一語以上届いたという意味ではない．生成完了・全unit自然終了が揃えば`completed`，音声unitを作る前の取消は`not_started`とgeneration canceled，停止receiptを失った失敗などは`unknown`とする．空の表示本文は`text=""`／`display=none`として表現でき，架空のACKを本文へ補わない．
+
+Runtimeの次の回答contextには，中断の事実と連続して自然終了を確認したSpeechUnitの接頭部分だけを渡す．途中で止めたunitの一部，単語位置，表示済みの全文を聞かせた前提にしない．表示本文を保存するeventの`text`は再生済み範囲を意味しない．Step 4以降のreader／要約でも，本文とこれらの状態を一緒に評価する必要がある．
+
+Runtimeの既存`InteractionSnapshot.session_id`は会話identity，`VoiceSessionSnapshot.id`とepochはcapture session，operation／turn／generation revisionはcallback照合に使う．v2 record用UUIDやevent sequenceとの対応はStep 4が永続保全前に確定する．prefix付きruntime operation IDを，UUIDを要求するv2 event IDとして直接送らない．
+
+Step 4には現在policyに従うKarte v2 readへの統一を残す．Runtimeの旧direct reader，generic RAGへの既存copy，cached chunkとread-backも失効・除外対象であり，新規scanの除外だけでは足りない．今回，実会話の自動保存・新しいgrant・派生Jobは有効化しない．

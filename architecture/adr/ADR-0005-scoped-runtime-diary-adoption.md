@@ -37,3 +37,7 @@ Step 3のgateはv2契約の共有fixture，許可・取消・偽actor，ID再利
 scope 設定と鍵は data root・Git の外の human 管理領域に置く．privacy の正本は既存 v1 policy のままとし，v2 grant と積集合で判定する．設定 command も canonical と同じ lock を使う．新 record を v1 AI context，site build，自動 Git commit へ流さない．現在 policy による UI read と，人の編集による自動更新停止を追加した．
 
 [実装・設定・検証手順](../RUNTIME_RECORDS_V2_SETUP.md)を追加した．公開 capabilities は create／append／derivation 更新／search／read のみであり，未実装の削除・期限 purge を広告しない．音声記録の開始は，C1 Step 2 の中断・再生状態の契約と Runtime Step 4 の reader／queue／設定が揃った後に限る．
+
+## C1 Step 2の状態対応
+
+2026-09-12．生成完了後の本文中断，複数WAVのSpeechUnit，未開始・自然終了未確認を既存v2 enumで扱う共通scenarioを追加した．意味と次contextの制約は[保存契約](../KARTE_RUNTIME_DIARY_V2.md#c1-step-2の生成表示再生との対応)を正本とする．schema 2.0と実scopeの既定OFFは維持する．
