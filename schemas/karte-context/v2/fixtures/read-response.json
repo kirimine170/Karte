@@ -1,0 +1,49 @@
+{
+  "protocol_version": "2.0",
+  "request_id": "e46a9272-45e6-512a-925b-cc2d9dbb9157",
+  "status": "ok",
+  "results": [
+    {
+      "target": {
+        "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+        "revision": 1,
+        "sha256": "33d8a0d76e4b9b1b27596e5fa95c1c7892cf3b74b5433b8178f8daad281ef85c"
+      },
+      "record": {
+        "record_type": "conversation",
+        "title": "合成会話",
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "segment_no": 1,
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12"
+      },
+      "scope_id": "22222222-2222-4222-8222-222222222222",
+      "state": "active",
+      "source_refs": [],
+      "markdown": "---\nauthorship: ephy\ndoc_id: 5996543a-0f50-51b9-8af7-58ec757d7a6f\nkind: note\nproject: synthetic-diary\nprovenance_types:\n    - canonical\nruntime_record:\n    adoption:\n        actor_id: runtime-fixture\n        decision: scope_allowed\n        mode: policy\n        policy_id: 66666666-6666-4666-8666-666666666666\n        policy_revision: 1\n    human_edited: false\n    logical_record_key: conversation:11111111-1111-4111-8111-111111111111:1\n    producer_instance_id: 33333333-3333-4333-8333-333333333333\n    record:\n        conversation_id: 11111111-1111-4111-8111-111111111111\n        local_date: \"2026-09-12\"\n        record_type: conversation\n        segment_no: 1\n        timezone: Asia/Tokyo\n        title: 合成会話\n    revision: 1\n    schema_version: \"2.0\"\n    scope_id: 22222222-2222-4222-8222-222222222222\nsensitivity: internal\ntags:\n    - ephy:conversation\ntitle: 合成会話\n---\n\n## user_final\n\u003c!-- karte-v2:item {\"asr\":{\"provider\":\"synthetic\",\"model_revision\":\"fixture-1\",\"final_revision\":3},\"consent_epoch\":1,\"conversation_id\":\"11111111-1111-4111-8111-111111111111\",\"event_id\":\"44444444-4444-4444-8444-444444444444\",\"event_revision\":1,\"event_seq\":1,\"event_type\":\"user_final\",\"input_kind\":\"asr_final\",\"local_date\":\"2026-09-12\",\"occurred_at\":\"2026-09-12T00:00:00Z\",\"producer_instance_id\":\"33333333-3333-4333-8333-333333333333\",\"scope_id\":\"22222222-2222-4222-8222-222222222222\",\"timezone\":\"Asia/Tokyo\",\"turn_id\":\"55555555-5555-4555-8555-555555555555\"} --\u003e\n\u003e 次回は冬の観測を相談したい．\n\u003c!-- karte-v2:end --\u003e\n\n",
+      "events": [
+        {
+          "conversation_id": "11111111-1111-4111-8111-111111111111",
+          "scope_id": "22222222-2222-4222-8222-222222222222",
+          "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+          "event_id": "44444444-4444-4444-8444-444444444444",
+          "event_seq": 1,
+          "event_revision": 1,
+          "turn_id": "55555555-5555-4555-8555-555555555555",
+          "event_type": "user_final",
+          "input_kind": "asr_final",
+          "text": "次回は冬の観測を相談したい．",
+          "occurred_at": "2026-09-12T00:00:00Z",
+          "timezone": "Asia/Tokyo",
+          "local_date": "2026-09-12",
+          "asr": {
+            "provider": "synthetic",
+            "model_revision": "fixture-1",
+            "final_revision": 3
+          },
+          "consent_epoch": 1
+        }
+      ]
+    }
+  ]
+}

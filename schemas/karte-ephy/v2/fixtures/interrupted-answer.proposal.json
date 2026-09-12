@@ -1,0 +1,66 @@
+{
+  "schema_version": "2.0",
+  "candidate_id": "66aa0dd1-4366-5c6b-a8de-4d74a9c9f980",
+  "operation": "append_events",
+  "logical_record_key": "conversation:11111111-1111-4111-8111-111111111111:1",
+  "scope_id": "22222222-2222-4222-8222-222222222222",
+  "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+  "actor": {
+    "type": "ephy",
+    "id": "runtime-fixture"
+  },
+  "policy_id": "66666666-6666-4666-8666-666666666666",
+  "policy_revision": 1,
+  "consent_epoch": 1,
+  "scope_generation": 1,
+  "record": {
+    "record_type": "conversation",
+    "title": "合成会話",
+    "conversation_id": "11111111-1111-4111-8111-111111111111",
+    "segment_no": 1,
+    "timezone": "Asia/Tokyo",
+    "local_date": "2026-09-12"
+  },
+  "target": {
+    "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+    "revision": 1,
+    "sha256": "33d8a0d76e4b9b1b27596e5fa95c1c7892cf3b74b5433b8178f8daad281ef85c"
+  },
+  "events": [
+    {
+      "conversation_id": "11111111-1111-4111-8111-111111111111",
+      "scope_id": "22222222-2222-4222-8222-222222222222",
+      "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+      "event_id": "088d3ac0-04e1-5380-b834-0b92ed598866",
+      "event_seq": 2,
+      "event_revision": 1,
+      "turn_id": "55555555-5555-4555-8555-555555555555",
+      "event_type": "assistant_result",
+      "text": "確定した回答の前半．後半の生成は中断した．",
+      "occurred_at": "2026-09-12T00:00:00Z",
+      "timezone": "Asia/Tokyo",
+      "local_date": "2026-09-12",
+      "assistant": {
+        "generation": "canceled",
+        "display": "confirmed_prefix",
+        "playback": "interrupted",
+        "speech_units": [
+          {
+            "unit_id": "unit-1",
+            "state": "completed"
+          },
+          {
+            "unit_id": "unit-2",
+            "state": "started"
+          }
+        ]
+      },
+      "consent_epoch": 1
+    }
+  ],
+  "created_at": "2026-09-12T00:00:00Z",
+  "auth": {
+    "key_id": "fixture-key",
+    "mac": "a1c9327376069ddca8dab39ee03991c921a4d4b10cba183b1a6091a88c6d7c5b"
+  }
+}

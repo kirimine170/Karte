@@ -20,9 +20,9 @@ const (
 // ConflictInfo contains information about a file conflict
 type ConflictInfo struct {
 	Path          string           `json:"path"`
-	LocalHash     string           `json:"local_hash"`  // Current working directory hash
-	RemoteHash    string           `json:"remote_hash"` // Remote/HEAD hash
-	BaseHash      string           `json:"base_hash"`   // Common ancestor hash
+	LocalHash     string           `json:"local_hash"`  // Local candidate content hash
+	RemoteHash    string           `json:"remote_hash"` // Competing content hash
+	BaseHash      string           `json:"base_hash"`   // Merge-base content hash
 	LocalContent  string           `json:"local_content"`
 	RemoteContent string           `json:"remote_content"`
 	BaseContent   string           `json:"base_content"`
@@ -36,8 +36,6 @@ func DetectConflict(vcs *VCS, repoPath, relativePath string) (*ConflictInfo, err
 		return nil, fmt.Errorf("repository not initialized")
 	}
 
-	repo := vcs.Repository()
-
 	// Get current file content from working directory
 	absPath := filepath.Join(repoPath, relativePath)
 	localContent, err := os.ReadFile(absPath)
@@ -45,35 +43,12 @@ func DetectConflict(vcs *VCS, repoPath, relativePath string) (*ConflictInfo, err
 		return nil, fmt.Errorf("failed to read local file: %v", err)
 	}
 	localHash := CalculateHash(string(localContent))
-
-	// Get HEAD commit
-	ref, err := repo.Head()
+	remoteContent, found, err := headFileContent(vcs, relativePath)
 	if err != nil {
-		// No HEAD means it's a new repository, no conflict possible
+		return nil, err
+	}
+	if !found {
 		return nil, nil
-	}
-
-	headCommit, err := repo.CommitObject(ref.Hash())
-	if err != nil {
-		return nil, fmt.Errorf("failed to get HEAD commit: %v", err)
-	}
-
-	// Get file from HEAD
-	tree, err := headCommit.Tree()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get tree: %v", err)
-	}
-
-	// Try to get file from HEAD
-	file, err := tree.File(relativePath)
-	if err != nil {
-		// File doesn't exist in HEAD, this is a new file - no conflict
-		return nil, nil
-	}
-
-	remoteContent, err := file.Contents()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read remote file: %v", err)
 	}
 	remoteHash := CalculateHash(remoteContent)
 
@@ -82,15 +57,13 @@ func DetectConflict(vcs *VCS, repoPath, relativePath string) (*ConflictInfo, err
 		return nil, nil
 	}
 
-	// Try to find common ancestor for 3-way merge
-	// For now, use HEAD as base (simplified - full 3-way merge would need merge base calculation)
+	// Preserve the original DetectConflict semantics for callers that only have
+	// the working-tree version available.
 	baseContent := remoteContent
 	baseHash := remoteHash
-
-	// Assess conflict severity
 	severity := assessConflictSeverity(baseContent, string(localContent), remoteContent)
 
-	conflict := &ConflictInfo{
+	return &ConflictInfo{
 		Path:          relativePath,
 		LocalHash:     localHash,
 		RemoteHash:    remoteHash,
@@ -99,9 +72,92 @@ func DetectConflict(vcs *VCS, repoPath, relativePath string) (*ConflictInfo, err
 		RemoteContent: remoteContent,
 		BaseContent:   baseContent,
 		Severity:      severity,
+	}, nil
+}
+
+// DetectConflictWithContent checks proposed content against both the current
+// working-tree file and the version recorded in HEAD. It does not modify the
+// working-tree file.
+func DetectConflictWithContent(vcs *VCS, repoPath, relativePath, proposedContent string) (*ConflictInfo, error) {
+	if vcs == nil || vcs.Repository() == nil {
+		return nil, fmt.Errorf("repository not initialized")
 	}
 
-	return conflict, nil
+	absPath := filepath.Join(repoPath, relativePath)
+	currentContent, err := os.ReadFile(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read current file: %v", err)
+	}
+
+	baseContent, found, err := headFileContent(vcs, relativePath)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+
+	localHash := CalculateHash(proposedContent)
+	remoteHash := CalculateHash(string(currentContent))
+	baseHash := CalculateHash(baseContent)
+
+	// The disk still matches HEAD, so there is no external edit to merge.
+	if remoteHash == baseHash {
+		return nil, nil
+	}
+	// The editor already contains the disk version, so saving is also safe.
+	if localHash == remoteHash {
+		return nil, nil
+	}
+
+	return &ConflictInfo{
+		Path:          relativePath,
+		LocalHash:     localHash,
+		RemoteHash:    remoteHash,
+		BaseHash:      baseHash,
+		LocalContent:  proposedContent,
+		RemoteContent: string(currentContent),
+		BaseContent:   baseContent,
+		Severity:      assessConflictSeverity(baseContent, proposedContent, string(currentContent)),
+	}, nil
+}
+
+func headFileContent(vcs *VCS, relativePath string) (string, bool, error) {
+	repo := vcs.Repository()
+
+	// Get HEAD commit
+	ref, err := repo.Head()
+	if err != nil {
+		// No HEAD means it's a new repository, no conflict possible
+		return "", false, nil
+	}
+
+	headCommit, err := repo.CommitObject(ref.Hash())
+	if err != nil {
+		return "", false, fmt.Errorf("failed to get HEAD commit: %v", err)
+	}
+
+	// Get file from HEAD
+	tree, err := headCommit.Tree()
+	if err != nil {
+		return "", false, fmt.Errorf("failed to get tree: %v", err)
+	}
+
+	// Try to get file from HEAD
+	file, err := tree.File(relativePath)
+	if err != nil {
+		// File doesn't exist in HEAD, this is a new file - no conflict
+		return "", false, nil
+	}
+
+	content, err := file.Contents()
+	if err != nil {
+		return "", false, fmt.Errorf("failed to read HEAD file: %v", err)
+	}
+	return content, true, nil
 }
 
 // assessConflictSeverity determines how severe a conflict is

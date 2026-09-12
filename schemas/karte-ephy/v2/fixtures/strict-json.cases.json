@@ -1,0 +1,64 @@
+[
+  {
+    "name": "unicode-and-escaping",
+    "raw": "{\"z\":\"雪<>&\\u2028\\u2029\\\\u2028\",\"a\":1}",
+    "valid": true,
+    "canonical": "{\"a\":1,\"z\":\"雪<>&  \\\\u2028\"}"
+  },
+  {
+    "name": "surrogate-pair",
+    "raw": "{\"text\":\"\\ud83d\\ude03\"}",
+    "valid": true,
+    "canonical": "{\"text\":\"😃\"}"
+  },
+  {
+    "name": "duplicate-key",
+    "raw": "{\"x\":1,\"x\":2}",
+    "valid": false
+  },
+  {
+    "name": "escaped-duplicate-key",
+    "raw": "{\"x\":1,\"\\u0078\":2}",
+    "valid": false
+  },
+  {
+    "name": "trailing-json",
+    "raw": "{} {}",
+    "valid": false
+  },
+  {
+    "name": "float",
+    "raw": "{\"n\":1.5}",
+    "valid": false
+  },
+  {
+    "name": "exponent",
+    "raw": "{\"n\":1e3}",
+    "valid": false
+  },
+  {
+    "name": "unsafe-integer",
+    "raw": "{\"n\":9007199254740992}",
+    "valid": false
+  },
+  {
+    "name": "negative-zero",
+    "raw": "{\"n\":-0}",
+    "valid": false
+  },
+  {
+    "name": "lone-high-surrogate",
+    "raw": "{\"text\":\"\\ud800\"}",
+    "valid": false
+  },
+  {
+    "name": "lone-low-surrogate",
+    "raw": "{\"text\":\"\\udc00\"}",
+    "valid": false
+  },
+  {
+    "name": "surrogate-followed-by-ascii",
+    "raw": "{\"text\":\"\\ud800\\u0041\"}",
+    "valid": false
+  }
+]

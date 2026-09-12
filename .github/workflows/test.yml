@@ -5,6 +5,7 @@ on:
   push:
     branches: [main]
     paths:
+      - '.gitattributes'
       - '.github/workflows/test.yml'
       - '.github/workflows/ci.yml'
       - '.github/workflows/asr-audio-ci.yml'
@@ -19,9 +20,13 @@ on:
       - 'testdata/renderer-contract/**'
       - 'go.mod'
       - 'go.sum'
+      - 'schemas/karte-ephy/v2/**'
+      - 'schemas/karte-context/v2/**'
+      - 'scripts/*runtime_record*'
   pull_request:
     branches: [main]
     paths:
+      - '.gitattributes'
       - '.github/workflows/test.yml'
       - '.github/workflows/ci.yml'
       - '.github/workflows/asr-audio-ci.yml'
@@ -36,6 +41,9 @@ on:
       - 'testdata/renderer-contract/**'
       - 'go.mod'
       - 'go.sum'
+      - 'schemas/karte-ephy/v2/**'
+      - 'schemas/karte-context/v2/**'
+      - 'scripts/*runtime_record*'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -62,6 +70,17 @@ jobs:
 
       - name: Download Go dependencies
         run: go mod download
+
+      - name: Set up Python for contract fixtures
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Validate Runtime record v2 schemas and fixtures
+        run: |
+          python -m pip install 'jsonschema[format]>=4.23,<5.0'
+          python scripts/verify_runtime_record_fixtures.py
+          python scripts/smoke_runtime_records_v2.py
 
       - name: Test Karte Renderer dependency
         run: go test github.com/kirimine170/KarteRenderer/...

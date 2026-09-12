@@ -1,0 +1,21 @@
+{
+  "schema_version": "2.0",
+  "candidate_id": "eb37ccdc-2e02-55d1-8645-f887f9348d50",
+  "proposal_hash": "7b3368790c2d0d8f2a28b877291231773014239a5ddc910f895614dead7c7e6f",
+  "status": "accepted",
+  "applied": {
+    "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+    "revision": 1,
+    "sha256": "33d8a0d76e4b9b1b27596e5fa95c1c7892cf3b74b5433b8178f8daad281ef85c"
+  },
+  "applied_event_ids": [
+    "44444444-4444-4444-8444-444444444444"
+  ],
+  "adoption": {
+    "mode": "policy",
+    "actor_id": "runtime-fixture",
+    "policy_id": "66666666-6666-4666-8666-666666666666",
+    "policy_revision": 1,
+    "decision": "scope_allowed"
+  }
+}

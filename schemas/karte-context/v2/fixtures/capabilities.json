@@ -1,0 +1,21 @@
+{
+  "protocol_version": "2.0",
+  "record_schema": "2.0",
+  "operations": [
+    "create_record",
+    "append_events",
+    "revise_derivation",
+    "search",
+    "read"
+  ],
+  "enabled": true,
+  "policies": [
+    {
+      "scope_id": "22222222-2222-4222-8222-222222222222",
+      "policy_id": "66666666-6666-4666-8666-666666666666",
+      "policy_revision": 1,
+      "consent_epoch": 1,
+      "scope_generation": 1
+    }
+  ]
+}

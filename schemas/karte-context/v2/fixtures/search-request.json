@@ -1,0 +1,33 @@
+{
+  "protocol_version": "2.0",
+  "request_id": "48b8703b-02b7-53fa-b0d1-07c3bb53c9ae",
+  "operation": "search",
+  "scope_id": "22222222-2222-4222-8222-222222222222",
+  "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+  "actor": {
+    "type": "ephy",
+    "id": "runtime-fixture"
+  },
+  "policy_id": "66666666-6666-4666-8666-666666666666",
+  "policy_revision": 1,
+  "consent_epoch": 1,
+  "scope_generation": 1,
+  "created_at": "2026-09-12T00:00:00Z",
+  "auth": {
+    "key_id": "fixture-key",
+    "mac": "16179ec2b6d923da16cd4ea3803ba46c589d57195196d4d7bf2e8e5a01ae57cd"
+  },
+  "query": {
+    "text": "",
+    "record_types": [
+      "conversation",
+      "summary",
+      "ephy_diary"
+    ],
+    "timezone": "Asia/Tokyo",
+    "date_from": "2026-09-12",
+    "date_to": "2026-09-12",
+    "limit": 10
+  },
+  "target": null
+}

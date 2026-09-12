@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kirimine170/Karte/main/schemas/karte-context/v2/capabilities.schema.json",
+  "title": "Karte Runtime records v2 capabilities",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "protocol_version": {
+      "const": "2.0"
+    },
+    "record_schema": {
+      "const": "2.0"
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "create_record",
+          "append_events",
+          "revise_derivation",
+          "search",
+          "read"
+        ]
+      },
+      "minItems": 5,
+      "maxItems": 5,
+      "uniqueItems": true
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "policies": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/policy-version"
+      },
+      "minItems": 0,
+      "maxItems": 256
+    }
+  },
+  "required": [
+    "protocol_version",
+    "record_schema",
+    "operations",
+    "enabled",
+    "policies"
+  ],
+  "$defs": {
+    "policy-version": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scope_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "policy_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "policy_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "scope_generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "scope_id",
+        "policy_id",
+        "policy_revision",
+        "consent_epoch",
+        "scope_generation"
+      ]
+    }
+  }
+}

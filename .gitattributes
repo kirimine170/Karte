@@ -1,0 +1,2 @@
+# Shared contract bytes participate in hashes and signatures on every OS．
+schemas/**/*.json text eol=lf

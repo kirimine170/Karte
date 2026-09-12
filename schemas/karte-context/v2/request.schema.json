@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kirimine170/Karte/main/schemas/karte-context/v2/request.schema.json",
+  "title": "Karte Runtime records v2 request",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "protocol_version": {
+      "const": "2.0"
+    },
+    "request_id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "operation": {
+      "enum": [
+        "search",
+        "read"
+      ]
+    },
+    "scope_id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "producer_instance_id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "actor": {
+      "$ref": "#/$defs/actor"
+    },
+    "policy_id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "policy_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "consent_epoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "scope_generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "auth": {
+      "$ref": "#/$defs/auth"
+    },
+    "query": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/query"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "target": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/target"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "protocol_version",
+    "request_id",
+    "operation",
+    "scope_id",
+    "producer_instance_id",
+    "actor",
+    "policy_id",
+    "policy_revision",
+    "consent_epoch",
+    "scope_generation",
+    "created_at",
+    "auth",
+    "query",
+    "target"
+  ],
+  "oneOf": [
+    {
+      "properties": {
+        "operation": {
+          "const": "search"
+        },
+        "query": {
+          "$ref": "#/$defs/query"
+        },
+        "target": {
+          "type": "null"
+        }
+      }
+    },
+    {
+      "properties": {
+        "operation": {
+          "const": "read"
+        },
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "query": {
+          "type": "null"
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "ephy"
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ]
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "key_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "mac": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "key_id",
+        "mac"
+      ]
+    },
+    "query": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "record_types": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "conversation",
+              "summary",
+              "ephy_diary"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true
+        },
+        "timezone": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "An installed IANA timezone，validated by Karte．"
+        },
+        "date_from": {
+          "type": "string",
+          "format": "date"
+        },
+        "date_to": {
+          "type": "string",
+          "format": "date"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "text",
+        "record_types",
+        "limit"
+      ]
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "doc_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "doc_id",
+        "revision",
+        "sha256"
+      ]
+    }
+  }
+}

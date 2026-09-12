@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/fs"
+	"karte/internal/canonical"
 	"os"
 	"path/filepath"
 	"sort"
@@ -164,6 +165,10 @@ func (service *Service) scan() ([]indexedDocument, []Diagnostic, error) {
 	} else if err != nil {
 		return nil, nil, fmt.Errorf("inspect Karte content directory: %w", err)
 	}
+	var managed map[string]bool
+	if err := canonical.WithWriter(service.dataRoot, func(w *canonical.Writer) error { var err error; managed, err = canonical.ManagedPaths(w); return err }); err != nil {
+		return nil, nil, err
+	}
 	counts := map[string]int{}
 	documents := make([]indexedDocument, 0)
 	err := filepath.WalkDir(service.contentRoot, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -193,6 +198,11 @@ func (service *Service) scan() ([]indexedDocument, []Diagnostic, error) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			counts["unreadable_document"]++
+			return nil
+		}
+		protectedRelative, err := filepath.Rel(service.dataRoot, path)
+		if err != nil || canonical.IsRecordPath(protectedRelative, data, managed) {
+			counts["v2_record_excluded"]++
 			return nil
 		}
 		frontmatter, body := fm.ParseFrontMatter(string(data))

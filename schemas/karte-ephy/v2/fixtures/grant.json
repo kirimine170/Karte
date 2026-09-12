@@ -1,0 +1,57 @@
+{
+  "schema_version": "2.0",
+  "policy_id": "66666666-6666-4666-8666-666666666666",
+  "policy_revision": 1,
+  "enabled": true,
+  "user_id": "synthetic-human",
+  "actor_id": "runtime-fixture",
+  "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+  "scope_id": "22222222-2222-4222-8222-222222222222",
+  "storage_area_id": "synthetic-only",
+  "project": "synthetic-diary",
+  "records": {
+    "conversation": {
+      "kind": "note",
+      "sensitivity": "internal",
+      "tags": [
+        "ephy:conversation"
+      ],
+      "provenance_types": [
+        "canonical"
+      ]
+    },
+    "ephy_diary": {
+      "kind": "journal",
+      "sensitivity": "internal",
+      "tags": [
+        "ephy:ephy_diary"
+      ],
+      "provenance_types": [
+        "canonical"
+      ]
+    },
+    "summary": {
+      "kind": "note",
+      "sensitivity": "internal",
+      "tags": [
+        "ephy:summary"
+      ],
+      "provenance_types": [
+        "canonical"
+      ]
+    }
+  },
+  "operations": [
+    "create_record",
+    "append_events",
+    "revise_derivation"
+  ],
+  "denied_tags": [],
+  "valid_from": "2026-09-01T00:00:00Z",
+  "consent_epoch": 1,
+  "scope_generation": 1,
+  "storage": true,
+  "training": false,
+  "external_transfer": false,
+  "key_id": "fixture-key"
+}
