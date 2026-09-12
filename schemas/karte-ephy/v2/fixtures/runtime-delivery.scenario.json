@@ -1,0 +1,456 @@
+{
+  "fixture_version": "c1-step2-delivery-1",
+  "description": "Synthetic runtime outcome to Karte v2 assistant mapping．No recording or runtime policy enablement．",
+  "cases": [
+    {
+      "name": "generated_full_interrupted_body",
+      "snapshot": {
+        "operation_id": "fixture_operation",
+        "session_id": "fixture_session",
+        "turn_id": "fixture_turn",
+        "generation_revision": 1,
+        "state": "CANCELED",
+        "response_plan": {
+          "text": "春には花が咲きます．冬は雪が降ります．"
+        },
+        "generation": {
+          "complete": true,
+          "finish_reason": "stop"
+        },
+        "speech_units": [
+          {
+            "unit_id": "unit_1",
+            "text": "春には花が咲きます．",
+            "generation_revision": 1,
+            "audio_sequences": [
+              1,
+              2
+            ],
+            "synthesis_complete": true,
+            "state": "completed",
+            "playback_started": true
+          },
+          {
+            "unit_id": "unit_2",
+            "text": "冬は雪が降ります．",
+            "generation_revision": 1,
+            "audio_sequences": [
+              3,
+              4
+            ],
+            "synthesis_complete": true,
+            "state": "interrupted",
+            "playback_started": true
+          }
+        ],
+        "interruption": {
+          "local_stop_ms": 4
+        }
+      },
+      "chunks": [
+        {
+          "sequence": 1,
+          "unit_id": "unit_1",
+          "state": "completed"
+        },
+        {
+          "sequence": 2,
+          "unit_id": "unit_1",
+          "state": "completed"
+        },
+        {
+          "sequence": 3,
+          "unit_id": "unit_2",
+          "state": "interrupted"
+        },
+        {
+          "sequence": 4,
+          "unit_id": "unit_2",
+          "state": "queued"
+        }
+      ],
+      "expected_assistant": {
+        "generation": "completed",
+        "display": "confirmed_full",
+        "playback": "interrupted",
+        "speech_units": [
+          {
+            "unit_id": "unit_1",
+            "state": "completed"
+          },
+          {
+            "unit_id": "unit_2",
+            "state": "interrupted"
+          }
+        ]
+      },
+      "expected_heard_prefix": "春には花が咲きます．"
+    },
+    {
+      "name": "generated_prefix_multichunk_interruption",
+      "snapshot": {
+        "operation_id": "fixture_operation",
+        "session_id": "fixture_session",
+        "turn_id": "fixture_turn",
+        "generation_revision": 1,
+        "state": "CANCELED",
+        "response_plan": {
+          "text": "春の説明前半．春の説明後半．"
+        },
+        "generation": {
+          "complete": false,
+          "finish_reason": "canceled"
+        },
+        "speech_units": [
+          {
+            "unit_id": "unit_1",
+            "text": "春の説明前半．春の説明後半．",
+            "generation_revision": 1,
+            "audio_sequences": [
+              1,
+              2
+            ],
+            "synthesis_complete": true,
+            "state": "interrupted",
+            "playback_started": true
+          }
+        ],
+        "interruption": {
+          "local_stop_ms": 4
+        }
+      },
+      "chunks": [
+        {
+          "sequence": 1,
+          "unit_id": "unit_1",
+          "state": "completed"
+        },
+        {
+          "sequence": 2,
+          "unit_id": "unit_1",
+          "state": "interrupted"
+        }
+      ],
+      "expected_assistant": {
+        "generation": "canceled",
+        "display": "confirmed_prefix",
+        "playback": "interrupted",
+        "speech_units": [
+          {
+            "unit_id": "unit_1",
+            "state": "interrupted"
+          }
+        ]
+      },
+      "expected_heard_prefix": ""
+    },
+    {
+      "name": "natural_chunk_without_producer_close",
+      "snapshot": {
+        "operation_id": "fixture_operation",
+        "session_id": "fixture_session",
+        "turn_id": "fixture_turn",
+        "generation_revision": 1,
+        "state": "CANCELED",
+        "response_plan": {
+          "text": "生成した一文．"
+        },
+        "generation": {
+          "complete": true,
+          "finish_reason": "stop"
+        },
+        "speech_units": [
+          {
+            "unit_id": "unit_1",
+            "text": "生成した一文．",
+            "generation_revision": 1,
+            "audio_sequences": [
+              1
+            ],
+            "synthesis_complete": false,
+            "state": "unknown",
+            "playback_started": true
+          }
+        ],
+        "interruption": {
+          "local_stop_ms": 4
+        }
+      },
+      "chunks": [
+        {
+          "sequence": 1,
+          "unit_id": "unit_1",
+          "state": "completed"
+        }
+      ],
+      "expected_assistant": {
+        "generation": "completed",
+        "display": "confirmed_full",
+        "playback": "interrupted",
+        "speech_units": [
+          {
+            "unit_id": "unit_1",
+            "state": "unknown"
+          }
+        ]
+      },
+      "expected_heard_prefix": ""
+    },
+    {
+      "name": "llm_wait_no_audio",
+      "snapshot": {
+        "operation_id": "fixture_operation",
+        "session_id": "fixture_session",
+        "turn_id": "fixture_turn",
+        "generation_revision": 1,
+        "state": "CANCELED",
+        "response_plan": {
+          "text": ""
+        },
+        "generation": {
+          "complete": false,
+          "finish_reason": "canceled"
+        },
+        "speech_units": [],
+        "interruption": {
+          "local_stop_ms": 4
+        }
+      },
+      "chunks": [],
+      "expected_assistant": {
+        "generation": "canceled",
+        "display": "none",
+        "playback": "not_started",
+        "speech_units": []
+      },
+      "expected_heard_prefix": ""
+    },
+    {
+      "name": "tts_wait_no_playback",
+      "snapshot": {
+        "operation_id": "fixture_operation",
+        "session_id": "fixture_session",
+        "turn_id": "fixture_turn",
+        "generation_revision": 1,
+        "state": "CANCELED",
+        "response_plan": {
+          "text": "未再生の文章．"
+        },
+        "generation": {
+          "complete": true,
+          "finish_reason": "stop"
+        },
+        "speech_units": [
+          {
+            "unit_id": "unit_1",
+            "text": "未再生の文章．",
+            "generation_revision": 1,
+            "audio_sequences": [
+              1
+            ],
+            "synthesis_complete": false,
+            "state": "unknown",
+            "playback_started": false
+          }
+        ],
+        "interruption": {
+          "local_stop_ms": 4
+        }
+      },
+      "chunks": [
+        {
+          "sequence": 1,
+          "unit_id": "unit_1",
+          "state": "queued"
+        }
+      ],
+      "expected_assistant": {
+        "generation": "completed",
+        "display": "confirmed_full",
+        "playback": "interrupted",
+        "speech_units": [
+          {
+            "unit_id": "unit_1",
+            "state": "unknown"
+          }
+        ]
+      },
+      "expected_heard_prefix": ""
+    },
+    {
+      "name": "all_units_completed",
+      "snapshot": {
+        "operation_id": "fixture_operation",
+        "session_id": "fixture_session",
+        "turn_id": "fixture_turn",
+        "generation_revision": 1,
+        "state": "COMPLETED",
+        "response_plan": {
+          "text": "短い回答．"
+        },
+        "generation": {
+          "complete": true,
+          "finish_reason": "stop"
+        },
+        "speech_units": [
+          {
+            "unit_id": "unit_1",
+            "text": "短い回答．",
+            "generation_revision": 1,
+            "audio_sequences": [
+              1,
+              2
+            ],
+            "synthesis_complete": true,
+            "state": "completed",
+            "playback_started": true
+          }
+        ]
+      },
+      "chunks": [
+        {
+          "sequence": 1,
+          "unit_id": "unit_1",
+          "state": "completed"
+        },
+        {
+          "sequence": 2,
+          "unit_id": "unit_1",
+          "state": "completed"
+        }
+      ],
+      "expected_assistant": {
+        "generation": "completed",
+        "display": "confirmed_full",
+        "playback": "completed",
+        "speech_units": [
+          {
+            "unit_id": "unit_1",
+            "state": "completed"
+          }
+        ]
+      },
+      "expected_heard_prefix": "短い回答．"
+    },
+    {
+      "name": "generated_full_next_unit_not_started",
+      "snapshot": {
+        "operation_id": "fixture_operation",
+        "session_id": "fixture_session",
+        "turn_id": "fixture_turn",
+        "generation_revision": 1,
+        "state": "CANCELED",
+        "response_plan": {
+          "text": "春には花が咲きます．冬は雪が降ります．"
+        },
+        "generation": {
+          "complete": true,
+          "finish_reason": "stop"
+        },
+        "speech_units": [
+          {
+            "unit_id": "unit_1",
+            "text": "春には花が咲きます．",
+            "generation_revision": 1,
+            "audio_sequences": [
+              1,
+              2
+            ],
+            "synthesis_complete": true,
+            "state": "completed",
+            "playback_started": true
+          },
+          {
+            "unit_id": "unit_2",
+            "text": "冬は雪が降ります．",
+            "generation_revision": 1,
+            "audio_sequences": [],
+            "synthesis_complete": false,
+            "state": "unknown",
+            "playback_started": false
+          }
+        ],
+        "interruption": {
+          "local_stop_ms": 4
+        }
+      },
+      "chunks": [
+        {
+          "sequence": 1,
+          "unit_id": "unit_1",
+          "state": "completed"
+        },
+        {
+          "sequence": 2,
+          "unit_id": "unit_1",
+          "state": "completed"
+        }
+      ],
+      "expected_assistant": {
+        "generation": "completed",
+        "display": "confirmed_full",
+        "playback": "interrupted",
+        "speech_units": [
+          {
+            "unit_id": "unit_1",
+            "state": "completed"
+          },
+          {
+            "unit_id": "unit_2",
+            "state": "unknown"
+          }
+        ]
+      },
+      "expected_heard_prefix": "春には花が咲きます．"
+    },
+    {
+      "name": "failed_without_stop_receipt",
+      "snapshot": {
+        "operation_id": "fixture_operation",
+        "session_id": "fixture_session",
+        "turn_id": "fixture_turn",
+        "generation_revision": 1,
+        "state": "FAILED",
+        "response_plan": {
+          "text": "生成した一文．"
+        },
+        "generation": {
+          "complete": false,
+          "finish_reason": "transport_eof"
+        },
+        "speech_units": [
+          {
+            "unit_id": "unit_1",
+            "text": "生成した一文．",
+            "generation_revision": 1,
+            "audio_sequences": [
+              1
+            ],
+            "synthesis_complete": false,
+            "state": "unknown",
+            "playback_started": true
+          }
+        ]
+      },
+      "chunks": [
+        {
+          "sequence": 1,
+          "unit_id": "unit_1",
+          "state": "completed"
+        }
+      ],
+      "expected_assistant": {
+        "generation": "failed",
+        "display": "confirmed_prefix",
+        "playback": "unknown",
+        "speech_units": [
+          {
+            "unit_id": "unit_1",
+            "state": "unknown"
+          }
+        ]
+      },
+      "expected_heard_prefix": ""
+    }
+  ]
+}
