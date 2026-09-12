@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kirimine170/Karte/main/schemas/karte-ephy/v2/receipt.schema.json",
+  "title": "Karte Runtime records v2 receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "2.0"
+    },
+    "candidate_id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "proposal_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "status": {
+      "enum": [
+        "accepted",
+        "already_applied"
+      ]
+    },
+    "applied": {
+      "$ref": "#/$defs/target"
+    },
+    "applied_event_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        "not": {
+          "const": "00000000-0000-0000-0000-000000000000"
+        }
+      },
+      "minItems": 0,
+      "maxItems": 1
+    },
+    "adoption": {
+      "$ref": "#/$defs/adoption"
+    }
+  },
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "proposal_hash",
+    "status",
+    "applied",
+    "applied_event_ids",
+    "adoption"
+  ],
+  "$defs": {
+    "adoption": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "const": "policy"
+        },
+        "actor_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "policy_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "policy_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "decision": {
+          "const": "scope_allowed"
+        }
+      },
+      "required": [
+        "mode",
+        "actor_id",
+        "policy_id",
+        "policy_revision",
+        "decision"
+      ]
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "doc_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "doc_id",
+        "revision",
+        "sha256"
+      ]
+    }
+  }
+}

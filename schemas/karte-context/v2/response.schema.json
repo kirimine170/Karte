@@ -1,0 +1,753 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kirimine170/Karte/main/schemas/karte-context/v2/response.schema.json",
+  "title": "Karte Runtime records v2 response",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "protocol_version": {
+      "const": "2.0"
+    },
+    "request_id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "status": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/read-result"
+      },
+      "minItems": 0,
+      "maxItems": 100
+    }
+  },
+  "required": [
+    "protocol_version",
+    "request_id",
+    "status",
+    "results"
+  ],
+  "$defs": {
+    "asr": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "model_revision": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "final_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "provider",
+        "model_revision",
+        "final_revision"
+      ]
+    },
+    "assistant": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "generation": {
+          "enum": [
+            "completed",
+            "canceled",
+            "failed"
+          ]
+        },
+        "display": {
+          "enum": [
+            "confirmed_full",
+            "confirmed_prefix",
+            "none"
+          ]
+        },
+        "playback": {
+          "enum": [
+            "completed",
+            "interrupted",
+            "failed",
+            "unknown",
+            "not_started"
+          ]
+        },
+        "speech_units": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/speech-unit"
+          },
+          "minItems": 0,
+          "maxItems": 256
+        }
+      },
+      "required": [
+        "generation",
+        "display",
+        "playback",
+        "speech_units"
+      ]
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "class": {
+          "enum": [
+            "observed_utterance",
+            "user_report",
+            "ephy_interpretation"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 65536,
+          "description": "Maximum 65536 UTF-8 bytes；Karte also checks bytes after decoding，without normalization．",
+          "minLength": 1
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/source-ref"
+          },
+          "minItems": 1,
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "class",
+        "text",
+        "source_refs"
+      ]
+    },
+    "derivation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "summary",
+            "ephy_diary"
+          ]
+        },
+        "input_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/source-ref"
+          },
+          "minItems": 1,
+          "maxItems": 64
+        },
+        "model_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "model_revision": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "template_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "template_revision": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "job_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "claims": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/claim"
+          },
+          "minItems": 1,
+          "maxItems": 256
+        }
+      },
+      "required": [
+        "kind",
+        "input_refs",
+        "model_id",
+        "model_revision",
+        "template_id",
+        "template_revision",
+        "generated_at",
+        "job_id",
+        "claims"
+      ]
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "conversation_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "scope_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "producer_instance_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "event_seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "event_revision": {
+          "const": 1
+        },
+        "turn_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "event_type": {
+          "enum": [
+            "user_final",
+            "assistant_result",
+            "correction"
+          ]
+        },
+        "input_kind": {
+          "enum": [
+            "text",
+            "asr_final"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 65536,
+          "description": "Maximum 65536 UTF-8 bytes；Karte also checks bytes after decoding，without normalization．"
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "An installed IANA timezone，validated by Karte．"
+        },
+        "local_date": {
+          "type": "string",
+          "format": "date"
+        },
+        "asr": {
+          "$ref": "#/$defs/asr"
+        },
+        "assistant": {
+          "$ref": "#/$defs/assistant"
+        },
+        "consent_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "corrects": {
+          "$ref": "#/$defs/event-ref"
+        },
+        "correction_reason": {
+          "enum": [
+            "asr_error",
+            "user_content"
+          ]
+        }
+      },
+      "required": [
+        "conversation_id",
+        "scope_id",
+        "producer_instance_id",
+        "event_id",
+        "event_seq",
+        "event_revision",
+        "turn_id",
+        "event_type",
+        "text",
+        "occurred_at",
+        "timezone",
+        "local_date",
+        "consent_epoch"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "event_type": {
+                "const": "user_final"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "input_kind"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "assistant"
+                  ]
+                },
+                {
+                  "required": [
+                    "corrects"
+                  ]
+                },
+                {
+                  "required": [
+                    "correction_reason"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "event_type": {
+                "const": "user_final"
+              },
+              "input_kind": {
+                "const": "asr_final"
+              }
+            },
+            "required": [
+              "input_kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "asr"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "event_type": {
+                "const": "assistant_result"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "assistant"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "asr"
+                  ]
+                },
+                {
+                  "required": [
+                    "input_kind"
+                  ]
+                },
+                {
+                  "required": [
+                    "corrects"
+                  ]
+                },
+                {
+                  "required": [
+                    "correction_reason"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "event_type": {
+                "const": "correction"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "corrects",
+              "correction_reason"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "asr"
+                  ]
+                },
+                {
+                  "required": [
+                    "assistant"
+                  ]
+                },
+                {
+                  "required": [
+                    "input_kind"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "event-ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "event_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "event_id",
+        "event_revision"
+      ]
+    },
+    "read-result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "record": {
+          "$ref": "#/$defs/record-spec"
+        },
+        "scope_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "state": {
+          "enum": [
+            "active",
+            "stale"
+          ]
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/source-ref"
+          },
+          "minItems": 0,
+          "maxItems": 64
+        },
+        "markdown": {
+          "type": "string"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/event"
+          },
+          "minItems": 1,
+          "maxItems": 256
+        },
+        "derivation": {
+          "$ref": "#/$defs/derivation"
+        }
+      },
+      "required": [
+        "target",
+        "record",
+        "scope_id",
+        "state",
+        "source_refs"
+      ]
+    },
+    "record-spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "record_type": {
+          "enum": [
+            "conversation",
+            "summary",
+            "ephy_diary"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[^\\r\\n\\u0000]+$"
+        },
+        "conversation_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "segment_no": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "timezone": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "An installed IANA timezone，validated by Karte．"
+        },
+        "local_date": {
+          "type": "string",
+          "format": "date"
+        }
+      },
+      "required": [
+        "record_type",
+        "title",
+        "timezone",
+        "local_date"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "record_type": {
+                "const": "conversation"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "conversation_id",
+              "segment_no"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "record_type": {
+                "const": "summary"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "conversation_id"
+            ],
+            "not": {
+              "required": [
+                "segment_no"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "record_type": {
+                "const": "ephy_diary"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "conversation_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "segment_no"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "source-ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "doc_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "conversation_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "turn_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/event-ref"
+          },
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "doc_id",
+        "revision",
+        "sha256",
+        "conversation_id",
+        "turn_ids",
+        "events"
+      ]
+    },
+    "speech-unit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "unit_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "state": {
+          "enum": [
+            "started",
+            "completed",
+            "interrupted",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "unit_id",
+        "state"
+      ]
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "doc_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "doc_id",
+        "revision",
+        "sha256"
+      ]
+    }
+  }
+}

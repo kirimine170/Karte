@@ -2,6 +2,7 @@ package git
 
 import (
 	"fmt"
+	"karte/internal/canonical"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,29 +77,36 @@ func (v *VCS) ensureGitConfig() error {
 
 // ensureGitignore creates .gitignore if it doesn't exist
 func (v *VCS) ensureGitignore() error {
-	gitignorePath := filepath.Join(v.path, ".gitignore")
-	if _, err := os.Stat(gitignorePath); os.IsNotExist(err) {
-		ignoreContent := strings.Join([]string{
-			"# Karte generated files",
-			"public/",
-			"log/",
-			".mdsys/",
-			"*.log",
-			"# Build artifacts",
-			"build/",
-			"# OS files",
-			".DS_Store",
-			"Thumbs.db",
-			"# Backup files",
-			".backups/",
-		}, "\n") + "\n"
-
-		if err := os.WriteFile(gitignorePath, []byte(ignoreContent), 0644); err != nil {
-			return fmt.Errorf("failed to create .gitignore: %v", err)
+	return canonical.WithWriter(v.path, func(w *canonical.Writer) error {
+		data, err := w.Read(".gitignore")
+		if os.IsNotExist(err) {
+			data = []byte("# Karte generated files\npublic/\nlog/\n.mdsys/\n*.log\nbuild/\n.DS_Store\nThumbs.db\n.backups/\n")
+		} else if err != nil {
+			return err
 		}
-		v.logger("Created .gitignore file")
-	}
-	return nil
+		text := string(data)
+		rules := []string{"content/**/ephy-v2-*.md", ".mdsys/ephy/outbox/v2/", ".mdsys/ephy/records/v2/", ".mdsys/context/v2/", ".mdsys/write.lock"}
+		lines := map[string]bool{}
+		for _, line := range strings.Split(text, "\n") {
+			lines[line] = true
+		}
+		for _, rule := range rules {
+			if !lines[rule] {
+				if !strings.HasSuffix(text, "\n") {
+					text += "\n"
+				}
+				text += rule + "\n"
+			}
+		}
+		existing, err := w.CurrentHash(".gitignore")
+		if err != nil {
+			return err
+		}
+		if existing != nil && *existing == canonical.Hash([]byte(text)) {
+			return nil
+		}
+		return w.WriteCAS(".gitignore", existing, []byte(text), 0644)
+	})
 }
 
 // CommitFile commits a single file
@@ -112,6 +120,9 @@ func (v *VCS) CommitFile(relativePath, message string) error {
 		return fmt.Errorf("failed to get worktree: %v", err)
 	}
 
+	if err := v.CheckAutomaticCommit(relativePath); err != nil {
+		return err
+	}
 	// Add file to staging
 	if _, err := worktree.Add(relativePath); err != nil {
 		return fmt.Errorf("failed to stage file: %v", err)
@@ -292,4 +303,48 @@ func (v *VCS) GetFileByContentHash(relativePath, targetHash string) (string, err
 
 	// No match found
 	return "", fmt.Errorf("file version with hash %s not found in commit history", targetHash)
+}
+
+// CheckAutomaticCommit also protects the initial Add-all commit．
+func (v *VCS) CheckAutomaticCommit(relativePath string) error {
+	if v.repo == nil {
+		return fmt.Errorf("repository not initialized")
+	}
+	worktree, err := v.repo.Worktree()
+	if err != nil {
+		return err
+	}
+	return canonical.WithWriter(v.path, func(w *canonical.Writer) error {
+		paths, err := canonical.ManagedPaths(w)
+		if err != nil {
+			return err
+		}
+		protected := func(path string) bool {
+			slash := filepath.ToSlash(path)
+			if strings.HasPrefix(slash, ".mdsys/ephy/records/v2/") || strings.HasPrefix(slash, ".mdsys/ephy/outbox/v2/") || strings.HasPrefix(slash, ".mdsys/context/v2/") {
+				return true
+			}
+			if canonical.IsRecordPath(path, nil, paths) {
+				return true
+			}
+			if !strings.EqualFold(filepath.Ext(path), ".md") {
+				return false
+			}
+			data, _ := w.ReadLimit(path, 1<<20)
+			return canonical.IsRecordPath(path, data, paths)
+		}
+		if protected(relativePath) {
+			return fmt.Errorf("v2 storage-only record cannot be committed automatically")
+		}
+		status, err := worktree.Status()
+		if err != nil {
+			return err
+		}
+		for path, state := range status {
+			if state.Staging != git.Unmodified && state.Staging != git.Untracked && protected(path) {
+				return fmt.Errorf("staged v2 storage-only data blocks automatic commit")
+			}
+		}
+		return nil
+	})
 }

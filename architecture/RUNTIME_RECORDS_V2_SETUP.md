@@ -1,0 +1,98 @@
+# Runtime record v2：Step 3 の実装・設定・検証
+
+2026-09-12．[保存契約](KARTE_RUNTIME_DIARY_V2.md)と[ADR-0005](adr/ADR-0005-scoped-runtime-diary-adoption.md)に対応する．Step 3 は Karte の受信・採用・検索基盤であり，Runtime の音声記録はまだ有効にしない．実装版と実行した検証は Runtime の `docs/runtime-diary/STATUS.md`へ記録する．
+
+## 実装範囲
+
+- `internal/canonical`が UI 保存・v2 採用・policy 更新の共通 writer を持つ．プロセス間 lock，root 内の path 検査，base hash 照合，同一 directory の temp，file fsync，replace，directory fsync を使用する．通常ファイルの既存 permission を保存成功時にも保持する．
+- `internal/ephyrecordsv2`が schema 2.0 の `create_record`，`append_events`，`revise_derivation`を処理する．分類は登録済み grant から決める．1 proposal は 1 event または 1 derivation である．
+- `App.ProcessContextRequests`が既存 v1 の処理後に v2 を処理する．起動後の既存 loop でも復旧・処理を行う．capabilities は `.mdsys/context/v2/capabilities.json`へ出す．未設定は `enabled=false`である．
+- v2 の search／read は現在の grant と共有 privacy policy を検査する．過去 revision も同じ検査を受ける．source の current revision／hash が変わった派生物は `stale`となり，既定の search から除外される．明示した旧版の read は `state`を返す．
+- 通常 editor で本文を保存すると human revision と履歴を作り，自動追記・再生成を停止する．reserved metadata の変更，古い editor の保存，追跡外の外部編集は conflict として保全する．custom frontmatter は保持する．
+- v1 の JSON 15 個と human review は維持する．v1 context，site build，通常の自動 Git commit，初回の一括 Git commit から新 record を除外する．人の既存 staging を取り消して回避しない．
+
+公開能力は上記 5 操作だけである．`superseded`／`deleted`，tombstone，削除・制限の human intent UI，期限による自動 purge は Step 6 の対象として残る．`correction` event の型と同一 record 内の対象 revision 検査・原文保持・派生 stale 化はあるが，完成した人向け訂正フローを表さない．Step 4 の未配送 queue，記録 ON／OFF，旧 direct reader／generic RAG の除外は Runtime 側の未実装項目である．
+
+## 最小の設定方法
+
+`cmd/karte-ephy-control`はローカルの human 管理用 command であり，Wails API，proposal operation，LLM tool に公開しない．既存 Developer Mode を記録同意として引き継がない．
+
+```bash
+go build -o /absolute/private/tools/karte-ephy-control ./cmd/karte-ephy-control
+
+/absolute/private/tools/karte-ephy-control \
+  -data-root /absolute/synthetic/karte-data \
+  -config-root /absolute/private/karte-registration \
+  -grant /absolute/private/reviewed-grant.json \
+  -producer-credential /absolute/private/runtime-credential/producer.json \
+  configure
+```
+
+`data-root`は事前に作成する．`config-root`と producer credential は data root・Git work tree の外に置く．省略時の registration directory は OS の user config directory 配下の `Karte/ephy-v2/<data-root-hash>`である．producer credential は初回だけランダムな 32 bytes の鍵を生成し，0700 directory／0600 file へ保存する．鍵を stdout，proposal，STATUS，共有 fixture に出さない．同じ OS ユーザー全体を強い隔離境界とはみなさない．Runtime の model tool からこれらの設定・鍵へ到達させないことが有効化の前提である．
+
+grant の形は `schemas/karte-ephy/v2/grant.schema.json`と `fixtures/grant.json`を参照する．fixture は合成 scope の例であり，実保存の許可ではない．次を human 側で明示する．
+
+| 設定 | 意味 |
+|---|---|
+| `schema_version=2.0` | v2 grant の版 |
+| policy ID・revision・enabled・user ID | 誰の同意による設定か |
+| exact actor ID・producer instance ID・key ID | 自己申告だけでは得られない producer identity |
+| scope ID・storage area ID・project | 保存先と所有範囲．既存 scope の別領域への付け替えは禁止 |
+| record type ごとの kind・sensitivity・tags・provenance types | 会話／要約は note，日記は journal．分類を LLM に決めさせない |
+| operations | create／append／derivation 更新だけ |
+| valid_from・expires_at・consent_epoch・scope_generation | 許可の期間と古い配送の排除 |
+| storage=true・training=false・external_transfer=false | 保存以外を許可しない |
+
+設定変更では policy revision と consent epoch の両方を増やす．scope generation を戻してはならない．既存の producer credential を指定して同じ command を使う．停止は `enabled=false`へ変更する．現在の共有 privacy policy の project／sensitivity／tag／provenance／capability が拒否していれば，grant が enabled でも採用しない．
+
+共有 privacy policy 自体を更新する際は，二重の policy を作らず次を使う．
+
+```bash
+/absolute/private/tools/karte-ephy-control \
+  -data-root /absolute/synthetic/karte-data \
+  -config-root /absolute/private/karte-registration \
+  -privacy-policy /absolute/private/reviewed-context-policy.json \
+  privacy
+```
+
+この command と canonical mutation は同じ lock に従う．外部 editor が lock を使わず policy file や本文を直接書き換える操作まで，OS の atomic compare-and-swap として保証しない．本文は replace 直前にも hash を照合し，不一致なら保持する．追跡外の編集や未解決 transaction は自動的に上書きせず，明示的な解決待ちとする．
+
+## 配送と結果
+
+1．対応 Karte の capabilities で protocol／record schema 2.0 と操作を確認する．応答がなければ `unsupported_protocol`として配送を保全し，v1 や direct filesystem へ fallback しない．
+2．producer は安定 ID を持つ typed event を作り，`auth.mac`を除いた canonical JSON に HMAC-SHA-256 を付ける．鍵そのものは送らない．object key 昇順，配列順維持，UTF-8，整数のみ，余分な空白・末尾改行なしである．重複 key，不正 UTF-8，孤立 surrogate，小数，指数表現，負の zero を拒否する．
+3．`.mdsys/ephy/outbox/v2/pending/<candidate_id>.json`へ atomic に公開する．create の `target`は明示的な null，更新は current doc ID／revision／sha256 とする．canonical Markdown は Karte だけが生成する．
+4．成功は `receipts/<candidate_id>.json`で確認する．本文・path を含まない．再送は同一 candidate・同一 payload を使う．同じ event を別 candidate で再送しても追加しない．異なる payload で candidate／event ID を再利用すると `id_reuse`になる．
+5．拒否は `rejected/<candidate_id>.result.json`へ返す．既に存在する accepted receipt は拒否応答で置き換えない．I/O 失敗では pending を保持する．
+6．context は `.mdsys/context/v2/requests/<request_id>.json`から同じ identity・MAC で利用する．read は `doc_id+revision+sha256`を必須とする．同一 request の再送も現在 policy で再判定し，過去の応答本文をそのまま再送しない．policy 更新・canonical 更新時には古い response file を消す．
+
+手動で受信・復旧だけを実行する場合は，同じ root 設定で末尾を `process`または `recover`にする．出力は件数または candidate ID と状態だけである．
+
+## 保存と復旧
+
+`prepared → canonical → revision/event ledger → saved → receipt → archive`を順に durable 化する．canonical が expected result と一致すれば再 write せず続きを実行する．base のままなら現在 policy と source を再検査する．どちらとも異なれば conflict とし，現在 bytes を保持する．saved ledger がある後の人の編集は，過去の commit receipt と現在の内容を別々に扱う．
+
+元 event，candidate の proposal hash，適用先 doc／revision／hash を最小 ledger に残すため，receipt 詳細を消しても再送で同じ event を追加しない．現在版と履歴の本文は Karte のみが所有する．終了済み proposal／receipt の自動期限削除はまだ行わない．未解決 transaction を手動で消すことを復旧手順にしない．
+
+1 event の text は UTF-8 64 KiB，canonical は 1 MiB／256 events までである．収まらなければ明示的に拒否する．segment 作成・日付切替・未配送 queue の backpressure は Step 4 の Runtime が担当する．event sequence は同じ conversation 全体で連続性を検査する．
+
+macOS／Linux は directory fsync まで実行する．Windows は file fsync と `os.Root.Rename`を使い，directory flush を同じ方法では実行しない．Windows のコンパイル／CI と，電源断を含む native durability の受入は区別する．外部の lock 非協調 writer と完全な CAS を保証するものでもない．
+
+## 検証手順
+
+実データや既存 app を使わない smoke を用意した．毎回新しい一時 data root・private credential を作り，終了時に片付ける．
+
+```bash
+python3 scripts/smoke_runtime_records_v2.py
+python3 scripts/verify_runtime_record_fixtures.py
+go test ./internal/canonical ./internal/ephyrecordsv2 ./internal/contextcore ./internal/ephyoutbox ./internal/git
+go test .
+```
+
+schema 検証には `jsonschema[format]>=4.23,<5`が必要である．smoke は標準 Python library と Go のみを使う．Go test は各 `t.TempDir`を使用する．停止検証は prepared／canonical／ledger／saved／receipt／archive の直後に fault を入れる．別プロセス間の lock，外部編集との CAS，既存ファイル名 collision，署名・取消・ID 再利用，8 event の保持，raw text round-trip，human edit と stale source，旧 review，UI read と site／Git 除外を検査する．
+
+schema の再生成は `python3 scripts/generate_runtime_record_schemas.py`で行う．Go の期待 fixture 更新は，契約差分を確認したときだけ `KARTE_UPDATE_V2_FIXTURES=1 go test ./internal/ephyrecordsv2 -run TestSharedV2Fixtures`を使う．共有 fixture の鍵は公開された test 用の 0x42 配列であり，実設定では使わない．Runtime の byte 照合は v1/v2 合計 44 JSON を対象にする．
+
+## 次の依存
+
+C1 Step 1 は実機受入待ち，Step 2 は未着手である．今回の Step 3 を音声記録 ON と読み替えない．次に Step 2 の割込み・pre-roll・確定本文・表示・SpeechUnit の再生開始／自然終了／不明状態を確定し，その後に別指示で Step 4 を行う．Step 4 は v2 reader，旧 direct index の除外，明示的な記録設定，永続 queue と再送をまとめて検証してから実保存を有効にする．要約・日記 Job は Step 5，人向け訂正・削除・制限は Step 6 である．

@@ -1,0 +1,59 @@
+{
+  "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+  "project": "synthetic-diary",
+  "kind": "note",
+  "sensitivity": "internal",
+  "tags": [
+    "ephy:conversation"
+  ],
+  "provenance_types": [
+    "canonical"
+  ],
+  "authorship": "ephy",
+  "runtime_record": {
+    "schema_version": "2.0",
+    "scope_id": "22222222-2222-4222-8222-222222222222",
+    "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+    "logical_record_key": "conversation:11111111-1111-4111-8111-111111111111:1",
+    "revision": 1,
+    "record": {
+      "record_type": "conversation",
+      "title": "合成会話",
+      "conversation_id": "11111111-1111-4111-8111-111111111111",
+      "segment_no": 1,
+      "timezone": "Asia/Tokyo",
+      "local_date": "2026-09-12"
+    },
+    "adoption": {
+      "mode": "policy",
+      "actor_id": "runtime-fixture",
+      "policy_id": "66666666-6666-4666-8666-666666666666",
+      "policy_revision": 1,
+      "decision": "scope_allowed"
+    },
+    "human_edited": false
+  },
+  "events": [
+    {
+      "conversation_id": "11111111-1111-4111-8111-111111111111",
+      "scope_id": "22222222-2222-4222-8222-222222222222",
+      "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+      "event_id": "44444444-4444-4444-8444-444444444444",
+      "event_seq": 1,
+      "event_revision": 1,
+      "turn_id": "55555555-5555-4555-8555-555555555555",
+      "event_type": "user_final",
+      "input_kind": "asr_final",
+      "text": "次回は冬の観測を相談したい．",
+      "occurred_at": "2026-09-12T00:00:00Z",
+      "timezone": "Asia/Tokyo",
+      "local_date": "2026-09-12",
+      "asr": {
+        "provider": "synthetic",
+        "model_revision": "fixture-1",
+        "final_revision": 3
+      },
+      "consent_epoch": 1
+    }
+  ]
+}

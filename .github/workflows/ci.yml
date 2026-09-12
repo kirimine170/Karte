@@ -173,7 +173,7 @@ jobs:
       - name: Run Windows regression tests
         if: runner.os == 'Windows'
         shell: pwsh
-        run: go test . ./internal/audio ./internal/runtimepath ./internal/screenshot ./internal/webpchunk
+        run: go test . ./internal/audio ./internal/runtimepath ./internal/screenshot ./internal/webpchunk ./internal/canonical ./internal/ephyrecordsv2
 
       - name: Prepare font file for Windows build
         if: runner.os == 'Windows'

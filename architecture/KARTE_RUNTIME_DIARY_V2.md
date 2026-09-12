@@ -1,6 +1,6 @@
 # Runtime会話・要約・日記の保存契約 v2
 
-2026-09-12．Step 0で採用した設計であり，v2の実装・有効化・受入完了を表さない．この文書をKarte所有のprotocol／policy／共有fixture方針の正本とする．判断は[ADR-0005](adr/ADR-0005-scoped-runtime-diary-adoption.md)，段階と検証状況はRuntimeの`docs/runtime-diary/IMPLEMENTATION_PLAN.md`／`STATUS.md`に置く．
+2026-09-12．Step 3 の Karte 受信・採用・検索基盤を実装した．実装範囲・設定・検証は[Step 3 実装手順](RUNTIME_RECORDS_V2_SETUP.md)を参照する．実会話への有効化と実機受入は別の状態である．本書の Step 4〜6 に属する queue・Job・削除・保持規則は，引き続き後続 Step の契約である．この文書をKarte所有のprotocol／policy／共有fixture方針の正本とする．判断は[ADR-0005](adr/ADR-0005-scoped-runtime-diary-adoption.md)，段階と検証状況はRuntimeの`docs/runtime-diary/IMPLEMENTATION_PLAN.md`／`STATUS.md`に置く．
 
 ## 1．適用範囲と版
 
@@ -14,7 +14,7 @@
 | policy | v1のactor type単位のprivacy policy | v2の明示的なactor ID・保存領域・操作・記録種別を加えたpolicy．Karte |
 | Runtimeの未配送・Job状態 | 新契約なし | `schemas/runtime-diary/v1`の予定．Runtime内だけの配送・実行状態 |
 
-Step 3で上記Karte schemaと同じ意味のGo型を実装する．Step 0では稼働中schemaを変更しない．v1の`additionalProperties:false`，Goの`DisallowUnknownFields`，Runtimeの型検証を維持する．optional追加でもv1へ混ぜない．frontmatterがcustom fieldを保持できることは，旧clientが新しい認可や失効を理解することを意味しない．
+Step 3 で上記 Karte schema と Go 型を追加した．v1 の稼働中 schema は変更していない．v1の`additionalProperties:false`，Goの`DisallowUnknownFields`，Runtimeの型検証を維持する．optional追加でもv1へ混ぜない．frontmatterがcustom fieldを保持できることは，旧clientが新しい認可や失効を理解することを意味しない．
 
 v2は`.mdsys/ephy/outbox/v2/{pending,accepted,rejected,receipts,transactions}`と`.mdsys/context/v2/{requests,responses,processed}`を使用する．現行v1のdirectoryは移動しない．Karteが読取可能なcapabilities応答へprotocol，record schema，利用可能操作，policy revisionを返す．Runtimeはv2応答を確認してから配送する．v1専用serverは新directoryを処理しないため，client側で`unsupported_protocol`を表示し保全する．v1への自動変換・自動review代行をしない．新serverに不明版を送った場合も明示的に拒否する．
 
@@ -98,7 +98,7 @@ assistant記録は生成完了・中断・失敗，確定本文，表示した�
 
 Karteが会話の過去revisionを自分のprivate revision storeへ保持し，v2 readは`doc_id＋revision＋expected_sha256`でその版を取得できる．current MarkdownとKarte所有revision storeが正本を構成し，Runtimeに独立した版DBを持たせない．最初の対象は新recordだけであり，既存全文書の履歴移行を要求しない．過去版にも現在の閲覧policyと削除状態を適用する．sourceが変更済みなら旧版を読めても新派生物の自動採用には使えない．
 
-v2 search／readは既存Context serviceを拡張し，`record_type`，scope，timezoneに基づく日付範囲，revision，source refs，`active/stale/superseded/deleted`を扱う．Karteで依存を検査し，stale派生物は既定の回答候補から除外する．v1の返却値にfieldを追加しない．検索時とread時で許可を再検査し，denied／missingの非開示を維持する．
+v2 search／readは既存Context serviceを拡張し，`record_type`，scope，timezoneに基づく日付範囲，revision，source refs，Step 3 では `active/stale`を扱う．`superseded/deleted`と削除状態の伝播は Step 6 で実装する．Karteで依存を検査し，stale派生物は既定の回答候補から除外する．v1の返却値にfieldを追加しない．検索時とread時で許可を再検査し，denied／missingの非開示を維持する．
 
 ## 4．policyによる採用
 
@@ -125,7 +125,7 @@ human reviewは既存経路を保つ．採用来歴は`adoption.mode=human_revie
 
 ## 5．永続化，冪等性，競合
 
-Karteの正本変更は同じ保存serviceを通す．Step 3の前提として，現行`App.SaveFile`の競合検出前writeと単純`os.WriteFile`を解消する必要がある．Karte #231／未統合PR #268のatomic-save実装を再照合し，採用可能な最小部分とそのfault testを利用する．PR stack全体を無条件にmergeする依存にはしない．UI保存と自動採用が共通のlock／CASを使い，canonicalの最終bytesを確定してから同一filesystemのtemp，file fsync，atomic replace，directory fsyncを行う．一般の編集・VCS競合も失敗時に旧本文を破壊しないことをgateにする．
+Karteの正本変更は同じ保存serviceを通す．Step 3 で `App.SaveFile`の競合検出前 write と単純 `os.WriteFile`を解消した．Karte #231／未統合 PR #268 の `fc05c405085eed5ca566f630e78945db51575a79`から，非破壊の競合検出と保存 fault test の必要部分を再利用した．共通 lock／CAS／復旧は今回の限定基盤へ接続し，PR stack 全体は統合しない．UI保存と自動採用が共通のlock／CASを使い，canonicalの最終bytesを確定してから同一filesystemのtemp，file fsync，atomic replace，directory fsyncを行う．一般の編集・VCS 競合も失敗時に旧本文を破壊しないことを gate とする．macOS／Linux は directory fsync，Windows は file fsync と `os.Root.Rename`までであり，Windows の電源断 durability 受入は別途必要である．lock に従わない外部 editor との完全な OS-level CAS は保証せず，replace 直前の hash 不一致を拒否する．
 
 1．署名・schema・payload hash・現在policyを検査する．同じcandidate IDに異なるpayloadは，receiptが既に存在しても`id_reuse`として拒否する．
 2．同じscope／event IDが同じ内容で既に適用済みなら既存効果へ結び，同じeventをappendしない．同じevent IDで異なる内容は訂正扱いにせず拒否する．
@@ -170,9 +170,9 @@ Runtime保全物は配送のためのものだけであり，独立した検索D
 
 削除はKarte管理のcurrent本文・過去版・proposal本文・派生本文・indexを消し，Runtimeの対応本文も消す．冪等性に必要な本文なしID／scope generation／削除epochを残し，古い再送・index再構築で復活させない．Karteは管理対象のbackup／VCSへの書込み・同期を自動保存policyと分離し，新領域の本文を未許可のGit履歴へ複製しない．既存の利用者管理backup等を消去できない場合は削除範囲を明示し，全複製消去を保証しない．
 
-## 7．共有fixtureの実装計画
+## 7．共有 fixture と後続 Step の検証対象
 
-Step 3でKarteのv2 schema directoryへsynthetic JSONと期待結果を置き，Runtimeの`scripts/check_karte_contract.py`を拡張してbyte-for-byte照合する．各schemaはunknown field・trailing JSON・重複key・不明版を拒否する．旧15 JSON fixturesは変更せず併走する．schema検査だけでなく，Go／Pythonで同じsemantic outcomeを要求する．
+Step 3 で Karte の v2 schema directory へ synthetic JSON と期待結果を置き，Runtime の `scripts/check_karte_contract.py`を v1/v2 合計 44 JSON の byte-for-byte 照合へ拡張した．Go／Python の canonical bytes・MAC・意味照合は `scripts/verify_runtime_record_fixtures.py`と Go tests で行う．下表の削除・保持・Runtime queue を含む全項目が実装済みという意味ではない．現在の gate は実装手順と STATUS に記録する．各schemaはunknown field・trailing JSON・重複key・不明版を拒否する．旧15 JSON fixturesは変更せず併走する．schema検査だけでなく，Go／Pythonで同じsemantic outcomeを要求する．
 
 | fixture名の予定 | 入力／期待結果 |
 |---|---|
@@ -195,7 +195,7 @@ Step 3でKarteのv2 schema directoryへsynthetic JSONと期待結果を置き，
 
 ## 8．最初のfixtureの具体例
 
-以下は`conversation-user-final`のevent payloadに使うsyntheticデータである．実データではない．Step 3でschema fixtureへ移すまで，本節をフィールドと期待値の例とする．v1へ送信可能という意味ではない．
+以下は`conversation-user-final`のevent payloadに使うsyntheticデータである．実データではない．Step 3 の `conversation-user-final.event.canonical.json`へ exact bytes として移し，Go／Python で本節の hash を検証している．v1へ送信可能という意味ではない．
 
 ```json
 {

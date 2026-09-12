@@ -1,0 +1,970 @@
+{
+  "duplicate_event": {
+    "schema_version": "2.0",
+    "candidate_id": "56edc287-bdb1-506f-8beb-6fe6144faff4",
+    "operation": "append_events",
+    "logical_record_key": "conversation:11111111-1111-4111-8111-111111111111:1",
+    "scope_id": "22222222-2222-4222-8222-222222222222",
+    "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+    "actor": {
+      "type": "ephy",
+      "id": "runtime-fixture"
+    },
+    "policy_id": "66666666-6666-4666-8666-666666666666",
+    "policy_revision": 1,
+    "consent_epoch": 1,
+    "scope_generation": 1,
+    "record": {
+      "record_type": "conversation",
+      "title": "合成会話",
+      "conversation_id": "11111111-1111-4111-8111-111111111111",
+      "segment_no": 1,
+      "timezone": "Asia/Tokyo",
+      "local_date": "2026-09-12"
+    },
+    "target": {
+      "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+      "revision": 7,
+      "sha256": "2bbae1f8f2a9e256a9e7a69e2a31fbe5aea0567a286b9f7ffc6d3c74942386dc"
+    },
+    "events": [
+      {
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "scope_id": "22222222-2222-4222-8222-222222222222",
+        "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+        "event_id": "1c24b68a-52a8-5a07-8918-354659d26471",
+        "event_seq": 8,
+        "event_revision": 1,
+        "turn_id": "d8eba244-f7f9-5a0b-9da3-f0e560a14efd",
+        "event_type": "assistant_result",
+        "text": "合成の回答本文．",
+        "occurred_at": "2026-09-12T00:00:00Z",
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12",
+        "assistant": {
+          "generation": "completed",
+          "display": "confirmed_full",
+          "playback": "unknown",
+          "speech_units": []
+        },
+        "consent_epoch": 1
+      }
+    ],
+    "created_at": "2026-09-12T00:00:00Z",
+    "auth": {
+      "key_id": "fixture-key",
+      "mac": "9a0095d4dc20360646effb3957c78192bd079f1f926b27ad7e4532c49851d0fa"
+    }
+  },
+  "duplicate_receipt": {
+    "schema_version": "2.0",
+    "candidate_id": "56edc287-bdb1-506f-8beb-6fe6144faff4",
+    "proposal_hash": "8c96da49c814553405f48a40759678795a416d2a8e9935684c18f3a3bf55c4e2",
+    "status": "already_applied",
+    "applied": {
+      "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+      "revision": 8,
+      "sha256": "f688a14983ae0bd73006ec9c73b4c807fef4933f9895816808f8920f6edf0e82"
+    },
+    "applied_event_ids": [
+      "1c24b68a-52a8-5a07-8918-354659d26471"
+    ],
+    "adoption": {
+      "mode": "policy",
+      "actor_id": "runtime-fixture",
+      "policy_id": "66666666-6666-4666-8666-666666666666",
+      "policy_revision": 1,
+      "decision": "scope_allowed"
+    }
+  },
+  "expected_event_count": 8,
+  "expected_revision": 8,
+  "proposals": [
+    {
+      "schema_version": "2.0",
+      "candidate_id": "eb37ccdc-2e02-55d1-8645-f887f9348d50",
+      "operation": "create_record",
+      "logical_record_key": "conversation:11111111-1111-4111-8111-111111111111:1",
+      "scope_id": "22222222-2222-4222-8222-222222222222",
+      "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+      "actor": {
+        "type": "ephy",
+        "id": "runtime-fixture"
+      },
+      "policy_id": "66666666-6666-4666-8666-666666666666",
+      "policy_revision": 1,
+      "consent_epoch": 1,
+      "scope_generation": 1,
+      "record": {
+        "record_type": "conversation",
+        "title": "合成会話",
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "segment_no": 1,
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12"
+      },
+      "target": null,
+      "events": [
+        {
+          "conversation_id": "11111111-1111-4111-8111-111111111111",
+          "scope_id": "22222222-2222-4222-8222-222222222222",
+          "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+          "event_id": "44444444-4444-4444-8444-444444444444",
+          "event_seq": 1,
+          "event_revision": 1,
+          "turn_id": "55555555-5555-4555-8555-555555555555",
+          "event_type": "user_final",
+          "input_kind": "asr_final",
+          "text": "次回は冬の観測を相談したい．",
+          "occurred_at": "2026-09-12T00:00:00Z",
+          "timezone": "Asia/Tokyo",
+          "local_date": "2026-09-12",
+          "asr": {
+            "provider": "synthetic",
+            "model_revision": "fixture-1",
+            "final_revision": 3
+          },
+          "consent_epoch": 1
+        }
+      ],
+      "created_at": "2026-09-12T00:00:00Z",
+      "auth": {
+        "key_id": "fixture-key",
+        "mac": "86ce86690c5f3d2679b43818f6b727c1e2b9c6947b58a3c413bd75535a3d7910"
+      }
+    },
+    {
+      "schema_version": "2.0",
+      "candidate_id": "66aa0dd1-4366-5c6b-a8de-4d74a9c9f980",
+      "operation": "append_events",
+      "logical_record_key": "conversation:11111111-1111-4111-8111-111111111111:1",
+      "scope_id": "22222222-2222-4222-8222-222222222222",
+      "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+      "actor": {
+        "type": "ephy",
+        "id": "runtime-fixture"
+      },
+      "policy_id": "66666666-6666-4666-8666-666666666666",
+      "policy_revision": 1,
+      "consent_epoch": 1,
+      "scope_generation": 1,
+      "record": {
+        "record_type": "conversation",
+        "title": "合成会話",
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "segment_no": 1,
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12"
+      },
+      "target": {
+        "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+        "revision": 1,
+        "sha256": "33d8a0d76e4b9b1b27596e5fa95c1c7892cf3b74b5433b8178f8daad281ef85c"
+      },
+      "events": [
+        {
+          "conversation_id": "11111111-1111-4111-8111-111111111111",
+          "scope_id": "22222222-2222-4222-8222-222222222222",
+          "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+          "event_id": "088d3ac0-04e1-5380-b834-0b92ed598866",
+          "event_seq": 2,
+          "event_revision": 1,
+          "turn_id": "49997d55-dd6d-5ecf-8ae4-aade35aaba42",
+          "event_type": "assistant_result",
+          "text": "合成の回答本文．",
+          "occurred_at": "2026-09-12T00:00:00Z",
+          "timezone": "Asia/Tokyo",
+          "local_date": "2026-09-12",
+          "assistant": {
+            "generation": "completed",
+            "display": "confirmed_full",
+            "playback": "unknown",
+            "speech_units": []
+          },
+          "consent_epoch": 1
+        }
+      ],
+      "created_at": "2026-09-12T00:00:00Z",
+      "auth": {
+        "key_id": "fixture-key",
+        "mac": "a4c321b971fc21f722d4e3ddc36087ad7ab0e529394afca785b80284511f0192"
+      }
+    },
+    {
+      "schema_version": "2.0",
+      "candidate_id": "6e94a756-d5f1-50f9-aabc-01b6165aa5da",
+      "operation": "append_events",
+      "logical_record_key": "conversation:11111111-1111-4111-8111-111111111111:1",
+      "scope_id": "22222222-2222-4222-8222-222222222222",
+      "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+      "actor": {
+        "type": "ephy",
+        "id": "runtime-fixture"
+      },
+      "policy_id": "66666666-6666-4666-8666-666666666666",
+      "policy_revision": 1,
+      "consent_epoch": 1,
+      "scope_generation": 1,
+      "record": {
+        "record_type": "conversation",
+        "title": "合成会話",
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "segment_no": 1,
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12"
+      },
+      "target": {
+        "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+        "revision": 2,
+        "sha256": "0be67f652178b712391444fb975320f906de1e93a18ac010fab69c66bf6f9fb9"
+      },
+      "events": [
+        {
+          "conversation_id": "11111111-1111-4111-8111-111111111111",
+          "scope_id": "22222222-2222-4222-8222-222222222222",
+          "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+          "event_id": "5cab79c1-0cfb-50a2-b07f-be514dbd4d4f",
+          "event_seq": 3,
+          "event_revision": 1,
+          "turn_id": "420cea39-5611-562b-8d29-cb3c87049a07",
+          "event_type": "user_final",
+          "input_kind": "asr_final",
+          "text": "次回は冬の観測を相談したい．",
+          "occurred_at": "2026-09-12T00:00:00Z",
+          "timezone": "Asia/Tokyo",
+          "local_date": "2026-09-12",
+          "asr": {
+            "provider": "synthetic",
+            "model_revision": "fixture-1",
+            "final_revision": 3
+          },
+          "consent_epoch": 1
+        }
+      ],
+      "created_at": "2026-09-12T00:00:00Z",
+      "auth": {
+        "key_id": "fixture-key",
+        "mac": "e80c9816e1d6168caa5ad9e35e17412edb0a41b3b1dda531481dbe9ff5ebd9a0"
+      }
+    },
+    {
+      "schema_version": "2.0",
+      "candidate_id": "12bdd60d-4267-5e82-a8ea-b23469b43773",
+      "operation": "append_events",
+      "logical_record_key": "conversation:11111111-1111-4111-8111-111111111111:1",
+      "scope_id": "22222222-2222-4222-8222-222222222222",
+      "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+      "actor": {
+        "type": "ephy",
+        "id": "runtime-fixture"
+      },
+      "policy_id": "66666666-6666-4666-8666-666666666666",
+      "policy_revision": 1,
+      "consent_epoch": 1,
+      "scope_generation": 1,
+      "record": {
+        "record_type": "conversation",
+        "title": "合成会話",
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "segment_no": 1,
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12"
+      },
+      "target": {
+        "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+        "revision": 3,
+        "sha256": "04faef7f539cc05fc81464ad97358d141c491725be593fb9c75678b522029121"
+      },
+      "events": [
+        {
+          "conversation_id": "11111111-1111-4111-8111-111111111111",
+          "scope_id": "22222222-2222-4222-8222-222222222222",
+          "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+          "event_id": "995d6ba1-d291-5b29-b414-7a091b93e8d9",
+          "event_seq": 4,
+          "event_revision": 1,
+          "turn_id": "420cea39-5611-562b-8d29-cb3c87049a07",
+          "event_type": "assistant_result",
+          "text": "合成の回答本文．",
+          "occurred_at": "2026-09-12T00:00:00Z",
+          "timezone": "Asia/Tokyo",
+          "local_date": "2026-09-12",
+          "assistant": {
+            "generation": "completed",
+            "display": "confirmed_full",
+            "playback": "unknown",
+            "speech_units": []
+          },
+          "consent_epoch": 1
+        }
+      ],
+      "created_at": "2026-09-12T00:00:00Z",
+      "auth": {
+        "key_id": "fixture-key",
+        "mac": "0a246bca299e5d2bbbcd4564eeaf69fd892d8d1ce56e1e201429fd3033be0a7d"
+      }
+    },
+    {
+      "schema_version": "2.0",
+      "candidate_id": "ec65869f-cade-572a-bbe5-b024853af3ad",
+      "operation": "append_events",
+      "logical_record_key": "conversation:11111111-1111-4111-8111-111111111111:1",
+      "scope_id": "22222222-2222-4222-8222-222222222222",
+      "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+      "actor": {
+        "type": "ephy",
+        "id": "runtime-fixture"
+      },
+      "policy_id": "66666666-6666-4666-8666-666666666666",
+      "policy_revision": 1,
+      "consent_epoch": 1,
+      "scope_generation": 1,
+      "record": {
+        "record_type": "conversation",
+        "title": "合成会話",
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "segment_no": 1,
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12"
+      },
+      "target": {
+        "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+        "revision": 4,
+        "sha256": "76b183f58d507222aa3c21d9e8f297ba20c75c60cd1d575c20080c7117ca813e"
+      },
+      "events": [
+        {
+          "conversation_id": "11111111-1111-4111-8111-111111111111",
+          "scope_id": "22222222-2222-4222-8222-222222222222",
+          "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+          "event_id": "ac2faf89-3e33-5822-b12d-58975d484b25",
+          "event_seq": 5,
+          "event_revision": 1,
+          "turn_id": "0bd020b6-c83d-5262-9226-fb6e4f1afe3a",
+          "event_type": "user_final",
+          "input_kind": "asr_final",
+          "text": "次回は冬の観測を相談したい．",
+          "occurred_at": "2026-09-12T00:00:00Z",
+          "timezone": "Asia/Tokyo",
+          "local_date": "2026-09-12",
+          "asr": {
+            "provider": "synthetic",
+            "model_revision": "fixture-1",
+            "final_revision": 3
+          },
+          "consent_epoch": 1
+        }
+      ],
+      "created_at": "2026-09-12T00:00:00Z",
+      "auth": {
+        "key_id": "fixture-key",
+        "mac": "4388ec2947020be760e548bf390ba3accaff43de9e97cd2c3c04a5db0d53cda9"
+      }
+    },
+    {
+      "schema_version": "2.0",
+      "candidate_id": "d47c6d53-db70-5d90-a595-9e920e0cd9d5",
+      "operation": "append_events",
+      "logical_record_key": "conversation:11111111-1111-4111-8111-111111111111:1",
+      "scope_id": "22222222-2222-4222-8222-222222222222",
+      "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+      "actor": {
+        "type": "ephy",
+        "id": "runtime-fixture"
+      },
+      "policy_id": "66666666-6666-4666-8666-666666666666",
+      "policy_revision": 1,
+      "consent_epoch": 1,
+      "scope_generation": 1,
+      "record": {
+        "record_type": "conversation",
+        "title": "合成会話",
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "segment_no": 1,
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12"
+      },
+      "target": {
+        "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+        "revision": 5,
+        "sha256": "2933c79ab54ff2923a06fd7fef405d5f3ba86b6ad6eec054631275f11fa442bd"
+      },
+      "events": [
+        {
+          "conversation_id": "11111111-1111-4111-8111-111111111111",
+          "scope_id": "22222222-2222-4222-8222-222222222222",
+          "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+          "event_id": "2458e6d9-0df9-5df7-8427-9d97aa86976d",
+          "event_seq": 6,
+          "event_revision": 1,
+          "turn_id": "0bd020b6-c83d-5262-9226-fb6e4f1afe3a",
+          "event_type": "assistant_result",
+          "text": "合成の回答本文．",
+          "occurred_at": "2026-09-12T00:00:00Z",
+          "timezone": "Asia/Tokyo",
+          "local_date": "2026-09-12",
+          "assistant": {
+            "generation": "completed",
+            "display": "confirmed_full",
+            "playback": "unknown",
+            "speech_units": []
+          },
+          "consent_epoch": 1
+        }
+      ],
+      "created_at": "2026-09-12T00:00:00Z",
+      "auth": {
+        "key_id": "fixture-key",
+        "mac": "4c0dc2913d48d42239b5d801cc93771b04f4ccbc7276c9ed73fb336b207f129e"
+      }
+    },
+    {
+      "schema_version": "2.0",
+      "candidate_id": "85b01342-0686-53e9-b3d3-8e30928edc72",
+      "operation": "append_events",
+      "logical_record_key": "conversation:11111111-1111-4111-8111-111111111111:1",
+      "scope_id": "22222222-2222-4222-8222-222222222222",
+      "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+      "actor": {
+        "type": "ephy",
+        "id": "runtime-fixture"
+      },
+      "policy_id": "66666666-6666-4666-8666-666666666666",
+      "policy_revision": 1,
+      "consent_epoch": 1,
+      "scope_generation": 1,
+      "record": {
+        "record_type": "conversation",
+        "title": "合成会話",
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "segment_no": 1,
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12"
+      },
+      "target": {
+        "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+        "revision": 6,
+        "sha256": "8cfd79cf5d4658a1fbaeb21eaa058b03e55852ad985852d79f5a50ac8f4b83e3"
+      },
+      "events": [
+        {
+          "conversation_id": "11111111-1111-4111-8111-111111111111",
+          "scope_id": "22222222-2222-4222-8222-222222222222",
+          "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+          "event_id": "ee7a25e6-1855-59bf-8b86-923b174956a5",
+          "event_seq": 7,
+          "event_revision": 1,
+          "turn_id": "d8eba244-f7f9-5a0b-9da3-f0e560a14efd",
+          "event_type": "user_final",
+          "input_kind": "asr_final",
+          "text": "次回は冬の観測を相談したい．",
+          "occurred_at": "2026-09-12T00:00:00Z",
+          "timezone": "Asia/Tokyo",
+          "local_date": "2026-09-12",
+          "asr": {
+            "provider": "synthetic",
+            "model_revision": "fixture-1",
+            "final_revision": 3
+          },
+          "consent_epoch": 1
+        }
+      ],
+      "created_at": "2026-09-12T00:00:00Z",
+      "auth": {
+        "key_id": "fixture-key",
+        "mac": "036a378fa00f0f6415bc3bfaf01740f6c8aeaf792300b3a9758b4e5cab816771"
+      }
+    },
+    {
+      "schema_version": "2.0",
+      "candidate_id": "e778d039-3aca-5421-8e3a-ac3a11755cee",
+      "operation": "append_events",
+      "logical_record_key": "conversation:11111111-1111-4111-8111-111111111111:1",
+      "scope_id": "22222222-2222-4222-8222-222222222222",
+      "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+      "actor": {
+        "type": "ephy",
+        "id": "runtime-fixture"
+      },
+      "policy_id": "66666666-6666-4666-8666-666666666666",
+      "policy_revision": 1,
+      "consent_epoch": 1,
+      "scope_generation": 1,
+      "record": {
+        "record_type": "conversation",
+        "title": "合成会話",
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "segment_no": 1,
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12"
+      },
+      "target": {
+        "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+        "revision": 7,
+        "sha256": "2bbae1f8f2a9e256a9e7a69e2a31fbe5aea0567a286b9f7ffc6d3c74942386dc"
+      },
+      "events": [
+        {
+          "conversation_id": "11111111-1111-4111-8111-111111111111",
+          "scope_id": "22222222-2222-4222-8222-222222222222",
+          "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+          "event_id": "1c24b68a-52a8-5a07-8918-354659d26471",
+          "event_seq": 8,
+          "event_revision": 1,
+          "turn_id": "d8eba244-f7f9-5a0b-9da3-f0e560a14efd",
+          "event_type": "assistant_result",
+          "text": "合成の回答本文．",
+          "occurred_at": "2026-09-12T00:00:00Z",
+          "timezone": "Asia/Tokyo",
+          "local_date": "2026-09-12",
+          "assistant": {
+            "generation": "completed",
+            "display": "confirmed_full",
+            "playback": "unknown",
+            "speech_units": []
+          },
+          "consent_epoch": 1
+        }
+      ],
+      "created_at": "2026-09-12T00:00:00Z",
+      "auth": {
+        "key_id": "fixture-key",
+        "mac": "a0f721ab4c5d60a10e44abb50bd1b58158f3c4a4ea85e30471ea90fb4fb1083b"
+      }
+    }
+  ],
+  "receipts": [
+    {
+      "schema_version": "2.0",
+      "candidate_id": "eb37ccdc-2e02-55d1-8645-f887f9348d50",
+      "proposal_hash": "7b3368790c2d0d8f2a28b877291231773014239a5ddc910f895614dead7c7e6f",
+      "status": "accepted",
+      "applied": {
+        "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+        "revision": 1,
+        "sha256": "33d8a0d76e4b9b1b27596e5fa95c1c7892cf3b74b5433b8178f8daad281ef85c"
+      },
+      "applied_event_ids": [
+        "44444444-4444-4444-8444-444444444444"
+      ],
+      "adoption": {
+        "mode": "policy",
+        "actor_id": "runtime-fixture",
+        "policy_id": "66666666-6666-4666-8666-666666666666",
+        "policy_revision": 1,
+        "decision": "scope_allowed"
+      }
+    },
+    {
+      "schema_version": "2.0",
+      "candidate_id": "66aa0dd1-4366-5c6b-a8de-4d74a9c9f980",
+      "proposal_hash": "3d6c8f3718e57082808c174a475ece2edc6baa74cf50b3979d701caddbd7c984",
+      "status": "accepted",
+      "applied": {
+        "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+        "revision": 2,
+        "sha256": "0be67f652178b712391444fb975320f906de1e93a18ac010fab69c66bf6f9fb9"
+      },
+      "applied_event_ids": [
+        "088d3ac0-04e1-5380-b834-0b92ed598866"
+      ],
+      "adoption": {
+        "mode": "policy",
+        "actor_id": "runtime-fixture",
+        "policy_id": "66666666-6666-4666-8666-666666666666",
+        "policy_revision": 1,
+        "decision": "scope_allowed"
+      }
+    },
+    {
+      "schema_version": "2.0",
+      "candidate_id": "6e94a756-d5f1-50f9-aabc-01b6165aa5da",
+      "proposal_hash": "8c69b45488bc47441d92cf53ac2fdd6ef991bc70a6085a4d99f1eb522a7ecdf8",
+      "status": "accepted",
+      "applied": {
+        "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+        "revision": 3,
+        "sha256": "04faef7f539cc05fc81464ad97358d141c491725be593fb9c75678b522029121"
+      },
+      "applied_event_ids": [
+        "5cab79c1-0cfb-50a2-b07f-be514dbd4d4f"
+      ],
+      "adoption": {
+        "mode": "policy",
+        "actor_id": "runtime-fixture",
+        "policy_id": "66666666-6666-4666-8666-666666666666",
+        "policy_revision": 1,
+        "decision": "scope_allowed"
+      }
+    },
+    {
+      "schema_version": "2.0",
+      "candidate_id": "12bdd60d-4267-5e82-a8ea-b23469b43773",
+      "proposal_hash": "02e0071d9b4c9efe1d9211d246e38aab1b5e085a0563a5e3cd42364955989611",
+      "status": "accepted",
+      "applied": {
+        "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+        "revision": 4,
+        "sha256": "76b183f58d507222aa3c21d9e8f297ba20c75c60cd1d575c20080c7117ca813e"
+      },
+      "applied_event_ids": [
+        "995d6ba1-d291-5b29-b414-7a091b93e8d9"
+      ],
+      "adoption": {
+        "mode": "policy",
+        "actor_id": "runtime-fixture",
+        "policy_id": "66666666-6666-4666-8666-666666666666",
+        "policy_revision": 1,
+        "decision": "scope_allowed"
+      }
+    },
+    {
+      "schema_version": "2.0",
+      "candidate_id": "ec65869f-cade-572a-bbe5-b024853af3ad",
+      "proposal_hash": "3750d1f57366c002a8d4c3a6e0a4488fd1f5658132197a0923124e4b7ce1a8bc",
+      "status": "accepted",
+      "applied": {
+        "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+        "revision": 5,
+        "sha256": "2933c79ab54ff2923a06fd7fef405d5f3ba86b6ad6eec054631275f11fa442bd"
+      },
+      "applied_event_ids": [
+        "ac2faf89-3e33-5822-b12d-58975d484b25"
+      ],
+      "adoption": {
+        "mode": "policy",
+        "actor_id": "runtime-fixture",
+        "policy_id": "66666666-6666-4666-8666-666666666666",
+        "policy_revision": 1,
+        "decision": "scope_allowed"
+      }
+    },
+    {
+      "schema_version": "2.0",
+      "candidate_id": "d47c6d53-db70-5d90-a595-9e920e0cd9d5",
+      "proposal_hash": "0fb4010ffbe9c424460d2e124af43fa47987b51203b4dbc9e41047909e12d9d0",
+      "status": "accepted",
+      "applied": {
+        "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+        "revision": 6,
+        "sha256": "8cfd79cf5d4658a1fbaeb21eaa058b03e55852ad985852d79f5a50ac8f4b83e3"
+      },
+      "applied_event_ids": [
+        "2458e6d9-0df9-5df7-8427-9d97aa86976d"
+      ],
+      "adoption": {
+        "mode": "policy",
+        "actor_id": "runtime-fixture",
+        "policy_id": "66666666-6666-4666-8666-666666666666",
+        "policy_revision": 1,
+        "decision": "scope_allowed"
+      }
+    },
+    {
+      "schema_version": "2.0",
+      "candidate_id": "85b01342-0686-53e9-b3d3-8e30928edc72",
+      "proposal_hash": "e768da3d86c95a8c6a45a92b699cc8c6105126e72d240ff30381c66bbd23abfe",
+      "status": "accepted",
+      "applied": {
+        "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+        "revision": 7,
+        "sha256": "2bbae1f8f2a9e256a9e7a69e2a31fbe5aea0567a286b9f7ffc6d3c74942386dc"
+      },
+      "applied_event_ids": [
+        "ee7a25e6-1855-59bf-8b86-923b174956a5"
+      ],
+      "adoption": {
+        "mode": "policy",
+        "actor_id": "runtime-fixture",
+        "policy_id": "66666666-6666-4666-8666-666666666666",
+        "policy_revision": 1,
+        "decision": "scope_allowed"
+      }
+    },
+    {
+      "schema_version": "2.0",
+      "candidate_id": "e778d039-3aca-5421-8e3a-ac3a11755cee",
+      "proposal_hash": "275873d59758287b83f4820d1ca813e7559b71d48c2cf20e6cb91bb184961039",
+      "status": "accepted",
+      "applied": {
+        "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+        "revision": 8,
+        "sha256": "f688a14983ae0bd73006ec9c73b4c807fef4933f9895816808f8920f6edf0e82"
+      },
+      "applied_event_ids": [
+        "1c24b68a-52a8-5a07-8918-354659d26471"
+      ],
+      "adoption": {
+        "mode": "policy",
+        "actor_id": "runtime-fixture",
+        "policy_id": "66666666-6666-4666-8666-666666666666",
+        "policy_revision": 1,
+        "decision": "scope_allowed"
+      }
+    }
+  ],
+  "record": {
+    "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+    "project": "synthetic-diary",
+    "kind": "note",
+    "sensitivity": "internal",
+    "tags": [
+      "ephy:conversation"
+    ],
+    "provenance_types": [
+      "canonical"
+    ],
+    "authorship": "ephy",
+    "runtime_record": {
+      "schema_version": "2.0",
+      "scope_id": "22222222-2222-4222-8222-222222222222",
+      "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+      "logical_record_key": "conversation:11111111-1111-4111-8111-111111111111:1",
+      "revision": 8,
+      "record": {
+        "record_type": "conversation",
+        "title": "合成会話",
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "segment_no": 1,
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12"
+      },
+      "adoption": {
+        "mode": "policy",
+        "actor_id": "runtime-fixture",
+        "policy_id": "66666666-6666-4666-8666-666666666666",
+        "policy_revision": 1,
+        "decision": "scope_allowed"
+      },
+      "human_edited": false
+    },
+    "events": [
+      {
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "scope_id": "22222222-2222-4222-8222-222222222222",
+        "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+        "event_id": "44444444-4444-4444-8444-444444444444",
+        "event_seq": 1,
+        "event_revision": 1,
+        "turn_id": "55555555-5555-4555-8555-555555555555",
+        "event_type": "user_final",
+        "input_kind": "asr_final",
+        "text": "次回は冬の観測を相談したい．",
+        "occurred_at": "2026-09-12T00:00:00Z",
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12",
+        "asr": {
+          "provider": "synthetic",
+          "model_revision": "fixture-1",
+          "final_revision": 3
+        },
+        "consent_epoch": 1
+      },
+      {
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "scope_id": "22222222-2222-4222-8222-222222222222",
+        "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+        "event_id": "088d3ac0-04e1-5380-b834-0b92ed598866",
+        "event_seq": 2,
+        "event_revision": 1,
+        "turn_id": "49997d55-dd6d-5ecf-8ae4-aade35aaba42",
+        "event_type": "assistant_result",
+        "text": "合成の回答本文．",
+        "occurred_at": "2026-09-12T00:00:00Z",
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12",
+        "assistant": {
+          "generation": "completed",
+          "display": "confirmed_full",
+          "playback": "unknown",
+          "speech_units": []
+        },
+        "consent_epoch": 1
+      },
+      {
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "scope_id": "22222222-2222-4222-8222-222222222222",
+        "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+        "event_id": "5cab79c1-0cfb-50a2-b07f-be514dbd4d4f",
+        "event_seq": 3,
+        "event_revision": 1,
+        "turn_id": "420cea39-5611-562b-8d29-cb3c87049a07",
+        "event_type": "user_final",
+        "input_kind": "asr_final",
+        "text": "次回は冬の観測を相談したい．",
+        "occurred_at": "2026-09-12T00:00:00Z",
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12",
+        "asr": {
+          "provider": "synthetic",
+          "model_revision": "fixture-1",
+          "final_revision": 3
+        },
+        "consent_epoch": 1
+      },
+      {
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "scope_id": "22222222-2222-4222-8222-222222222222",
+        "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+        "event_id": "995d6ba1-d291-5b29-b414-7a091b93e8d9",
+        "event_seq": 4,
+        "event_revision": 1,
+        "turn_id": "420cea39-5611-562b-8d29-cb3c87049a07",
+        "event_type": "assistant_result",
+        "text": "合成の回答本文．",
+        "occurred_at": "2026-09-12T00:00:00Z",
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12",
+        "assistant": {
+          "generation": "completed",
+          "display": "confirmed_full",
+          "playback": "unknown",
+          "speech_units": []
+        },
+        "consent_epoch": 1
+      },
+      {
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "scope_id": "22222222-2222-4222-8222-222222222222",
+        "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+        "event_id": "ac2faf89-3e33-5822-b12d-58975d484b25",
+        "event_seq": 5,
+        "event_revision": 1,
+        "turn_id": "0bd020b6-c83d-5262-9226-fb6e4f1afe3a",
+        "event_type": "user_final",
+        "input_kind": "asr_final",
+        "text": "次回は冬の観測を相談したい．",
+        "occurred_at": "2026-09-12T00:00:00Z",
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12",
+        "asr": {
+          "provider": "synthetic",
+          "model_revision": "fixture-1",
+          "final_revision": 3
+        },
+        "consent_epoch": 1
+      },
+      {
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "scope_id": "22222222-2222-4222-8222-222222222222",
+        "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+        "event_id": "2458e6d9-0df9-5df7-8427-9d97aa86976d",
+        "event_seq": 6,
+        "event_revision": 1,
+        "turn_id": "0bd020b6-c83d-5262-9226-fb6e4f1afe3a",
+        "event_type": "assistant_result",
+        "text": "合成の回答本文．",
+        "occurred_at": "2026-09-12T00:00:00Z",
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12",
+        "assistant": {
+          "generation": "completed",
+          "display": "confirmed_full",
+          "playback": "unknown",
+          "speech_units": []
+        },
+        "consent_epoch": 1
+      },
+      {
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "scope_id": "22222222-2222-4222-8222-222222222222",
+        "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+        "event_id": "ee7a25e6-1855-59bf-8b86-923b174956a5",
+        "event_seq": 7,
+        "event_revision": 1,
+        "turn_id": "d8eba244-f7f9-5a0b-9da3-f0e560a14efd",
+        "event_type": "user_final",
+        "input_kind": "asr_final",
+        "text": "次回は冬の観測を相談したい．",
+        "occurred_at": "2026-09-12T00:00:00Z",
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12",
+        "asr": {
+          "provider": "synthetic",
+          "model_revision": "fixture-1",
+          "final_revision": 3
+        },
+        "consent_epoch": 1
+      },
+      {
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "scope_id": "22222222-2222-4222-8222-222222222222",
+        "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+        "event_id": "1c24b68a-52a8-5a07-8918-354659d26471",
+        "event_seq": 8,
+        "event_revision": 1,
+        "turn_id": "d8eba244-f7f9-5a0b-9da3-f0e560a14efd",
+        "event_type": "assistant_result",
+        "text": "合成の回答本文．",
+        "occurred_at": "2026-09-12T00:00:00Z",
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12",
+        "assistant": {
+          "generation": "completed",
+          "display": "confirmed_full",
+          "playback": "unknown",
+          "speech_units": []
+        },
+        "consent_epoch": 1
+      }
+    ]
+  },
+  "reused_id": {
+    "schema_version": "2.0",
+    "candidate_id": "56edc287-bdb1-506f-8beb-6fe6144faff4",
+    "operation": "append_events",
+    "logical_record_key": "conversation:11111111-1111-4111-8111-111111111111:1",
+    "scope_id": "22222222-2222-4222-8222-222222222222",
+    "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+    "actor": {
+      "type": "ephy",
+      "id": "runtime-fixture"
+    },
+    "policy_id": "66666666-6666-4666-8666-666666666666",
+    "policy_revision": 1,
+    "consent_epoch": 1,
+    "scope_generation": 1,
+    "record": {
+      "record_type": "conversation",
+      "title": "合成会話",
+      "conversation_id": "11111111-1111-4111-8111-111111111111",
+      "segment_no": 1,
+      "timezone": "Asia/Tokyo",
+      "local_date": "2026-09-12"
+    },
+    "target": {
+      "doc_id": "5996543a-0f50-51b9-8af7-58ec757d7a6f",
+      "revision": 7,
+      "sha256": "2bbae1f8f2a9e256a9e7a69e2a31fbe5aea0567a286b9f7ffc6d3c74942386dc"
+    },
+    "events": [
+      {
+        "conversation_id": "11111111-1111-4111-8111-111111111111",
+        "scope_id": "22222222-2222-4222-8222-222222222222",
+        "producer_instance_id": "33333333-3333-4333-8333-333333333333",
+        "event_id": "1c24b68a-52a8-5a07-8918-354659d26471",
+        "event_seq": 8,
+        "event_revision": 1,
+        "turn_id": "d8eba244-f7f9-5a0b-9da3-f0e560a14efd",
+        "event_type": "assistant_result",
+        "text": "ID を再利用した異なる本文．",
+        "occurred_at": "2026-09-12T00:00:00Z",
+        "timezone": "Asia/Tokyo",
+        "local_date": "2026-09-12",
+        "assistant": {
+          "generation": "completed",
+          "display": "confirmed_full",
+          "playback": "unknown",
+          "speech_units": []
+        },
+        "consent_epoch": 1
+      }
+    ],
+    "created_at": "2026-09-12T00:00:00Z",
+    "auth": {
+      "key_id": "fixture-key",
+      "mac": "10e2f6e49f9ed4eef96cbf402e07236a878f91334c001ace3121321a43f8ea93"
+    }
+  },
+  "reused_result": "id_reuse"
+}

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for implementation，2026-09-12．Step 0の設計判断．実装はStep 3以降である．
+Accepted／Step 3 implemented，2026-09-12．Karte の限定採用・受信復旧・版付き read を実装し，隔離した合成データで検証する．実機受入，Runtime の Step 4，human control の Step 6 は別に管理する．
 
 ## Context
 
@@ -29,3 +29,11 @@ v2の有効化前に，canonical writerの競合防止とatomic保存を整え�
 ## Verification
 
 Step 3のgateはv2契約の共有fixture，許可・取消・偽actor，ID再利用，canonical保存各境界のcrash，human edit，旧review回帰である．詳細とfixture名は契約正本に集約する．Step 0は文書整合と現行v1基盤の検証のみを行う．
+
+## Step 3 の具体化
+
+`internal/canonical`の共通 writer に通常 editor と v2 採用を接続し，受付・確定直前の現在 policy 検査，event／candidate ledger，canonical 保存後の receipt 復旧を実装した．PR #268 の非破壊競合検出・fault test を限定再利用し，ASR／media／background job を含む stack 全体は統合していない．
+
+scope 設定と鍵は data root・Git の外の human 管理領域に置く．privacy の正本は既存 v1 policy のままとし，v2 grant と積集合で判定する．設定 command も canonical と同じ lock を使う．新 record を v1 AI context，site build，自動 Git commit へ流さない．現在 policy による UI read と，人の編集による自動更新停止を追加した．
+
+[実装・設定・検証手順](../RUNTIME_RECORDS_V2_SETUP.md)を追加した．公開 capabilities は create／append／derivation 更新／search／read のみであり，未実装の削除・期限 purge を広告しない．音声記録の開始は，C1 Step 2 の中断・再生状態の契約と Runtime Step 4 の reader／queue／設定が揃った後に限る．

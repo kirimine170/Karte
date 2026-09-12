@@ -30,10 +30,12 @@ import (
 	"karte/internal/asr"
 	"karte/internal/audio"
 	boardpkg "karte/internal/board"
+	"karte/internal/canonical"
 	"karte/internal/clip"
 	"karte/internal/contextcore"
 	"karte/internal/docid"
 	"karte/internal/ephyoutbox"
+	"karte/internal/ephyrecordsv2"
 	fm "karte/internal/frontmatter"
 	gitvcs "karte/internal/git"
 	"karte/internal/markdown"
@@ -75,16 +77,17 @@ const maxImageFileSizeForPDF = 300 * 1024   // 各画像の目標サイズ300KB
 
 // App struct
 type App struct {
-	ctx             context.Context
-	root            string
-	dataDir         string
-	logFilePath     string
-	fs              FileSystem
-	syncManager     *syncpkg.SyncManager
-	vcs             *gitvcs.VCS
-	asrService      *asr.Service
-	realtimeService *asr.RealtimeService // For real-time ASR with partial text support
-	asrInitDone     chan struct{}
+	ephyV2ConfigRoot string
+	ctx              context.Context
+	root             string
+	dataDir          string
+	logFilePath      string
+	fs               FileSystem
+	syncManager      *syncpkg.SyncManager
+	vcs              *gitvcs.VCS
+	asrService       *asr.Service
+	realtimeService  *asr.RealtimeService // For real-time ASR with partial text support
+	asrInitDone      chan struct{}
 	// Recording fields
 	recorder                *audio.Recorder
 	recordingMu             sync.Mutex
@@ -296,28 +299,14 @@ type CSVItem struct {
 }
 
 func (a *App) LoadBoard(path string) (*boardpkg.Document, error) {
-	absPath, ok := a.resolveContentPath(path)
-	if !ok {
-		return nil, fmt.Errorf("invalid path: %s", path)
-	}
-
-	content, err := os.ReadFile(absPath)
+	content, err := a.LoadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read board file: %w", err)
+		return nil, err
 	}
 
 	doc, err := boardpkg.Parse(path, string(content))
 	if err != nil {
 		return nil, err
-	}
-
-	if doc.DocID == "" {
-		contentWithDocID, docID, ensureErr := a.ensureDocID(string(content))
-		if ensureErr == nil && docID != "" {
-			doc.DocID = docID
-			doc.RawContent = contentWithDocID
-			_ = os.WriteFile(absPath, []byte(contentWithDocID), 0o644)
-		}
 	}
 
 	return doc, nil
@@ -685,7 +674,18 @@ func (a *App) ProcessContextRequests() (contextcore.ProcessSummary, error) {
 		}
 		a.contextProcessor = processor
 	}
-	return a.contextProcessor.ProcessPending(20)
+	legacy, err := a.contextProcessor.ProcessPending(20)
+	if err != nil {
+		return legacy, err
+	}
+	service, err := ephyrecordsv2.New(a.dataDir, a.ephyV2ConfigRoot)
+	if err != nil {
+		return legacy, err
+	}
+	current, err := service.ProcessPending(20)
+	legacy.Processed += current.Processed + current.Recovered
+	legacy.Failed += current.Failed
+	return legacy, err
 }
 
 // shutdown is invoked by Wails when the app is closing.
@@ -916,7 +916,12 @@ func (a *App) initializeGitRepository() error {
 		worktree, err := vcs.Repository().Worktree()
 		if err == nil {
 			// Add all files
-			worktree.Add(".")
+			if _, err := worktree.Add("."); err != nil {
+				return err
+			}
+			if err := vcs.CheckAutomaticCommit(".gitignore"); err != nil {
+				return err
+			}
 			// Make initial commit
 			_, err = worktree.Commit("Initial commit", &git.CommitOptions{
 				Author: &object.Signature{
@@ -950,6 +955,14 @@ func (a *App) GetFileList() []FileItem {
 		return []FileItem{}
 	}
 
+	service, serviceErr := ephyrecordsv2.New(a.dataDir, a.ephyV2ConfigRoot)
+	if serviceErr != nil {
+		return []FileItem{}
+	}
+	var managed map[string]bool
+	if err := canonical.WithWriter(a.dataDir, func(w *canonical.Writer) error { var err error; managed, err = canonical.ManagedPaths(w); return err }); err != nil {
+		return []FileItem{}
+	}
 	err := filepath.Walk(contentDir, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			a.logError(fmt.Sprintf("Error walking path %s: %v", p, err))
@@ -975,6 +988,21 @@ func (a *App) GetFileList() []FileItem {
 			if isMarkdown {
 				if b, err := os.ReadFile(p); err == nil {
 					content := string(b)
+					if canonical.IsRecordPath(rel, b, managed) {
+						authorized := false
+						err := canonical.WithWriter(a.dataDir, func(w *canonical.Writer) error {
+							handled, text, err := service.LoadHuman(w, rel)
+							if err == nil && handled {
+								authorized = true
+								content = text
+							}
+							return err
+						})
+						if err != nil || !authorized {
+							return nil
+						}
+					}
+
 					title = fm.ExtractTitle(content, title)
 					searchText = content
 				} else {
@@ -2068,27 +2096,52 @@ func (a *App) LoadFile(path string) (string, error) {
 		return "", nil
 	}
 
-	content, err := os.ReadFile(absPath)
-	if err != nil {
-		a.logError("file read failed")
-		return "", fmt.Errorf("failed to read file: %v", err)
-	}
-
-	contentStr := string(content)
-
-	// Ensure doc_id exists (lazy assignment)
-	contentWithDocID, docID, err := a.ensureDocID(contentStr)
-	if err != nil {
-		a.logError(fmt.Sprintf("Failed to ensure doc_id for %s: %v", path, err))
-		// Continue with original content if doc_id generation fails
-	} else if docID != "" && contentWithDocID != contentStr {
-		// Save the updated content with doc_id if it was added
-		if err := os.WriteFile(absPath, []byte(contentWithDocID), 0644); err != nil {
-			a.logError(fmt.Sprintf("Failed to save file with doc_id: %v", err))
-		} else {
-			contentStr = contentWithDocID
-			a.logInfo(fmt.Sprintf("Assigned doc_id to file: %s -> %s", path, docID))
+	var contentStr string
+	err := canonical.WithWriter(a.dataDir, func(w *canonical.Writer) error {
+		relative, err := a.canonicalContentRelative(absPath)
+		if err != nil {
+			return err
 		}
+		service, err := ephyrecordsv2.New(a.dataDir, a.ephyV2ConfigRoot)
+		if err != nil {
+			return err
+		}
+		handled, text, err := service.LoadHuman(w, relative)
+		if handled || err != nil {
+			contentStr = text
+			return err
+		}
+		data, err := w.Read(relative)
+		if err != nil {
+			return err
+		}
+		paths, err := canonical.ManagedPaths(w)
+		if err != nil {
+			return err
+		}
+		if canonical.IsRecordPath(relative, data, paths) {
+			return fmt.Errorf("unmanaged_v2_record")
+		}
+		contentStr = string(data)
+		normalized, _, err := a.ensureDocID(contentStr)
+		if err != nil {
+			return err
+		}
+		if normalized != contentStr {
+			expected := canonical.Hash(data)
+			mode, err := w.Permissions(relative)
+			if err != nil {
+				return err
+			}
+			if err := w.WriteCAS(relative, &expected, []byte(normalized), mode); err != nil {
+				return err
+			}
+			contentStr = normalized
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
 	}
 
 	a.logInfo(fmt.Sprintf("Successfully loaded file (content length: %d)", len(contentStr)))
@@ -2096,146 +2149,106 @@ func (a *App) LoadFile(path string) (string, error) {
 }
 
 // SaveFile saves content to a markdown file
-func (a *App) SaveFile(path, content string) error {
-	a.logInfo(fmt.Sprintf("SaveFile called for path: %s, content length: %d", path, len(content)))
+// saveFileBeforeReplace is a fault-injection seam at the atomic commit boundary．
+var saveFileBeforeReplace func(string) error
 
+func (a *App) SaveFile(path, content string) error {
 	absPath, ok := a.resolveContentPath(path)
 	if !ok {
-		a.logError(fmt.Sprintf("SaveFile: invalid path: %s", path))
 		return fmt.Errorf("invalid path: %s", path)
 	}
-
-	// Calculate hash before saving (but don't read file content here to avoid conflicts)
-	var oldHash string
-	if existingContent, err := os.ReadFile(absPath); err == nil {
-		oldHash = gitvcs.CalculateHash(string(existingContent))
-		a.logInfo(fmt.Sprintf("SaveFile: existing file hash: %s (length: %d)", oldHash[:8], len(existingContent)))
-	} else {
-		a.logInfo(fmt.Sprintf("SaveFile: file does not exist yet or cannot be read"))
-	}
-
-	// Ensure doc_id exists (lazy assignment) - do this first
-	contentWithDocID, docID, err := a.ensureDocID(content)
+	relative, err := a.canonicalContentRelative(absPath)
 	if err != nil {
-		a.logError(fmt.Sprintf("Failed to ensure doc_id for %s: %v", path, err))
-		// Continue with original content if doc_id generation fails
-		contentWithDocID = content
-	} else {
-		if docID != "" {
-			a.logInfo(fmt.Sprintf("File %s has doc_id: %s", path, docID))
+		return err
+	}
+	var oldHash, newHash string
+	managed := false
+	err = canonical.WithWriter(a.dataDir, func(w *canonical.Writer) error {
+		w.BeforeReplace = saveFileBeforeReplace
+		service, err := ephyrecordsv2.New(a.dataDir, a.ephyV2ConfigRoot)
+		if err != nil {
+			return err
 		}
-	}
-
-	a.logInfo(fmt.Sprintf("SaveFile: after ensureDocID, content length: %d (original: %d)", len(contentWithDocID), len(content)))
-
-	// Parse and format frontmatter after doc_id assignment
-	frontMatter, markdownBody := fm.ParseFrontMatter(contentWithDocID)
-	if frontMatter != nil {
-		// Format frontmatter with normalized tags
-		formattedFM := fm.FormatFrontMatter(frontMatter)
-		content = formattedFM + markdownBody
-		a.logInfo(fmt.Sprintf("SaveFile: formatted frontmatter for %s (title: %q, tags: %q, doc_id: %q, body length: %d)", path, frontMatter.Title, frontMatter.Tags, frontMatter.DocID, len(markdownBody)))
-	} else {
-		// No frontmatter, use content as-is
-		content = contentWithDocID
-		a.logInfo(fmt.Sprintf("SaveFile: no frontmatter for %s, using content as-is (length: %d)", path, len(content)))
-	}
-
-	// Detect conflict before saving
-	// IMPORTANT: Use the content from frontend (with user edits) as LocalContent
-	// We need to temporarily write it to disk so DetectConflict can read it
-	if a.vcs != nil {
-		relPath, err := filepath.Rel(a.dataDir, absPath)
-		if err == nil {
-			// Temporarily write the frontend content to disk for conflict detection
-			// This ensures DetectConflict uses the user's edited content, not the old file content
-			tempContent := content
-			if err := os.WriteFile(absPath, []byte(tempContent), 0644); err != nil {
-				a.logError(fmt.Sprintf("Failed to write temp content for conflict detection: %v", err))
-			} else {
-				// Now detect conflict - it will use the content we just wrote
-				conflict, err := gitvcs.DetectConflict(a.vcs, a.dataDir, relPath)
-				if err != nil {
-					a.logError(fmt.Sprintf("Failed to detect conflict: %v", err))
-				} else if conflict != nil {
-					// Create backup before handling conflict
-					if err := a.createBackup(path, content); err != nil {
-						a.logError(fmt.Sprintf("Failed to create backup: %v", err))
-					}
-
-					// Try auto-merge for auto-resolvable or warning conflicts
-					// Use the frontend content as LocalContent (user's current edits)
-					if conflict.Severity == gitvcs.ConflictAutoResolvable || conflict.Severity == gitvcs.ConflictWarning {
-						// Use content (from frontend) as LocalContent instead of conflict.LocalContent
-						merged, severity, err := gitvcs.AutoMergeMarkdown(conflict.BaseContent, content, conflict.RemoteContent)
-						if err == nil && severity != gitvcs.ConflictCritical {
-							// Auto-merge successful - use merged content
-							content = merged
-							runtime.EventsEmit(a.ctx, "auto-merge-success", map[string]interface{}{
-								"path":        path,
-								"merged_hash": gitvcs.CalculateHash(merged),
-							})
-							a.logInfo(fmt.Sprintf("Auto-merged conflict for file: %s (using frontend content as LocalContent)", path))
-						} else {
-							// Auto-merge failed or still has conflicts - notify user
-							runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
-							if conflict.Severity == gitvcs.ConflictCritical {
-								return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
-							}
-						}
-					} else {
-						// Critical conflict - require manual resolution
+		handled, err := service.SaveHuman(w, relative, []byte(content))
+		if handled || err != nil {
+			managed = handled
+			return err
+		}
+		paths, err := canonical.ManagedPaths(w)
+		if err != nil {
+			return err
+		}
+		if canonical.IsRecordPath(relative, []byte(content), paths) {
+			return fmt.Errorf("unmanaged_v2_record")
+		}
+		expected, err := w.CurrentHash(relative)
+		if err != nil {
+			return err
+		}
+		if expected != nil {
+			oldHash = *expected
+		}
+		normalized, _, err := a.ensureDocID(content)
+		if err != nil {
+			return err
+		}
+		frontMatter, body := fm.ParseFrontMatter(normalized)
+		if frontMatter != nil {
+			content = fm.FormatFrontMatter(frontMatter) + body
+		} else {
+			content = normalized
+		}
+		if a.vcs != nil {
+			conflict, err := gitvcs.DetectConflictWithContent(a.vcs, a.dataDir, filepath.ToSlash(relative), content)
+			if err != nil {
+				return err
+			}
+			if conflict != nil {
+				if conflict.Severity == gitvcs.ConflictCritical {
+					if a.ctx != nil {
 						runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
-						return fmt.Errorf("conflict detected: file has been modified elsewhere and requires manual resolution")
 					}
+					return fmt.Errorf("conflict detected: existing content preserved")
 				}
+				merged, severity, err := gitvcs.AutoMergeMarkdown(conflict.BaseContent, content, conflict.RemoteContent)
+				if err != nil || severity == gitvcs.ConflictCritical {
+					if a.ctx != nil {
+						runtime.EventsEmit(a.ctx, "conflict-detected", conflict)
+					}
+					return fmt.Errorf("conflict detected: existing content preserved")
+				}
+				content = merged
 			}
 		}
+		mode := os.FileMode(0644)
+		if expected != nil {
+			mode, err = w.Permissions(relative)
+			if err != nil {
+				return err
+			}
+		}
+		if err = w.WriteCAS(relative, expected, []byte(content), mode); err != nil {
+			return err
+		}
+		newHash = canonical.Hash([]byte(content))
+		return nil
+	})
+	if err != nil {
+		return err
 	}
-
-	// Save file
-	a.logInfo(fmt.Sprintf("SaveFile: writing file %s (content length: %d)", absPath, len(content)))
-	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
-		a.logError(fmt.Sprintf("SaveFile: failed to write file %s: %v", absPath, err))
-		return fmt.Errorf("failed to write file: %v", err)
-	}
-	a.logInfo(fmt.Sprintf("SaveFile: successfully wrote file %s", absPath))
-
-	// Calculate new hash
-	newHash := gitvcs.CalculateHash(content)
-	oldHashShort := ""
-	newHashShort := ""
-	if len(oldHash) >= 8 {
-		oldHashShort = oldHash[:8]
-	}
-	if len(newHash) >= 8 {
-		newHashShort = newHash[:8]
-	}
-	a.logInfo(fmt.Sprintf("SaveFile: oldHash=%s, newHash=%s", oldHashShort, newHashShort))
-
-	// Commit to Git if content changed
-	if a.vcs != nil && oldHash != newHash {
-		// Get relative path from dataDir
-		relPath, err := filepath.Rel(a.dataDir, absPath)
-		if err == nil {
-			commitMessage := fmt.Sprintf("Update: %s", path)
-			if err := a.vcs.CommitFile(relPath, commitMessage); err != nil {
+	if !managed {
+		if a.vcs != nil && oldHash != newHash {
+			if err := a.vcs.CommitFile(filepath.ToSlash(relative), fmt.Sprintf("Update: %s", path)); err != nil {
 				a.logError(fmt.Sprintf("Failed to commit file to git: %v", err))
-				// Don't fail save if git commit fails
 			}
 		}
+		if err := a.BuildSite(); err != nil {
+			a.logError(fmt.Sprintf("Failed to build site after save: %v", err))
+		}
 	}
-
-	// Build the site after saving
-	if err := a.BuildSite(); err != nil {
-		a.logError(fmt.Sprintf("Failed to build site after save: %v", err))
-	}
-
-	// Emit file changed event
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "file-changed", path)
 	}
-
 	return nil
 }
 
@@ -3450,12 +3463,27 @@ func (a *App) resolvePreviewImageURL(imagePath, currentPath string) (string, boo
 
 // BuildSite builds the static site
 func (a *App) BuildSite() error {
-	return a.build(a.root)
+	if strings.TrimSpace(a.dataDir) == "" {
+		return fmt.Errorf("data directory is not initialized")
+	}
+	return a.build(a.dataDir)
 }
 
 // InitProject initializes a new Karte project
 func (a *App) InitProject() error {
 	return a.initProject(a.root)
+}
+
+func (a *App) canonicalContentRelative(absPath string) (string, error) {
+	root, err := filepath.EvalSymlinks(a.dataDir)
+	if err != nil {
+		return "", err
+	}
+	relative, err := filepath.Rel(root, absPath)
+	if err != nil || !filepath.IsLocal(relative) {
+		return "", fmt.Errorf("invalid content path")
+	}
+	return relative, nil
 }
 
 // resolveContentPath safely resolves a content path
@@ -3548,8 +3576,15 @@ func (a *App) build(root string) error {
 	if err != nil {
 		return err
 	}
-	root = absRoot
+	root, err = filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		return err
+	}
 
+	var managed map[string]bool
+	if err := canonical.WithWriter(root, func(w *canonical.Writer) error { var err error; managed, err = canonical.ManagedPaths(w); return err }); err != nil {
+		return err
+	}
 	pub := filepath.Join(root, "public")
 	tmp := filepath.Join(root, ".mdsys", "_public_tmp")
 	_ = os.RemoveAll(tmp)
@@ -3567,7 +3602,7 @@ func (a *App) build(root string) error {
 	idx := Index{}
 
 	contentDir := filepath.Join(root, "content")
-	fs.WalkDir(os.DirFS(contentDir), ".", func(p string, d fs.DirEntry, err error) error {
+	walkErr := fs.WalkDir(os.DirFS(contentDir), ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -3578,6 +3613,13 @@ func (a *App) build(root string) error {
 			return nil
 		}
 		src := filepath.Join(contentDir, p)
+		raw, readErr := os.ReadFile(src)
+		if readErr != nil {
+			return readErr
+		}
+		if canonical.IsRecordPath(filepath.Join("content", p), raw, managed) {
+			return nil
+		}
 		dst := filepath.Join(tmp, p[:len(p)-3]+".html")
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
@@ -3593,6 +3635,9 @@ func (a *App) build(root string) error {
 		idx.Items = append(idx.Items, IndexEntry{ID: id, Path: id})
 		return nil
 	})
+	if walkErr != nil {
+		return walkErr
+	}
 	b, _ := json.MarshalIndent(idx, "", "  ")
 	_ = os.WriteFile(filepath.Join(root, ".mdsys", "index.json"), b, 0o644)
 	// ここで原子的入れ替え（旧publicを消してからrename）
