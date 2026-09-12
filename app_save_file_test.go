@@ -81,13 +81,17 @@ func TestSaveFileNormalSaveUsesAtomicReplacement(t *testing.T) {
 		t.Fatalf("ordinary editor save unexpectedly reported a conflict: %#v", conflict)
 	}
 
+	before, err := os.Stat(absolutePath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	assertSaveFileAtomicReplace(t, absolutePath, base, local)
 	if err := app.SaveFile(relativePath, local); err != nil {
 		t.Fatal(err)
 	}
 	assertSaveFileContentsAndNoTemp(t, absolutePath, local)
 	info, err := os.Stat(absolutePath)
-	if err != nil || info.Mode().Perm() != 0640 {
+	if err != nil || info.Mode().Perm() != before.Mode().Perm() {
 		t.Fatal("atomic save widened existing file permissions")
 	}
 }

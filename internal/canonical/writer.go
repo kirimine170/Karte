@@ -144,6 +144,10 @@ func (w *Writer) WriteCAS(name string, expected *string, data []byte, perm fs.Fi
 		return err
 	}
 	defer w.root.Remove(temp)
+	if err = preparePermissions(w.root, temp, name, perm); err != nil {
+		f.Close()
+		return err
+	}
 	if _, err = f.Write(data); err != nil {
 		f.Close()
 		return err

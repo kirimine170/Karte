@@ -139,7 +139,7 @@ func (s *Service) loadRegistrations() (registrations, error) {
 	if e != nil {
 		return r, e
 	}
-	if !st.Mode().IsRegular() || st.Mode().Perm()&0077 != 0 {
+	if !st.Mode().IsRegular() || canonical.CheckPrivateDirectory(s.ConfigRoot) != nil || canonical.CheckPrivateFile(filepath.Join(s.ConfigRoot, "registrations.json")) != nil {
 		return r, fmt.Errorf("unsafe_credentials")
 	}
 	data, e := root.ReadFile("registrations.json")
@@ -185,7 +185,7 @@ func (s *Service) Configure(g Grant, key []byte) error {
 		if e := os.MkdirAll(s.ConfigRoot, 0700); e != nil {
 			return e
 		}
-		if e := os.Chmod(s.ConfigRoot, 0700); e != nil {
+		if e := canonical.SecureDirectory(s.ConfigRoot); e != nil {
 			return e
 		}
 		all.Scopes[g.ScopeID] = registration{Grant: g, Key: hex.EncodeToString(key)}

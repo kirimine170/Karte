@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"karte/internal/canonical"
 	"karte/internal/ephyrecordsv2"
 	"os"
 	"path/filepath"
@@ -60,7 +61,7 @@ func run(args []string) error {
 		var key []byte
 		if raw, e := os.ReadFile(path); e == nil {
 			st, e := os.Lstat(path)
-			if e != nil || !st.Mode().IsRegular() || st.Mode().Perm()&0077 != 0 {
+			if e != nil || !st.Mode().IsRegular() || canonical.CheckPrivateFile(path) != nil || canonical.CheckPrivateDirectory(filepath.Dir(path)) != nil {
 				return fmt.Errorf("unsafe_producer_credential")
 			}
 			credential, e := ephyrecordsv2.DecodeProducerCredential(raw)
@@ -79,24 +80,14 @@ func run(args []string) error {
 			if e = os.MkdirAll(filepath.Dir(path), 0700); e != nil {
 				return e
 			}
-			file, e := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-			if e != nil {
+			if e = canonical.SecureDirectory(filepath.Dir(path)); e != nil {
 				return e
 			}
 			raw, e := json.Marshal(ephyrecordsv2.ProducerCredential{ProducerID: g.ProducerID, KeyID: g.KeyID, Key: hex.EncodeToString(key)})
 			if e != nil {
-				file.Close()
 				return e
 			}
-			if _, e = file.Write(raw); e != nil {
-				file.Close()
-				return e
-			}
-			if e = file.Sync(); e != nil {
-				file.Close()
-				return e
-			}
-			if e = file.Close(); e != nil {
+			if e = canonical.WithWriter(filepath.Dir(path), func(w *canonical.Writer) error { return w.WriteCAS(filepath.Base(path), nil, raw, 0600) }); e != nil {
 				return e
 			}
 		} else {

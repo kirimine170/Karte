@@ -28,7 +28,7 @@ go build -o /absolute/private/tools/karte-ephy-control ./cmd/karte-ephy-control
   configure
 ```
 
-`data-root`は事前に作成する．`config-root`と producer credential は data root・Git work tree の外に置く．省略時の registration directory は OS の user config directory 配下の `Karte/ephy-v2/<data-root-hash>`である．producer credential は初回だけランダムな 32 bytes の鍵を生成し，0700 directory／0600 file へ保存する．鍵を stdout，proposal，STATUS，共有 fixture に出さない．同じ OS ユーザー全体を強い隔離境界とはみなさない．Runtime の model tool からこれらの設定・鍵へ到達させないことが有効化の前提である．
+`data-root`は事前に作成する．`config-root`と producer credential は data root・Git work tree の外に置く．省略時の registration directory は OS の user config directory 配下の `Karte/ephy-v2/<data-root-hash>`である．producer credential は初回だけランダムな 32 bytes の鍵を生成し，macOS／Linuxでは0700 directory／0600 file，Windowsでは利用者本人だけに許可するowner／ACLで保存する．置換時も既存ACLを保持し，過剰な権限の資格情報を拒否する．鍵を stdout，proposal，STATUS，共有 fixture に出さない．同じ OS ユーザー全体を強い隔離境界とはみなさない．Runtime の model tool からこれらの設定・鍵へ到達させないことが有効化の前提である．
 
 grant の形は `schemas/karte-ephy/v2/grant.schema.json`と `fixtures/grant.json`を参照する．fixture は合成 scope の例であり，実保存の許可ではない．次を human 側で明示する．
 

@@ -21,7 +21,11 @@ func TestWriteCASPreservesOnFaultAndExternalEdit(t *testing.T) {
 			if e := os.WriteFile(path, original, 0640); e != nil {
 				t.Fatal(e)
 			}
-			e := WithWriter(root, func(w *Writer) error {
+			before, e := os.Stat(path)
+			if e != nil {
+				t.Fatal(e)
+			}
+			e = WithWriter(root, func(w *Writer) error {
 				h := Hash(original)
 				w.BeforeReplace = func(string) error {
 					if external {
@@ -46,7 +50,7 @@ func TestWriteCASPreservesOnFaultAndExternalEdit(t *testing.T) {
 				t.Fatalf("content not preserved: %q %v", got, e)
 			}
 			st, e := os.Stat(path)
-			if e != nil || st.Mode().Perm() != 0640 {
+			if e != nil || st.Mode().Perm() != before.Mode().Perm() {
 				t.Fatal("mode changed on failure")
 			}
 			temps, _ := filepath.Glob(filepath.Join(root, ".karte-write-*"))
