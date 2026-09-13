@@ -161,8 +161,8 @@ export class App {
         }
 
         try {
-            const files = await this.api.GetFileList();
-            useDocStore.getState().setFiles(files);
+            await this.refreshFileList();
+            const files = useDocStore.getState().files;
 
             if (files.length > 0) {
                 await this.loadFileByPath(files[0].path);
@@ -173,11 +173,7 @@ export class App {
     }
 
     private async refreshFileList(): Promise<void> {
-        if (!this.api) {
-            return;
-        }
-        const files = await this.api.GetFileList();
-        useDocStore.getState().setFiles(files);
+        await this.components.sidebar?.refreshFileList();
     }
 
     private async loadFileByPath(path: string): Promise<void> {
