@@ -142,7 +142,7 @@ describe('Sidebar', () => {
         expect(document.getElementById('fileListStatus')?.dataset.state).toBe('error');
         expect(document.getElementById('fileListStatus')?.hidden).toBe(false);
 
-        mockApi.GetFileList.mockResolvedValueOnce([]);
+        mockApi.GetFileList.mockResolvedValueOnce(null); // Empty native Go slice．
         button.click();
         await vi.waitFor(() => expect(useDocStore.getState().files).toEqual([]));
         expect(document.getElementById('fileListStatus')?.textContent).toBe('一覧を更新しました（全0件）');

@@ -117,7 +117,8 @@ export class Sidebar extends BaseComponent {
         if (this.announceRefresh) this.setRefreshStatus('一覧を更新中．．．', 'loading');
         try {
             eventLogger.log('Sidebar', 'load-file-list-start');
-            const files = await this.api.GetFileList();
+            // Wails encodes an empty Go slice as null in existing Karte builds．
+            const files = (await this.api.GetFileList()) ?? [];
             if (revision !== this.refreshRevision) return;
             useDocStore.getState().setFiles(files);
             eventLogger.log('Sidebar', 'load-file-list-success', { count: files.length });
