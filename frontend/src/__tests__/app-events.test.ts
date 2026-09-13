@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../app';
+import { Sidebar } from '../components/sidebar';
 import { useDocStore } from '../stores/doc-store';
 
 describe('App file events', () => {
@@ -15,6 +16,7 @@ describe('App file events', () => {
         app.api = {
             GetFileList: vi.fn().mockResolvedValue(files),
         };
+        app.components.sidebar = new Sidebar(app.api);
         app.runtime = {
             EventsOn: vi.fn((name: string, handler: (...args: unknown[]) => void) => {
                 handlers.set(name, handler);

@@ -37,9 +37,14 @@
   </div>
   <div class="main-container" id="mainContainer">
       <aside class="side">
+        <div class="file-list-toolbar">
+          <span>ファイル</span>
+          <button class="btn" id="fileListRefreshBtn" type="button" aria-controls="tree" title="追加・削除されたファイルを一覧に反映">一覧を更新</button>
+        </div>
         <div class="search">
           <input id="q" placeholder="ファイル検索 (content/)" />
         </div>
+        <p id="fileListStatus" class="file-list-status" role="status" aria-live="polite" aria-atomic="true" hidden></p>
         <div class="tree" id="tree"></div>
       </aside>
       <div class="content-area" id="contentArea">

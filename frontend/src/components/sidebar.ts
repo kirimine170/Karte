@@ -11,10 +11,14 @@ import { convertTimestampsToLinks } from '../utils/preview-audio';
 export class Sidebar extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
     private api: WailsAppAPI;
+    private refreshRevision = 0;
+    private announceRefresh = false;
 
     // DOM要素
     private searchInput: HTMLInputElement | null = null;
     private tree: HTMLElement | null = null;
+    private refreshButton: HTMLButtonElement | null = null;
+    private refreshStatus: HTMLElement | null = null;
 
     constructor(api: WailsAppAPI, parent?: HTMLElement) {
         super(parent);
@@ -34,6 +38,8 @@ export class Sidebar extends BaseComponent {
         // DOM要素の取得
         this.searchInput = document.getElementById('q') as HTMLInputElement;
         this.tree = document.getElementById('tree');
+        this.refreshButton = document.getElementById('fileListRefreshBtn') as HTMLButtonElement | null;
+        this.refreshStatus = document.getElementById('fileListStatus');
 
         // イベントリスナーの設定
         this.setupEventListeners();
@@ -49,11 +55,25 @@ export class Sidebar extends BaseComponent {
         }
 
         // ファイルリストの読み込み
-        this.loadFileList();
+        void this.refreshFileList();
     }
 
     private setupEventListeners(): void {
         const docStore = useDocStore.getState();
+
+        if (this.refreshButton) {
+            this.unsubscribe.push(this.addEventListener(this.refreshButton, 'click', () => {
+                void this.refreshFileList(true);
+            }));
+        }
+        if (this.tree) {
+            this.unsubscribe.push(this.addEventListener(this.tree, 'click', (event) => {
+                const item = event.target instanceof Element ? event.target.closest<HTMLElement>('.item[data-path]') : null;
+                if (item?.dataset.path && this.tree?.contains(item)) {
+                    void this.handleFileSelect(item.dataset.path);
+                }
+            }));
+        }
 
         // 検索入力
         if (this.searchInput) {
@@ -89,17 +109,49 @@ export class Sidebar extends BaseComponent {
         );
     }
 
-    private async loadFileList(): Promise<void> {
+    // Shared by the explicit button and application events．Only the list changes．
+    async refreshFileList(announce = false): Promise<void> {
+        const revision = ++this.refreshRevision;
+        this.announceRefresh ||= announce;
+        this.setRefreshing(true);
+        if (this.announceRefresh) this.setRefreshStatus('一覧を更新中．．．', 'loading');
         try {
             eventLogger.log('Sidebar', 'load-file-list-start');
-            const files = await this.api.GetFileList();
+            // Wails encodes an empty Go slice as null in existing Karte builds．
+            const files = (await this.api.GetFileList()) ?? [];
+            if (revision !== this.refreshRevision) return;
             useDocStore.getState().setFiles(files);
             eventLogger.log('Sidebar', 'load-file-list-success', { count: files.length });
+            if (this.announceRefresh || this.refreshStatus?.hidden === false) {
+                this.setRefreshStatus(`一覧を更新しました（全${files.length}件）`, 'success');
+            }
         } catch (error) {
+            if (revision !== this.refreshRevision) return;
             console.error('Failed to load file list:', error);
-            eventLogger.log('Sidebar', 'load-file-list-error', { error: String(error) });
+            eventLogger.log('Sidebar', 'load-file-list-error');
+            this.setRefreshStatus('一覧を更新できませんでした．もう一度お試しください．', 'error');
             useUIStore.getState().setStatusMessage('ファイルリストの読み込みに失敗しました', 3000);
+        } finally {
+            if (revision === this.refreshRevision) {
+                this.announceRefresh = false;
+                this.setRefreshing(false);
+            }
         }
+    }
+
+    private setRefreshing(refreshing: boolean): void {
+        if (this.refreshButton) {
+            this.refreshButton.disabled = refreshing;
+            this.refreshButton.textContent = refreshing ? '更新中．．．' : '一覧を更新';
+        }
+        this.tree?.setAttribute('aria-busy', String(refreshing));
+    }
+
+    private setRefreshStatus(message: string, state: string): void {
+        if (!this.refreshStatus) return;
+        this.refreshStatus.textContent = message;
+        this.refreshStatus.dataset.state = state;
+        this.refreshStatus.hidden = false;
     }
 
     private renderFileList(files: FileItem[], query: string, currentPath: string): void {
@@ -130,13 +182,6 @@ export class Sidebar extends BaseComponent {
             // ファイル名
             const label = buildFileDisplayLabel(file);
             item.textContent = label;
-
-            // クリックイベント
-            this.unsubscribe.push(
-                this.addEventListener(item, 'click', async () => {
-                    await this.handleFileSelect(file.path);
-                })
-            );
 
             this.tree.appendChild(item);
         });
@@ -221,6 +266,7 @@ export class Sidebar extends BaseComponent {
     }
 
     destroy(): void {
+        this.refreshRevision++;
         this.unsubscribe.forEach((unsub) => unsub());
         this.unsubscribe = [];
     }
