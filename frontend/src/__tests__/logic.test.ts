@@ -6,7 +6,8 @@ import {
     buildFileDisplayLabel,
     convertMarkdownToHtml,
     filterFilesByQuery,
-    parseCsvContent
+    parseCsvContent,
+    type FileItem
 } from '../logic';
 
 describe('Markdown conversion', () => {
@@ -68,6 +69,61 @@ describe('File list helpers', () => {
 
         const filteredByPath = filterFilesByQuery(files, 'todo');
         expect(filteredByPath.map((f) => f.path)).toEqual(['content/tasks/todo.md']);
+    });
+
+    it('matches searchText in markdown content and frontmatter tags case-insensitively', () => {
+        const mdFiles: FileItem[] = [
+            {
+                path: 'content/notes/alpha.md',
+                title: 'Alpha',
+                searchText: 'tags: study, draft; Budget assumptions\n# Alpha\nQuarterly revenue 12'
+            },
+            { path: 'content/reports/q3.md', title: 'Q3', searchText: 'Quarterly revenue 12' },
+            { path: 'content/assets/chart.pdf', title: 'Chart' }
+        ];
+
+        expect(filterFilesByQuery(mdFiles, 'study').map((f) => f.path)).toEqual(['content/notes/alpha.md']);
+        expect(filterFilesByQuery(mdFiles, 'BUDGET').map((f) => f.path)).toEqual(['content/notes/alpha.md']);
+        expect(filterFilesByQuery(mdFiles, 'revenue').map((f) => f.path)).toEqual([
+            'content/notes/alpha.md',
+            'content/reports/q3.md'
+        ]);
+        expect(filterFilesByQuery(mdFiles, 'chart').map((f) => f.path)).toEqual(['content/assets/chart.pdf']);
+        expect(filterFilesByQuery(mdFiles, 'missing')).toEqual([]);
+    });
+
+    it('trims query whitespace and returns valid items in order for empty query', () => {
+        const mdFiles: FileItem[] = [
+            { path: 'content/notes/alpha.md', title: 'Alpha', searchText: 'tags: study' },
+            { path: '', title: 'Ghost', searchText: 'study' },
+            null as unknown as FileItem,
+            { path: 'content/assets/chart.pdf', title: 'Chart' }
+        ];
+
+        expect(filterFilesByQuery(mdFiles, '  STUDY  ').map((f) => f.path)).toEqual(['content/notes/alpha.md']);
+        expect(filterFilesByQuery(mdFiles, ' ').map((f) => f.path)).toEqual([
+            'content/notes/alpha.md',
+            'content/assets/chart.pdf'
+        ]);
+        expect(filterFilesByQuery(mdFiles, '').map((f) => f.path)).toEqual([
+            'content/notes/alpha.md',
+            'content/assets/chart.pdf'
+        ]);
+    });
+
+    it('ignores invalid items and non-string searchText', () => {
+        const mdFiles: FileItem[] = [
+            { path: 'content/notes/alpha.md', title: 'Alpha', searchText: 42 },
+            'not-an-object' as unknown as FileItem,
+            { path: 'content/notes/beta.md', title: 'Beta', searchText: null }
+        ];
+
+        expect(filterFilesByQuery(mdFiles, 'alpha').map((f) => f.path)).toEqual(['content/notes/alpha.md']);
+        expect(filterFilesByQuery(mdFiles, '42')).toEqual([]);
+        expect(filterFilesByQuery(mdFiles, '').map((f) => f.path)).toEqual([
+            'content/notes/alpha.md',
+            'content/notes/beta.md'
+        ]);
     });
 
     it('builds display label with fallback title', () => {
