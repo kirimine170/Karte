@@ -1,0 +1,12 @@
+# Karte generated files
+public/
+log/
+.mdsys/
+*.log
+# Build artifacts
+build/
+# OS files
+.DS_Store
+Thumbs.db
+# Backup files
+.backups/

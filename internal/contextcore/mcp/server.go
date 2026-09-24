@@ -196,7 +196,7 @@ func (s *Server) dispatch(encoder *json.Encoder, line string) error {
 						"type": "object",
 						"properties": map[string]any{
 							"query":         map[string]any{"type": "string", "description": "Text to search for in title, body, and frontmatter fields."},
-							"top_k":         map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
+							"top_k":         map[string]any{"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
 							"projects":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict the search to these projects. Omit for all projects allowed by policy."},
 							"tags":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict the search to documents carrying at least one of these tags."},
 							"sensitivity":   map[string]any{"type": "string", "enum": []string{"public", "internal", "confidential", "restricted"}, "description": "Maximum sensitivity level to include. Defaults to the policy ceiling for the configured actor."},
@@ -298,7 +298,7 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 		params.TopK = 10
 	}
 	if params.TopK > 20 {
-		params.TopK = 50
+		params.TopK = 20
 	}
 	ceiling := params.Sensitivity
 	if ceiling == "" {
@@ -314,6 +314,10 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
 	results, diagnostics, status, err := s.service.Search(request, s.policy)
+	// Record audit event for this MCP search call
+	if status == "ok" || status == "denied" {
+		contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "search", status, len(results), "")
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -339,6 +343,10 @@ func (s *Server) read(raw json.RawMessage) (any, error) {
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
 	document, diagnostics, status, err := s.service.Read(request, s.policy)
+	// Record audit event for this MCP read call
+	if status == "ok" || status == "denied" {
+		contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "read", status, 1, "")
+	}
 	if err != nil {
 		return nil, err
 	}

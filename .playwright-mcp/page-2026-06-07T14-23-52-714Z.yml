@@ -1,0 +1,82 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]: 📄 Karte
+        - generic [ref=e6]: Editor
+        - generic [ref=e7]: "Ctrl/Cmd+S: 保存・再ビルド"
+      - generic [ref=e8]:
+        - button "📁" [ref=e9] [cursor=pointer]
+        - button "🖼️" [ref=e10] [cursor=pointer]
+        - button "📊" [ref=e11] [cursor=pointer]
+        - button "🖥️" [disabled] [ref=e12] [cursor=pointer]
+        - generic [ref=e14]:
+          - generic [ref=e15]: Theme
+          - combobox "Theme" [ref=e16]:
+            - option "Light" [selected]
+            - option "Dark"
+            - option "High Contrast"
+          - generic [ref=e17]:
+            - checkbox "Hard wrap" [ref=e18]
+            - text: Hard wrap
+          - button "保存" [ref=e19] [cursor=pointer]
+          - button "新規" [ref=e20] [cursor=pointer]
+          - button "Web Clip" [ref=e21] [cursor=pointer]
+          - button "PDFエクスポート" [ref=e22] [cursor=pointer]
+          - button "Custom CSS" [ref=e23] [cursor=pointer]
+    - generic [ref=e24]:
+      - complementary [ref=e25]:
+        - generic [ref=e26]:
+          - text: 🔍
+          - textbox "ファイル検索 (content/)" [ref=e27]
+        - generic [ref=e28]:
+          - generic [ref=e29] [cursor=pointer]: README — README.md
+          - generic [ref=e30] [cursor=pointer]: Test Document — Test.md
+          - generic [ref=e31] [cursor=pointer]: Test Board — Test.board.md
+      - generic [ref=e32]:
+        - generic [ref=e33]:
+          - generic [ref=e34]:
+            - button "エディター" [ref=e35] [cursor=pointer]
+            - button "グラフ" [ref=e36] [cursor=pointer]
+            - button "コルクボード" [ref=e37] [cursor=pointer]
+          - generic [ref=e39]:
+            - textbox [ref=e41]: "# README.md This is a mock file content for testing in browser. ## Features - Mock content - Browser testing - No backend required"
+            - generic [ref=e43]:
+              - button "🎤 録音" [ref=e44] [cursor=pointer]
+              - generic [ref=e45]: 準備完了
+        - generic [ref=e46]:
+          - heading "プレビュー" [level=3] [ref=e48]
+          - iframe [ref=e51]:
+            - generic [active] [ref=f1e1]:
+              - heading "README.md" [level=1] [ref=f1e2]
+              - text: This is a mock file content for testing in browser.
+              - heading "Features" [level=2] [ref=f1e3]
+              - text: "- Mock content"
+              - text: "- Browser testing"
+              - text: "- No backend required"
+        - generic [ref=e52]:
+          - generic [ref=e53]:
+            - generic [ref=e54]:
+              - generic [ref=e55]: 画像ギャラリー
+              - button "画面キャプチャ" [disabled] [ref=e56] [cursor=pointer]
+            - generic [ref=e57]:
+              - img "mock-1.png" [ref=e58] [cursor=pointer]
+              - img "mock-2.jpg" [ref=e59] [cursor=pointer]
+          - generic [ref=e60]:
+            - generic [ref=e62]: CSV管理
+            - generic [ref=e63]:
+              - generic "新規CSV作成" [ref=e64] [cursor=pointer]:
+                - generic [ref=e65]: +
+              - generic [ref=e66] [cursor=pointer]:
+                - generic [ref=e67]: 📊
+                - generic [ref=e68]: mock-1.csv
+              - generic [ref=e69] [cursor=pointer]:
+                - generic [ref=e70]: 📊
+                - generic [ref=e71]: mock-2.csv
+  - generic:
+    - generic:
+      - generic: マルチメディアファイルをアップロード
+      - generic:
+        - generic: "音声: WAV / MP3 / M4A"
+        - generic: "画像: JPG / PNG / GIF / WebP"
+        - generic: "CSV: CSV"
