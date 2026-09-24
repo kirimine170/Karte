@@ -1,14 +1,9 @@
 // karte-mcp is the STDIO entrypoint for the read-only Karte context MCP
 // facade. It is designed to be registered in a Codex config as:
 //
-//	{
-//	  "mcpServers": {
-//	    "karte": {
-//	      "command": "karte-mcp",
-//	      "env": { "KARTE_DATA_DIR": "/absolute/path/to/codex-dedicated-root" }
-//	    }
-//	  }
-//	}
+//	[mcpServers.karte]
+//	command = "karte-mcp"
+//	env.KARTE_DATA_DIR = "/absolute/path/to/codex-dedicated-root"
 //
 // The process refuses to start unless the environment variable points at a
 // directory that carries both .mdsys/context/v1/policy.json and
