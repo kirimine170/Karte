@@ -140,7 +140,7 @@ export function filterFilesByQuery(files: FileItem[], query: string): FileItem[]
     if (!Array.isArray(files)) {
         return [];
     }
-    const normalizedQuery = (query || '').toLowerCase();
+    const normalizedQuery = (query || '').trim().toLowerCase();
 
     return files.filter((file) => {
         if (!file || typeof file !== 'object' || !file.path) {
@@ -149,9 +149,13 @@ export function filterFilesByQuery(files: FileItem[], query: string): FileItem[]
         if (!normalizedQuery) {
             return true;
         }
-        const pathMatch = file.path.toLowerCase().includes(normalizedQuery);
-        const titleMatch = (file.title || '').toLowerCase().includes(normalizedQuery);
-        return pathMatch || titleMatch;
+        const pathValue = file.path;
+        const titleValue = typeof file.title === 'string' ? file.title : '';
+        const searchValue = typeof file.searchText === 'string' ? file.searchText : '';
+        const pathMatch = pathValue.toLowerCase().includes(normalizedQuery);
+        const titleMatch = titleValue.toLowerCase().includes(normalizedQuery);
+        const searchMatch = searchValue.toLowerCase().includes(normalizedQuery);
+        return pathMatch || titleMatch || searchMatch;
     });
 }
 
