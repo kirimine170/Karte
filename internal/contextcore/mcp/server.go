@@ -297,7 +297,7 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 	if params.TopK <= 0 {
 		params.TopK = 10
 	}
-	if params.TopK > 50 {
+	if params.TopK > 20 {
 		params.TopK = 50
 	}
 	ceiling := params.Sensitivity

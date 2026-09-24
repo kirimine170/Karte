@@ -70,6 +70,13 @@ func LoadMCPScope(dataRoot string, policy Policy) (MCPScope, error) {
 	if scope.ProtocolVersion != ProtocolVersion {
 		return MCPScope{}, fmt.Errorf("refusing to start: %s protocol_version is %q", mcpScopeFilename, scope.ProtocolVersion)
 	}
+	// Validate that the scope specifies exactly search and read capabilities
+	if len(scope.Capabilities) != 2 {
+		return MCPScope{}, fmt.Errorf("refusing to start: %s capabilities must be exactly [search read], got %v", mcpScopeFilename, scope.Capabilities)
+	}
+	if scope.Capabilities[0] != string(CapabilitySearch) || scope.Capabilities[1] != string(CapabilityRead) {
+		return MCPScope{}, fmt.Errorf("refusing to start: %s capabilities must be exactly [search read], got %v", mcpScopeFilename, scope.Capabilities)
+	}
 	actor, ok := policy.Actors[scope.Actor]
 	if !ok {
 		return MCPScope{}, fmt.Errorf("refusing to start: %s names actor %q which is not present in policy.json", mcpScopeFilename, scope.Actor)
