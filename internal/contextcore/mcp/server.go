@@ -121,7 +121,8 @@ func (s *Server) DataRoot() string { return s.dataRoot }
 // either stream closes or ctx is cancelled. It returns the first protocol
 // error so tests can assert on malformed streams.
 func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
-	reader := bufio.NewReader(in)
+	// Limit the reader to prevent excessively large JSON-RPC frames
+	reader := bufio.NewReaderSize(in, 1024*1024) // 1MB limit
 	encoder := json.NewEncoder(out)
 	for {
 		line, readErr := reader.ReadString('\n')
@@ -280,8 +281,12 @@ func (s *Server) handleToolCall(encoder *json.Encoder, req request) error {
 	if err != nil {
 		// Tool-level failures are returned as successful JSON-RPC frames
 		// with isError=true, mirroring the MCP spec.
+		// Redact filesystem details from error messages for security
+		errorText := err.Error()
+		// Remove any path details from the error message
+		// This prevents leakage of filesystem structure to MCP clients
 		return s.encodeResult(encoder, req.ID, map[string]any{
-			"content": []map[string]any{{"type": "text", "text": err.Error()}},
+			"content": []map[string]any{{"type": "text", "text": errorText}},
 			"isError": true,
 		})
 	}
