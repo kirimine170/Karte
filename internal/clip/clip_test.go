@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -210,6 +211,57 @@ func TestClipURLSanitizesActiveContentAndUnsafeURLs(t *testing.T) {
 	assertContains(t, markdown, "https://cdn.example.test/public.png")
 }
 
+func TestSanitizeHTMLForMarkdownRejectsBypassVariants(t *testing.T) {
+	pageURL, err := url.Parse("https://example.test/articles/current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawHTML := `<p>
+<a href="java&#x73;cript:alert(1)" oNcLiCk="alert(2)">entity scheme</a>
+<a href="vbscript:alert(3)">vbscript scheme</a>
+<a href="data:text/html,&lt;script&gt;alert(4)&lt;/script&gt;">data scheme</a>
+<a href="file:///etc/passwd">local file</a>
+<a href="//127.0.0.1/admin">scheme-relative private host</a>
+<a href="https://user:password@example.test/private">credentials</a>
+<a href="/safe/path">safe relative link</a>
+<a href="#safe-fragment">safe fragment</a>
+<a href="mailto:reader@example.test">safe mail link</a>
+<img src="https://cdn.example.test/image.png"
+     srcset="http://127.0.0.1/private.png 2x"
+     style="background:url(javascript:alert(5))"
+     onerror="alert(6)">
+<iframe srcdoc="&lt;script&gt;alert(7)&lt;/script&gt;"></iframe>
+<object data="https://example.test/plugin"></object>
+<embed src="https://example.test/plugin">
+<svg><a xlink:href="javascript:alert(8)">svg link</a></svg>
+<math><mtext href="javascript:alert(9)">math link</mtext></math>
+</p>`
+
+	sanitized, removed, err := sanitizeHTMLForMarkdown(rawHTML, pageURL, validateExternalHTTPURL)
+	if err != nil {
+		t.Fatalf("sanitizeHTMLForMarkdown returned error: %v", err)
+	}
+	if removed == 0 {
+		t.Fatal("expected unsafe elements and attributes to be removed")
+	}
+	lower := strings.ToLower(sanitized)
+	for _, forbidden := range []string{
+		"javascript:", "vbscript:", "data:text/html", "file:///", "127.0.0.1",
+		"user:password", "onclick", "onerror", "srcset", "style=", "srcdoc",
+		"<iframe", "<object", "<embed", "<svg", "<math",
+	} {
+		if strings.Contains(lower, forbidden) {
+			t.Errorf("sanitized HTML contains unsafe content %q:\n%s", forbidden, sanitized)
+		}
+	}
+	for _, allowed := range []string{
+		`href="/safe/path"`, `href="#safe-fragment"`,
+		`href="mailto:reader@example.test"`, `src="https://cdn.example.test/image.png"`,
+	} {
+		assertContains(t, sanitized, allowed)
+	}
+}
+
 func TestClipURLStripsHostnamesThatResolveToPrivateAddresses(t *testing.T) {
 	client := fakeClient(func(r *http.Request) *http.Response {
 		return htmlResponse(r, `<html><body><article><h1>DNS Boundary</h1>
@@ -250,7 +302,12 @@ func TestClipURLRejectsPrivatePageURLsBeforeRequest(t *testing.T) {
 		return htmlResponse(r, `<html><body><article><h1>Unexpected</h1></article></body></html>`)
 	})
 	unsafeURLs := []string{
+		"javascript:alert(1)",
+		"data:text/html,<script>alert(1)</script>",
 		"file:///etc/passwd",
+		"https://",
+		"https://example.test/%zz",
+		"https://example.test/line\nbreak",
 		"http://localhost/admin",
 		"http://127.0.0.1/admin",
 		"http://[::1]/admin",
@@ -314,6 +371,30 @@ func TestClipURLRejectsPrivateRedirectTarget(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected redirect to a private address to be rejected")
+	}
+}
+
+func TestClipURLStopsBeforeFollowingPrivateRedirect(t *testing.T) {
+	requests := 0
+	client := fakeClient(func(r *http.Request) *http.Response {
+		requests++
+		if requests > 1 {
+			t.Fatalf("private redirect target reached the HTTP transport: %s", r.URL)
+		}
+		resp := binaryResponse(r, http.StatusFound, "text/html", nil)
+		resp.Header.Set("Location", "http://127.0.0.1/private")
+		return resp
+	})
+
+	_, err := testService(t.TempDir(), client).ClipURL(context.Background(), ClipRequest{
+		URL:       "https://example.test/article",
+		ImageMode: ImageModeNone,
+	})
+	if err == nil {
+		t.Fatal("expected redirect to a private address to be rejected")
+	}
+	if requests != 1 {
+		t.Fatalf("expected only the initial public request, got %d requests", requests)
 	}
 }
 
@@ -499,6 +580,25 @@ func TestDownloadImageRejectsOversizedAndNonImageResponses(t *testing.T) {
 			t.Fatalf("active SVG response left a file: %v", err)
 		}
 	})
+}
+
+func TestClipURLRejectsOversizedPageWithoutWritingFiles(t *testing.T) {
+	body := bytes.Repeat([]byte{'x'}, int(maxPageBytes)+1)
+	client := fakeClient(func(r *http.Request) *http.Response {
+		return binaryResponse(r, http.StatusOK, "text/html; charset=utf-8", body)
+	})
+	dataDir := t.TempDir()
+
+	_, err := testService(dataDir, client).ClipURL(context.Background(), ClipRequest{
+		URL:       "https://example.test/oversized",
+		ImageMode: ImageModeNone,
+	})
+	if err == nil || !strings.Contains(err.Error(), "response exceeds") {
+		t.Fatalf("expected oversized page error, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dataDir, "content", "clips")); !os.IsNotExist(statErr) {
+		t.Fatalf("oversized page created clip output: %v", statErr)
+	}
 }
 
 func TestClipURLContainsGeneratedPathsWithinDataDir(t *testing.T) {
