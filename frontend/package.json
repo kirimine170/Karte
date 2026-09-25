@@ -21,7 +21,7 @@
     "@playwright/test": "^1.63.0",
     "@testing-library/dom": "^10.4.2",
     "@types/d3": "^7.4.3",
-    "jsdom": "^29.1.1",
+    "jsdom": "^30.0.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.0",
     "vitest": "^4.1.11"
