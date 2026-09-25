@@ -321,18 +321,22 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 	results, diagnostics, status, err := s.service.Search(request, s.policy)
 	// Record audit event for this MCP search call
 	var auditResultCount int
+	var auditErr error
 	if status == "ok" || status == "denied" {
 		auditResultCount = len(results)
 		err = contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "search", status, auditResultCount, "")
 		if err != nil {
-			return nil, err
+			auditErr = err
 		}
 	} else if status == "invalid" || status == "error" {
 		// Record audit event for invalid or error operations
 		err = contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "search", status, 0, "")
 		if err != nil {
-			return nil, err
+			auditErr = err
 		}
+	}
+	if auditErr != nil {
+		return nil, auditErr
 	}
 	if err != nil {
 		return nil, err
@@ -361,6 +365,7 @@ func (s *Server) read(raw json.RawMessage) (any, error) {
 	document, diagnostics, status, err := s.service.Read(request, s.policy)
 	// Record audit event for this MCP read call
 	var auditResultCount int
+	var auditErr error
 	if status == "ok" || status == "denied" {
 		auditResultCount = 1
 		if document == nil {
@@ -368,14 +373,17 @@ func (s *Server) read(raw json.RawMessage) (any, error) {
 		}
 		err = contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "read", status, auditResultCount, "")
 		if err != nil {
-			return nil, err
+			auditErr = err
 		}
 	} else if status == "invalid" || status == "error" {
 		// Record audit event for invalid or error operations
 		err = contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "read", status, 0, "")
 		if err != nil {
-			return nil, err
+			auditErr = err
 		}
+	}
+	if auditErr != nil {
+		return nil, auditErr
 	}
 	if err != nil {
 		return nil, err
