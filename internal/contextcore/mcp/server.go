@@ -315,8 +315,13 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 	}
 	results, diagnostics, status, err := s.service.Search(request, s.policy)
 	// Record audit event for this MCP search call
+	var auditResultCount int
 	if status == "ok" || status == "denied" {
-		contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "search", status, len(results), "")
+		auditResultCount = len(results)
+		err = contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "search", status, auditResultCount, "")
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -344,8 +349,16 @@ func (s *Server) read(raw json.RawMessage) (any, error) {
 	}
 	document, diagnostics, status, err := s.service.Read(request, s.policy)
 	// Record audit event for this MCP read call
+	var auditResultCount int
 	if status == "ok" || status == "denied" {
-		contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "read", status, 1, "")
+		auditResultCount = 1
+		if document == nil {
+			auditResultCount = 0
+		}
+		err = contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "read", status, auditResultCount, "")
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err != nil {
 		return nil, err
