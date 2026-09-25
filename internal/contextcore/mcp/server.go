@@ -329,7 +329,7 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 		}
 	} else if status == "invalid" || status == "error" {
 		// Record audit event for invalid or error operations
-		err = contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "search", status, 0, err.Error())
+		err = contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "search", status, 0, "")
 		if err != nil {
 			return nil, err
 		}
@@ -372,7 +372,7 @@ func (s *Server) read(raw json.RawMessage) (any, error) {
 		}
 	} else if status == "invalid" || status == "error" {
 		// Record audit event for invalid or error operations
-		err = contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "read", status, 0, err.Error())
+		err = contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "read", status, 0, "")
 		if err != nil {
 			return nil, err
 		}
