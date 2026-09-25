@@ -92,6 +92,11 @@ func NewServer(dataDir string) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("KARTE_DATA_DIR %q is not a dedicated Karte context root: %w", abs, err)
 	}
+	// Ensure policy.json actually exists in the root
+	policyPath := filepath.Join(realRoot, ".mdsys", "context", "v1", "policy.json")
+	if _, err := os.Stat(policyPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("KARTE_DATA_DIR %q does not contain policy.json, which is required for dedicated roots", abs)
+	}
 	scope, err := contextcore.LoadMCPScope(realRoot, policy)
 	if err != nil {
 		return nil, err
@@ -322,6 +327,12 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+	} else if status == "invalid" || status == "error" {
+		// Record audit event for invalid or error operations
+		err = contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "search", status, 0, err.Error())
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -356,6 +367,12 @@ func (s *Server) read(raw json.RawMessage) (any, error) {
 			auditResultCount = 0
 		}
 		err = contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "read", status, auditResultCount, "")
+		if err != nil {
+			return nil, err
+		}
+	} else if status == "invalid" || status == "error" {
+		// Record audit event for invalid or error operations
+		err = contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "read", status, 0, err.Error())
 		if err != nil {
 			return nil, err
 		}
