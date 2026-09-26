@@ -554,6 +554,16 @@ func moveArtifacts(destDir string) error {
 			return fmt.Errorf("move %s -> %s: %w", src, dst, err)
 		}
 	}
+	// Also copy karte-mcp binary to artifact directory
+	karteMCPPath := filepath.Join(binDir, "karte-mcp")
+	if _, err := os.Stat(karteMCPPath); err == nil {
+		if err := os.MkdirAll(destDir, 0o755); err != nil {
+			return fmt.Errorf("create artifact dir %s: %w", destDir, err)
+		}
+		if err := copyFile(karteMCPPath, filepath.Join(destDir, "karte-mcp")); err != nil {
+			return fmt.Errorf("copy karte-mcp binary: %w", err)
+		}
+	}
 	return os.RemoveAll(binDir)
 }
 
@@ -735,4 +745,49 @@ func mergeEnv(base []string, extra map[string]string) []string {
 		merged = append(merged, fmt.Sprintf("%s=%s", k, v))
 	}
 	return merged
+}
+
+func buildKarteMCPBinary(ctx context.Context, projectRoot, artifactDir string) error {
+	// Build the karte-mcp binary
+	buildArgs := []string{"build", "-o", filepath.Join(artifactDir, "karte-mcp"), "./cmd/karte-mcp"}
+	cmd := exec.CommandContext(ctx, "go", buildArgs...)
+	cmd.Dir = projectRoot
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("build karte-mcp failed: %w", err)
+	}
+	return nil
+}
+
+func buildTarget(ctx context.Context, t target, projectRoot string) error {
+	if err := os.RemoveAll(t.ArtifactDir); err != nil {
+		return fmt.Errorf("clean artifact dir %s: %w", t.ArtifactDir, err)
+	}
+	if err := os.MkdirAll(t.ArtifactDir, 0o755); err != nil {
+		return fmt.Errorf("create artifact dir %s: %w", t.ArtifactDir, err)
+	}
+
+	// Build the Wails app
+	buildArgs := []string{"build", "-o", filepath.Join(t.ArtifactDir, t.Name), "--target", t.Platform}
+	if t.Platform == "windows" {
+		buildArgs = append(buildArgs, "--clean")
+	}
+	buildArgs = append(buildArgs, "--ldflags", "-s -w")
+
+	cmd := exec.CommandContext(ctx, "wails", buildArgs...)
+	cmd.Dir = projectRoot
+	cmd.Env = append(os.Environ(), "GOOS="+t.Platform)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("build failed: %w", err)
+	}
+
+	// Build the karte-mcp binary to be included in the artifact
+	if err := buildKarteMCPBinary(ctx, projectRoot, t.ArtifactDir); err != nil {
+		return fmt.Errorf("build karte-mcp binary: %w", err)
+	}
+
+	return nil
 }
