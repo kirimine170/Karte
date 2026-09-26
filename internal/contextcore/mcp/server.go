@@ -13,6 +13,13 @@
 //
 // All diagnostics go to stderr. stdout carries only JSON-RPC frames so a
 // host can parse the stream unambiguously.
+//
+// The startup check is only a startup check. Every tools/call re-reads
+// policy.json and mcp-scope.json from disk and re-validates the marker
+// against the current policy, so a grant revoked, narrowed, or corrupted
+// after the process started is denied on the very next call. The server
+// never continues from the startup snapshot and never falls back to the
+// shared DefaultPolicy: a dedicated root fails closed.
 package mcp
 
 import (
@@ -59,7 +66,10 @@ type ReadOutput struct {
 // Server bundles the read-only contextcore services behind a small interface
 // so the JSON-RPC dispatch in this file stays focused on the wire format.
 type Server struct {
-	service  *contextcore.Service
+	service *contextcore.Service
+	// policy and scope are the startup snapshot used only for diagnostics
+	// (Summary). Every call re-derives the live grant from disk via
+	// currentScope, so these fields are never an authorization source.
 	policy   contextcore.Policy
 	scope    contextcore.MCPScope
 	dataRoot string
@@ -305,7 +315,40 @@ func (s *Server) handleToolCall(encoder *json.Encoder, req request) error {
 	})
 }
 
+// loadCurrentPolicy strictly re-reads policy.json for per-call
+// authorization. Unlike contextcore.LoadPolicy, a missing, unreadable, or
+// malformed file is an error: a dedicated root must fail closed instead of
+// falling back to DefaultPolicy or to the startup snapshot.
+func (s *Server) loadCurrentPolicy() (contextcore.Policy, error) {
+	data, err := os.ReadFile(filepath.Join(s.dataRoot, ".mdsys", "context", "v1", "policy.json"))
+	if err != nil {
+		return contextcore.Policy{}, fmt.Errorf("reload context policy: %w", err)
+	}
+	return contextcore.ParsePolicy(data)
+}
+
+// currentScope re-derives the dedicated root's explicit grant for every
+// call. The policy file must still exist and be valid, and the scope marker
+// must still parse and name an actor whose current policy grants both
+// search and read. Any missing, corrupted, or revoked state is an error,
+// never a fallback to a stale in-memory state.
+func (s *Server) currentScope() (contextcore.MCPScope, contextcore.Policy, error) {
+	policy, err := s.loadCurrentPolicy()
+	if err != nil {
+		return contextcore.MCPScope{}, contextcore.Policy{}, err
+	}
+	scope, err := contextcore.LoadMCPScope(s.dataRoot, policy)
+	if err != nil {
+		return contextcore.MCPScope{}, contextcore.Policy{}, err
+	}
+	return scope, policy, nil
+}
+
 func (s *Server) search(raw json.RawMessage) (any, error) {
+	scope, policy, err := s.currentScope()
+	if err != nil {
+		return nil, err
+	}
 	var params searchParams
 	if err := json.Unmarshal(raw, &params); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
@@ -321,18 +364,18 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 	}
 	ceiling := params.Sensitivity
 	if ceiling == "" {
-		ceiling = s.policy.Actors[s.scope.Actor].SensitivityCeiling
+		ceiling = policy.Actors[scope.Actor].SensitivityCeiling
 	}
 	request := contextcore.Request{
 		ProtocolVersion: contextcore.ProtocolVersion,
 		RequestID:       newRequestID(),
 		Operation:       "search",
-		Actor:           contextcore.Actor{Type: "tool", ID: s.scope.Actor},
+		Actor:           contextcore.Actor{Type: "tool", ID: scope.Actor},
 		Scope:           contextcore.Scope{Projects: params.Projects, Tags: params.Tags, SensitivityCeiling: ceiling},
 		Query:           &contextcore.SearchQuery{Text: params.Query, TopK: params.TopK},
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
-	results, diagnostics, status, searchErr := s.service.Search(request, s.policy)
+	results, diagnostics, status, searchErr := s.service.Search(request, policy)
 	// Record audit event for this MCP search call
 	var auditErr error
 	if status == "ok" || status == "denied" {
@@ -359,6 +402,10 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 }
 
 func (s *Server) read(raw json.RawMessage) (any, error) {
+	scope, policy, err := s.currentScope()
+	if err != nil {
+		return nil, err
+	}
 	var params readParams
 	if err := json.Unmarshal(raw, &params); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
@@ -366,17 +413,17 @@ func (s *Server) read(raw json.RawMessage) (any, error) {
 	if strings.TrimSpace(params.DocID) == "" {
 		return nil, errors.New("doc_id is required")
 	}
-	ceiling := s.policy.Actors[s.scope.Actor].SensitivityCeiling
+	ceiling := policy.Actors[scope.Actor].SensitivityCeiling
 	request := contextcore.Request{
 		ProtocolVersion: contextcore.ProtocolVersion,
 		RequestID:       newRequestID(),
 		Operation:       "read",
-		Actor:           contextcore.Actor{Type: "tool", ID: s.scope.Actor},
+		Actor:           contextcore.Actor{Type: "tool", ID: scope.Actor},
 		Scope:           contextcore.Scope{Projects: []string{"*"}, SensitivityCeiling: ceiling},
 		DocID:           &params.DocID,
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
-	document, diagnostics, status, readErr := s.service.Read(request, s.policy)
+	document, diagnostics, status, readErr := s.service.Read(request, policy)
 	// Record audit event for this MCP read call
 	var auditErr error
 	if status == "ok" || status == "denied" {
