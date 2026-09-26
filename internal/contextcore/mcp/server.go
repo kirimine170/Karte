@@ -126,6 +126,16 @@ func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	encoder := json.NewEncoder(out)
 	for {
 		line, readErr := reader.ReadString('\n')
+		// Reject oversized frames
+		if len(line) > 1024*1024 {
+			// Send error response to client and continue reading
+			err := s.encodeError(encoder, nil, -32000, "frame too large")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "karte-mcp: failed to encode oversized frame error: %v\n", err)
+			}
+			// Continue reading to handle next frame
+			continue
+		}
 		if len(line) > 0 {
 			if err := s.dispatch(encoder, line); err != nil {
 				// Protocol errors are already encoded as JSON-RPC error
@@ -282,11 +292,10 @@ func (s *Server) handleToolCall(encoder *json.Encoder, req request) error {
 		// Tool-level failures are returned as successful JSON-RPC frames
 		// with isError=true, mirroring the MCP spec.
 		// Redact filesystem details from error messages for security
-		errorText := err.Error()
-		// Remove any path details from the error message
-		// This prevents leakage of filesystem structure to MCP clients
+		// Log the detailed error for local diagnostics but return a sanitized message to the client
+		fmt.Fprintf(os.Stderr, "karte-mcp: tool error: %v\n", err)
 		return s.encodeResult(encoder, req.ID, map[string]any{
-			"content": []map[string]any{{"type": "text", "text": errorText}},
+			"content": []map[string]any{{"type": "text", "text": "processing failed"}},
 			"isError": true,
 		})
 	}
@@ -323,19 +332,18 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 		Query:           &contextcore.SearchQuery{Text: params.Query, TopK: params.TopK},
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
-	results, diagnostics, status, err := s.service.Search(request, s.policy)
+	results, diagnostics, status, searchErr := s.service.Search(request, s.policy)
 	// Record audit event for this MCP search call
-	var auditResultCount int
 	var auditErr error
 	if status == "ok" || status == "denied" {
-		auditResultCount = len(results)
-		err = contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "search", status, auditResultCount, "")
+		auditResultCount := len(results)
+		err := contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "search", status, auditResultCount, "")
 		if err != nil {
 			auditErr = err
 		}
 	} else if status == "invalid" || status == "error" {
 		// Record audit event for invalid or error operations
-		err = contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "search", status, 0, "")
+		err := contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "search", status, 0, "")
 		if err != nil {
 			auditErr = err
 		}
@@ -343,8 +351,9 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 	if auditErr != nil {
 		return nil, auditErr
 	}
-	if err != nil {
-		return nil, err
+	// Return the original service error if there was one
+	if searchErr != nil {
+		return nil, searchErr
 	}
 	return SearchOutput{Status: status, Results: results, Diagnostics: diagnostics}, nil
 }
@@ -367,22 +376,21 @@ func (s *Server) read(raw json.RawMessage) (any, error) {
 		DocID:           &params.DocID,
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
-	document, diagnostics, status, err := s.service.Read(request, s.policy)
+	document, diagnostics, status, readErr := s.service.Read(request, s.policy)
 	// Record audit event for this MCP read call
-	var auditResultCount int
 	var auditErr error
 	if status == "ok" || status == "denied" {
-		auditResultCount = 1
+		auditResultCount := 1
 		if document == nil {
 			auditResultCount = 0
 		}
-		err = contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "read", status, auditResultCount, "")
+		err := contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "read", status, auditResultCount, "")
 		if err != nil {
 			auditErr = err
 		}
 	} else if status == "invalid" || status == "error" {
 		// Record audit event for invalid or error operations
-		err = contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "read", status, 0, "")
+		err := contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "read", status, 0, "")
 		if err != nil {
 			auditErr = err
 		}
@@ -390,8 +398,9 @@ func (s *Server) read(raw json.RawMessage) (any, error) {
 	if auditErr != nil {
 		return nil, auditErr
 	}
-	if err != nil {
-		return nil, err
+	// Return the original service error if there was one
+	if readErr != nil {
+		return nil, readErr
 	}
 	return ReadOutput{Status: status, Document: document, Diagnostics: diagnostics}, nil
 }
