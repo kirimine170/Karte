@@ -221,7 +221,7 @@ func (s *Server) dispatch(encoder *json.Encoder, line string) error {
 					"inputSchema": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
-							"query":         map[string]any{"type": "string", "description": "Text to search for in title, body, and frontmatter fields."},
+							"query":         map[string]any{"type": "string", "description": "Text to search for in title, body, and frontmatter fields.", "maxLength": 2048},
 							"top_k":         map[string]any{"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
 							"projects":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict the search to these projects. Omit for all projects allowed by policy."},
 							"tags":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict the search to documents carrying at least one of these tags."},
@@ -345,10 +345,6 @@ func (s *Server) currentScope() (contextcore.MCPScope, contextcore.Policy, error
 }
 
 func (s *Server) search(raw json.RawMessage) (any, error) {
-	scope, policy, err := s.currentScope()
-	if err != nil {
-		return nil, err
-	}
 	var params searchParams
 	if err := json.Unmarshal(raw, &params); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
@@ -362,13 +358,25 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 	if params.TopK > 20 {
 		params.TopK = 20
 	}
+	requestID := newRequestID()
+	scope, policy, err := s.currentScope()
+	if err != nil {
+		// Post-revocation access attempts must still be audited, even if
+		// they cannot be authorized.
+		actor := contextcore.Actor{Type: "tool", ID: s.scope.Actor}
+		err := contextcore.RecordAudit(s.dataRoot, requestID, actor, "search", "error", 0, "policy_reload_failed")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "karte-mcp: audit error: %v\n", err)
+		}
+		return nil, err
+	}
 	ceiling := params.Sensitivity
 	if ceiling == "" {
 		ceiling = policy.Actors[scope.Actor].SensitivityCeiling
 	}
 	request := contextcore.Request{
 		ProtocolVersion: contextcore.ProtocolVersion,
-		RequestID:       newRequestID(),
+		RequestID:       requestID,
 		Operation:       "search",
 		Actor:           contextcore.Actor{Type: "tool", ID: scope.Actor},
 		Scope:           contextcore.Scope{Projects: params.Projects, Tags: params.Tags, SensitivityCeiling: ceiling},
@@ -402,10 +410,6 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 }
 
 func (s *Server) read(raw json.RawMessage) (any, error) {
-	scope, policy, err := s.currentScope()
-	if err != nil {
-		return nil, err
-	}
 	var params readParams
 	if err := json.Unmarshal(raw, &params); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
@@ -413,10 +417,22 @@ func (s *Server) read(raw json.RawMessage) (any, error) {
 	if strings.TrimSpace(params.DocID) == "" {
 		return nil, errors.New("doc_id is required")
 	}
+	requestID := newRequestID()
+	scope, policy, err := s.currentScope()
+	if err != nil {
+		// Post-revocation access attempts must still be audited, even if
+		// they cannot be authorized.
+		actor := contextcore.Actor{Type: "tool", ID: s.scope.Actor}
+		err := contextcore.RecordAudit(s.dataRoot, requestID, actor, "read", "error", 0, "policy_reload_failed")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "karte-mcp: audit error: %v\n", err)
+		}
+		return nil, err
+	}
 	ceiling := policy.Actors[scope.Actor].SensitivityCeiling
 	request := contextcore.Request{
 		ProtocolVersion: contextcore.ProtocolVersion,
-		RequestID:       newRequestID(),
+		RequestID:       requestID,
 		Operation:       "read",
 		Actor:           contextcore.Actor{Type: "tool", ID: scope.Actor},
 		Scope:           contextcore.Scope{Projects: []string{"*"}, SensitivityCeiling: ceiling},
