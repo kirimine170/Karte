@@ -359,16 +359,16 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 		params.TopK = 20
 	}
 	requestID := newRequestID()
-	scope, policy, err := s.currentScope()
-	if err != nil {
+	scope, policy, policyErr := s.currentScope()
+	if policyErr != nil {
 		// Post-revocation access attempts must still be audited, even if
 		// they cannot be authorized.
 		actor := contextcore.Actor{Type: "tool", ID: s.scope.Actor}
-		err := contextcore.RecordAudit(s.dataRoot, requestID, actor, "search", "error", 0, "policy_reload_failed")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "karte-mcp: audit error: %v\n", err)
+		auditErr := contextcore.RecordAudit(s.dataRoot, requestID, actor, "search", "error", 0, "policy_reload_failed")
+		if auditErr != nil {
+			fmt.Fprintf(os.Stderr, "karte-mcp: audit error: %v\n", auditErr)
 		}
-		return nil, err
+		return nil, policyErr
 	}
 	ceiling := params.Sensitivity
 	if ceiling == "" {
@@ -418,16 +418,16 @@ func (s *Server) read(raw json.RawMessage) (any, error) {
 		return nil, errors.New("doc_id is required")
 	}
 	requestID := newRequestID()
-	scope, policy, err := s.currentScope()
-	if err != nil {
+	scope, policy, policyErr := s.currentScope()
+	if policyErr != nil {
 		// Post-revocation access attempts must still be audited, even if
 		// they cannot be authorized.
 		actor := contextcore.Actor{Type: "tool", ID: s.scope.Actor}
-		err := contextcore.RecordAudit(s.dataRoot, requestID, actor, "read", "error", 0, "policy_reload_failed")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "karte-mcp: audit error: %v\n", err)
+		auditErr := contextcore.RecordAudit(s.dataRoot, requestID, actor, "read", "error", 0, "policy_reload_failed")
+		if auditErr != nil {
+			fmt.Fprintf(os.Stderr, "karte-mcp: audit error: %v\n", auditErr)
 		}
-		return nil, err
+		return nil, policyErr
 	}
 	ceiling := policy.Actors[scope.Actor].SensitivityCeiling
 	request := contextcore.Request{
