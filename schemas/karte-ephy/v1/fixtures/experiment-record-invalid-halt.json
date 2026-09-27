@@ -1,0 +1,28 @@
+{
+  "schema_version": "0.1",
+  "candidate_id": "test-experiment",
+  "experiment_id": "test-experiment",
+  "run_id": "run-123",
+  "attempt_id": "attempt-456",
+  "target_commit": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+  "patch_sha256": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+  "environment": "test-env",
+  "model": "gpt-4",
+  "checker": "test-checker",
+  "observations": [
+    "The experiment encountered an error during processing."
+  ],
+  "interpretation": "The experiment failed due to a runtime error that needs investigation.",
+  "halt_reason": "",
+  "evidence": [
+    {
+      "logical_ref": "halt/stderr",
+      "sha256": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+    }
+  ],
+  "verification": "verified",
+  "state": "experiment",
+  "project": "ephy",
+  "title": "experiment-report.md",
+  "reported_at": "2026-09-01T00:04:05Z"
+}
