@@ -173,6 +173,23 @@ func TestMCPPreServiceValidationIsAudited(t *testing.T) {
 		})
 		ids = append(ids, tc.id)
 	}
+	for _, tc := range []struct {
+		id    string
+		field string
+		value any
+	}{
+		{"null-projects", "projects", nil},
+		{"null-tags", "tags", nil},
+		{"null-sensitivity", "sensitivity", nil},
+		{"empty-sensitivity", "sensitivity", ""},
+		{"unknown-sensitivity", "sensitivity", "secret"},
+	} {
+		arguments := map[string]any{"query": "planning", tc.field: tc.value}
+		input += mcpLine(t, tc.id, "tools/call", map[string]any{
+			"name": "karte_search", "arguments": arguments,
+		})
+		ids = append(ids, tc.id)
+	}
 	lines := serve(t, root, input)
 	if len(lines) != len(ids) {
 		t.Fatalf("expected %d responses, got %d", len(ids), len(lines))
@@ -206,7 +223,7 @@ func TestMCPPreServiceValidationIsAudited(t *testing.T) {
 		}
 		counts[event.Operation]++
 	}
-	if counts["search"] != 6 || counts["read"] != 1 {
+	if counts["search"] != 11 || counts["read"] != 1 {
 		t.Fatalf("wrong audited operations: %v", counts)
 	}
 }

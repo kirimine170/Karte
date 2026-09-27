@@ -309,9 +309,9 @@ func (s *Server) encodeError(encoder *json.Encoder, id json.RawMessage, code int
 type searchParams struct {
 	Query       string          `json:"query"`
 	TopK        json.RawMessage `json:"top_k"`
-	Projects    []string        `json:"projects"`
-	Tags        []string        `json:"tags"`
-	Sensitivity string          `json:"sensitivity"`
+	Projects    json.RawMessage `json:"projects"`
+	Tags        json.RawMessage `json:"tags"`
+	Sensitivity json.RawMessage `json:"sensitivity"`
 }
 
 type readParams struct {
@@ -397,6 +397,20 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 			return nil, s.rejectInvalidArguments(requestID, "search", errors.New("top_k must be between 1 and 20"))
 		}
 	}
+	var projects, tags []string
+	if err := decodeOptionalArgument(params.Projects, &projects); err != nil {
+		return nil, s.rejectInvalidArguments(requestID, "search", fmt.Errorf("invalid projects: %w", err))
+	}
+	if err := decodeOptionalArgument(params.Tags, &tags); err != nil {
+		return nil, s.rejectInvalidArguments(requestID, "search", fmt.Errorf("invalid tags: %w", err))
+	}
+	var sensitivity string
+	if err := decodeOptionalArgument(params.Sensitivity, &sensitivity); err != nil {
+		return nil, s.rejectInvalidArguments(requestID, "search", fmt.Errorf("invalid sensitivity: %w", err))
+	}
+	if params.Sensitivity != nil && sensitivity != "public" && sensitivity != "internal" && sensitivity != "confidential" && sensitivity != "restricted" {
+		return nil, s.rejectInvalidArguments(requestID, "search", errors.New("invalid sensitivity"))
+	}
 	scope, policy, policyErr := s.currentScope()
 	if policyErr != nil {
 		// Post-revocation access attempts must still be audited, even if
@@ -408,7 +422,7 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 		}
 		return nil, policyErr
 	}
-	ceiling := params.Sensitivity
+	ceiling := sensitivity
 	if ceiling == "" {
 		ceiling = policy.Actors[scope.Actor].SensitivityCeiling
 	}
@@ -417,7 +431,7 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 		RequestID:       requestID,
 		Operation:       "search",
 		Actor:           contextcore.Actor{Type: "tool", ID: scope.Actor},
-		Scope:           contextcore.Scope{Projects: params.Projects, Tags: params.Tags, SensitivityCeiling: ceiling},
+		Scope:           contextcore.Scope{Projects: projects, Tags: tags, SensitivityCeiling: ceiling},
 		Query:           &contextcore.SearchQuery{Text: params.Query, TopK: topK},
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
@@ -542,6 +556,16 @@ func decodeArguments(raw json.RawMessage, out any) error {
 		return errors.New("trailing argument data")
 	}
 	return nil
+}
+
+func decodeOptionalArgument(raw json.RawMessage, out any) error {
+	if raw == nil {
+		return nil
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return errors.New("null is not allowed")
+	}
+	return json.Unmarshal(raw, out)
 }
 
 func newRequestID() string {
