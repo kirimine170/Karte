@@ -180,6 +180,8 @@ func TestMCPPreServiceValidationIsAudited(t *testing.T) {
 	}{
 		{"null-projects", "projects", nil},
 		{"null-tags", "tags", nil},
+		{"empty-projects", "projects", []string{}},
+		{"empty-tags", "tags", []string{}},
 		{"null-sensitivity", "sensitivity", nil},
 		{"empty-sensitivity", "sensitivity", ""},
 		{"unknown-sensitivity", "sensitivity", "secret"},
@@ -223,7 +225,7 @@ func TestMCPPreServiceValidationIsAudited(t *testing.T) {
 		}
 		counts[event.Operation]++
 	}
-	if counts["search"] != 11 || counts["read"] != 1 {
+	if counts["search"] != 13 || counts["read"] != 1 {
 		t.Fatalf("wrong audited operations: %v", counts)
 	}
 }
@@ -263,12 +265,12 @@ func TestMCPSearchSchemaAdvertisesFilterBounds(t *testing.T) {
 		properties := schema["properties"].(map[string]any)
 		projects := properties["projects"].(map[string]any)
 		projectItem := projects["items"].(map[string]any)
-		if projects["maxItems"] != float64(64) || projectItem["maxLength"] != float64(64) || projectItem["pattern"] != `^(\*|[a-z0-9][a-z0-9._-]{0,63})$` {
+		if projects["minItems"] != float64(1) || projects["maxItems"] != float64(64) || projectItem["maxLength"] != float64(64) || projectItem["pattern"] != `^(\*|[a-z0-9][a-z0-9._-]{0,63})$` {
 			t.Fatalf("wrong project filter bounds: %v", projects)
 		}
 		tags := properties["tags"].(map[string]any)
 		tagItem := tags["items"].(map[string]any)
-		if tags["maxItems"] != float64(64) || tagItem["maxLength"] != float64(128) || tagItem["minLength"] != float64(1) {
+		if tags["minItems"] != float64(1) || tags["maxItems"] != float64(64) || tagItem["maxLength"] != float64(128) || tagItem["minLength"] != float64(1) {
 			t.Fatalf("wrong tag filter bounds: %v", tags)
 		}
 		return
@@ -335,6 +337,38 @@ func TestMCPRejectsUnknownScopeMarkerFields(t *testing.T) {
 	}
 	if _, err := server.search(json.RawMessage(`{"query":"planning"}`)); err == nil {
 		t.Fatal("unknown marker field was accepted after startup")
+	}
+}
+
+func TestMCPRejectsOversizedScopeActor(t *testing.T) {
+	root := t.TempDir()
+	buildDedicatedRoot(t, root)
+	longActor := strings.Repeat("界", 129)
+	rewritePolicy(t, root, func(policy *contextcore.Policy) {
+		policy.Actors[longActor] = contextcore.ActorPolicy{
+			SensitivityCeiling: "internal",
+			Projects:           []string{"codex"},
+			Capabilities:       []contextcore.Capability{contextcore.CapabilitySearch, contextcore.CapabilityRead},
+		}
+	})
+	scope := contextcore.MCPScope{
+		ProtocolVersion: contextcore.ProtocolVersion,
+		Actor:           longActor,
+		Capabilities:    []string{"search", "read"},
+	}
+	if err := contextcore.WriteMCPScope(root, scope); err == nil {
+		t.Fatal("writer accepted an actor too long for Request.Validate")
+	}
+	data, err := json.Marshal(scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(root, ".mdsys", "context", "v1", "mcp-scope.json")
+	if err := os.WriteFile(marker, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewServer(root); err == nil {
+		t.Fatal("startup accepted an actor too long for Request.Validate")
 	}
 }
 

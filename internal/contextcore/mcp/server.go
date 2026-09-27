@@ -261,8 +261,8 @@ func (s *Server) dispatch(encoder *json.Encoder, line string) error {
 						"properties": map[string]any{
 							"query":       map[string]any{"type": "string", "description": "Text to search for in title, body, and frontmatter fields.", "minLength": 1, "maxLength": 2048},
 							"top_k":       map[string]any{"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
-							"projects":    map[string]any{"type": "array", "maxItems": 64, "items": map[string]any{"type": "string", "maxLength": 64, "pattern": `^(\*|[a-z0-9][a-z0-9._-]{0,63})$`}, "description": "Restrict the search to these projects. Omit for all projects allowed by policy."},
-							"tags":        map[string]any{"type": "array", "maxItems": 64, "items": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "description": "Restrict the search to documents carrying every requested tag."},
+							"projects":    map[string]any{"type": "array", "minItems": 1, "maxItems": 64, "items": map[string]any{"type": "string", "maxLength": 64, "pattern": `^(\*|[a-z0-9][a-z0-9._-]{0,63})$`}, "description": "Restrict the search to these projects. Omit for all projects allowed by policy."},
+							"tags":        map[string]any{"type": "array", "minItems": 1, "maxItems": 64, "items": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "description": "Restrict the search to documents carrying every requested tag."},
 							"sensitivity": map[string]any{"type": "string", "enum": []string{"public", "internal", "confidential", "restricted"}, "description": "Maximum sensitivity level to include. Defaults to the policy ceiling for the configured actor."},
 						},
 						"required":             []string{"query"},
@@ -401,8 +401,14 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 	if err := decodeOptionalArgument(params.Projects, &projects); err != nil {
 		return nil, s.rejectInvalidArguments(requestID, "search", fmt.Errorf("invalid projects: %w", err))
 	}
+	if params.Projects != nil && len(projects) == 0 {
+		return nil, s.rejectInvalidArguments(requestID, "search", errors.New("projects must not be empty"))
+	}
 	if err := decodeOptionalArgument(params.Tags, &tags); err != nil {
 		return nil, s.rejectInvalidArguments(requestID, "search", fmt.Errorf("invalid tags: %w", err))
+	}
+	if params.Tags != nil && len(tags) == 0 {
+		return nil, s.rejectInvalidArguments(requestID, "search", errors.New("tags must not be empty"))
 	}
 	var sensitivity string
 	if err := decodeOptionalArgument(params.Sensitivity, &sensitivity); err != nil {

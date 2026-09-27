@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"unicode/utf8"
 )
 
 // mcpScope.json is a private, machine-readable marker placed inside a
@@ -35,8 +37,8 @@ func WriteMCPScope(dataRoot string, scope MCPScope) error {
 	if scope.ProtocolVersion != ProtocolVersion {
 		return fmt.Errorf("mcp scope protocol_version must be %q", ProtocolVersion)
 	}
-	if scope.Actor == "" {
-		return fmt.Errorf("mcp scope actor must be set")
+	if strings.TrimSpace(scope.Actor) == "" || utf8.RuneCountInString(scope.Actor) > 128 {
+		return fmt.Errorf("mcp scope actor must contain 1 to 128 runes")
 	}
 	if len(scope.Capabilities) != 2 || scope.Capabilities[0] != string(CapabilitySearch) || scope.Capabilities[1] != string(CapabilityRead) {
 		return fmt.Errorf("mcp scope capabilities must be exactly [search read]")
@@ -77,6 +79,9 @@ func LoadMCPScope(dataRoot string, policy Policy) (MCPScope, error) {
 	}
 	if scope.ProtocolVersion != ProtocolVersion {
 		return MCPScope{}, fmt.Errorf("refusing to start: %s protocol_version is %q", mcpScopeFilename, scope.ProtocolVersion)
+	}
+	if strings.TrimSpace(scope.Actor) == "" || utf8.RuneCountInString(scope.Actor) > 128 {
+		return MCPScope{}, fmt.Errorf("refusing to start: %s actor must contain 1 to 128 runes", mcpScopeFilename)
 	}
 	// Validate that the scope specifies exactly search and read capabilities
 	if len(scope.Capabilities) != 2 {
