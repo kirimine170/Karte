@@ -307,11 +307,11 @@ func (s *Server) encodeError(encoder *json.Encoder, id json.RawMessage, code int
 // ---------- tool dispatch ----------
 
 type searchParams struct {
-	Query       string   `json:"query"`
-	TopK        int      `json:"top_k"`
-	Projects    []string `json:"projects"`
-	Tags        []string `json:"tags"`
-	Sensitivity string   `json:"sensitivity"`
+	Query       string          `json:"query"`
+	TopK        json.RawMessage `json:"top_k"`
+	Projects    []string        `json:"projects"`
+	Tags        []string        `json:"tags"`
+	Sensitivity string          `json:"sensitivity"`
 }
 
 type readParams struct {
@@ -391,11 +391,11 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 	if strings.TrimSpace(params.Query) == "" {
 		return nil, s.rejectInvalidArguments(requestID, "search", errors.New("query is required"))
 	}
-	if params.TopK <= 0 {
-		params.TopK = 10
-	}
-	if params.TopK > 20 {
-		params.TopK = 20
+	topK := 10
+	if params.TopK != nil {
+		if bytes.Equal(bytes.TrimSpace(params.TopK), []byte("null")) || json.Unmarshal(params.TopK, &topK) != nil || topK < 1 || topK > 20 {
+			return nil, s.rejectInvalidArguments(requestID, "search", errors.New("top_k must be between 1 and 20"))
+		}
 	}
 	scope, policy, policyErr := s.currentScope()
 	if policyErr != nil {
@@ -418,7 +418,7 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 		Operation:       "search",
 		Actor:           contextcore.Actor{Type: "tool", ID: scope.Actor},
 		Scope:           contextcore.Scope{Projects: params.Projects, Tags: params.Tags, SensitivityCeiling: ceiling},
-		Query:           &contextcore.SearchQuery{Text: params.Query, TopK: params.TopK},
+		Query:           &contextcore.SearchQuery{Text: params.Query, TopK: topK},
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
 	results, diagnostics, status, searchErr := s.service.Search(request, policy)

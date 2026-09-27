@@ -161,11 +161,23 @@ func TestMCPPreServiceValidationIsAudited(t *testing.T) {
 	}) + mcpLine(t, "unknown-field", "tools/call", map[string]any{
 		"name": "karte_search", "arguments": map[string]any{"query": "planning", "project": "codex"},
 	})
-	lines := serve(t, root, input)
-	if len(lines) != 3 {
-		t.Fatalf("expected three responses, got %d", len(lines))
+	ids := []string{"empty-query", "empty-id", "unknown-field"}
+	for _, tc := range []struct {
+		id    string
+		value any
+	}{
+		{"zero-top-k", 0}, {"negative-top-k", -1}, {"large-top-k", 21}, {"null-top-k", nil},
+	} {
+		input += mcpLine(t, tc.id, "tools/call", map[string]any{
+			"name": "karte_search", "arguments": map[string]any{"query": "planning", "top_k": tc.value},
+		})
+		ids = append(ids, tc.id)
 	}
-	for _, id := range []string{"empty-query", "empty-id", "unknown-field"} {
+	lines := serve(t, root, input)
+	if len(lines) != len(ids) {
+		t.Fatalf("expected %d responses, got %d", len(ids), len(lines))
+	}
+	for _, id := range ids {
 		frame := frameByID(t, lines, id)
 		result, _ := frame["result"].(map[string]any)
 		if result["isError"] != true {
@@ -176,8 +188,8 @@ func TestMCPPreServiceValidationIsAudited(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 3 {
-		t.Fatalf("expected three invalid audit events, got %d", len(entries))
+	if len(entries) != len(ids) {
+		t.Fatalf("expected %d invalid audit events, got %d", len(ids), len(entries))
 	}
 	counts := map[string]int{}
 	for _, entry := range entries {
@@ -194,7 +206,7 @@ func TestMCPPreServiceValidationIsAudited(t *testing.T) {
 		}
 		counts[event.Operation]++
 	}
-	if counts["search"] != 2 || counts["read"] != 1 {
+	if counts["search"] != 6 || counts["read"] != 1 {
 		t.Fatalf("wrong audited operations: %v", counts)
 	}
 }
