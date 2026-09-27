@@ -259,7 +259,7 @@ func (s *Server) dispatch(encoder *json.Encoder, line string) error {
 					"inputSchema": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
-							"query":       map[string]any{"type": "string", "description": "Text to search for in title, body, and frontmatter fields.", "maxLength": 2048},
+							"query":       map[string]any{"type": "string", "description": "Text to search for in title, body, and frontmatter fields.", "minLength": 1, "maxLength": 2048},
 							"top_k":       map[string]any{"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
 							"projects":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict the search to these projects. Omit for all projects allowed by policy."},
 							"tags":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict the search to documents carrying every requested tag."},
@@ -275,7 +275,7 @@ func (s *Server) dispatch(encoder *json.Encoder, line string) error {
 					"inputSchema": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
-							"doc_id": map[string]any{"type": "string", "description": "Stable document identifier from frontmatter (doc_id field)."},
+							"doc_id": map[string]any{"type": "string", "description": "Stable document identifier from frontmatter (doc_id field).", "minLength": 1, "maxLength": 256},
 						},
 						"required":             []string{"doc_id"},
 						"additionalProperties": false,
@@ -383,12 +383,13 @@ func (s *Server) currentScope() (contextcore.MCPScope, contextcore.Policy, error
 }
 
 func (s *Server) search(raw json.RawMessage) (any, error) {
+	requestID := newRequestID()
 	var params searchParams
 	if err := decodeArguments(raw, &params); err != nil {
-		return nil, fmt.Errorf("invalid arguments: %w", err)
+		return nil, s.rejectInvalidArguments(requestID, "search", fmt.Errorf("invalid arguments: %w", err))
 	}
 	if strings.TrimSpace(params.Query) == "" {
-		return nil, errors.New("query is required")
+		return nil, s.rejectInvalidArguments(requestID, "search", errors.New("query is required"))
 	}
 	if params.TopK <= 0 {
 		params.TopK = 10
@@ -396,7 +397,6 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 	if params.TopK > 20 {
 		params.TopK = 20
 	}
-	requestID := newRequestID()
 	scope, policy, policyErr := s.currentScope()
 	if policyErr != nil {
 		// Post-revocation access attempts must still be audited, even if
@@ -448,14 +448,14 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 }
 
 func (s *Server) read(raw json.RawMessage) (any, error) {
+	requestID := newRequestID()
 	var params readParams
 	if err := decodeArguments(raw, &params); err != nil {
-		return nil, fmt.Errorf("invalid arguments: %w", err)
+		return nil, s.rejectInvalidArguments(requestID, "read", fmt.Errorf("invalid arguments: %w", err))
 	}
 	if strings.TrimSpace(params.DocID) == "" {
-		return nil, errors.New("doc_id is required")
+		return nil, s.rejectInvalidArguments(requestID, "read", errors.New("doc_id is required"))
 	}
-	requestID := newRequestID()
 	scope, policy, policyErr := s.currentScope()
 	if policyErr != nil {
 		// Post-revocation access attempts must still be audited, even if
@@ -504,6 +504,14 @@ func (s *Server) read(raw json.RawMessage) (any, error) {
 		return nil, readErr
 	}
 	return ReadOutput{Status: status, Document: document, Diagnostics: diagnostics}, nil
+}
+
+func (s *Server) rejectInvalidArguments(requestID, operation string, validationErr error) error {
+	actor := contextcore.Actor{Type: "tool", ID: s.scope.Actor}
+	if auditErr := contextcore.RecordAudit(s.dataRoot, requestID, actor, operation, "invalid", 0, "invalid_arguments"); auditErr != nil {
+		return errors.Join(validationErr, auditErr)
+	}
+	return validationErr
 }
 
 func auditErrorCode(err error) string {

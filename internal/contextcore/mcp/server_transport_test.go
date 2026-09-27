@@ -149,6 +149,75 @@ func TestMCPRejectsUnknownArguments(t *testing.T) {
 	}
 }
 
+func TestMCPPreServiceValidationIsAudited(t *testing.T) {
+	root := t.TempDir()
+	buildDedicatedRoot(t, root)
+	input := mcpLine(t, "empty-query", "tools/call", map[string]any{
+		"name": "karte_search", "arguments": map[string]any{"query": ""},
+	}) + mcpLine(t, "empty-id", "tools/call", map[string]any{
+		"name": "karte_read", "arguments": map[string]any{"doc_id": ""},
+	}) + mcpLine(t, "unknown-field", "tools/call", map[string]any{
+		"name": "karte_search", "arguments": map[string]any{"query": "planning", "project": "codex"},
+	})
+	lines := serve(t, root, input)
+	if len(lines) != 3 {
+		t.Fatalf("expected three responses, got %d", len(lines))
+	}
+	for _, id := range []string{"empty-query", "empty-id", "unknown-field"} {
+		frame := frameByID(t, lines, id)
+		result, _ := frame["result"].(map[string]any)
+		if result["isError"] != true {
+			t.Fatalf("%s was not rejected: %v", id, frame)
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(root, ".mdsys", "context", "v1", "audit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("expected three invalid audit events, got %d", len(entries))
+	}
+	counts := map[string]int{}
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(root, ".mdsys", "context", "v1", "audit", entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var event contextcore.AuditEvent
+		if err := json.Unmarshal(data, &event); err != nil {
+			t.Fatal(err)
+		}
+		if event.Status != "invalid" || event.ResultCount != 0 || event.ErrorCode != "invalid_arguments" {
+			t.Fatalf("wrong pre-service audit event: %+v", event)
+		}
+		counts[event.Operation]++
+	}
+	if counts["search"] != 2 || counts["read"] != 1 {
+		t.Fatalf("wrong audited operations: %v", counts)
+	}
+}
+
+func TestMCPReadSchemaAdvertisesDocIDLimit(t *testing.T) {
+	root := t.TempDir()
+	buildDedicatedRoot(t, root)
+	frame := frameByID(t, serve(t, root, mcpLine(t, "list", "tools/list", nil)), "list")
+	result := frame["result"].(map[string]any)
+	for _, tool := range result["tools"].([]any) {
+		item := tool.(map[string]any)
+		if item["name"] != "karte_read" {
+			continue
+		}
+		schema := item["inputSchema"].(map[string]any)
+		properties := schema["properties"].(map[string]any)
+		docID := properties["doc_id"].(map[string]any)
+		if docID["minLength"] != float64(1) || docID["maxLength"] != float64(256) {
+			t.Fatalf("wrong doc_id length schema: %v", docID)
+		}
+		return
+	}
+	t.Fatal("karte_read was not listed")
+}
+
 func TestMCPAuditFailureIsSanitized(t *testing.T) {
 	root := t.TempDir()
 	buildDedicatedRoot(t, root)
