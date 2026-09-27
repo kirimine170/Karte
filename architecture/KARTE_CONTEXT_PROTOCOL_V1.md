@@ -71,13 +71,23 @@ Karteは起動後，現在のPIDを`KARTE_DATA_DIR/.mdsys/runtime/karte.pid`へa
 
 ## MCP facade（read-only）
 
-KarteはMCP（Model Context Protocol）対応のread-only facadeを提供する．`karte-mcp`バイナリはSTDIOでJSON-RPC 2.0を話す．このfacadeは既存のcontextcore serviceとpolicyをそのまま使うため，file watcher，audit，policy判定，存在性の隠蔽はすべて同一の経路を辿る．
+KarteはMCP（Model Context Protocol）対応のread-only facadeを提供する．`karte-mcp`バイナリはSTDIOでJSON-RPC 2.0を話す．このfacadeは既存のcontextcore serviceとpolicyを使い，呼出しごとにpolicyとscope markerを再読込してから認可する．検索・読取と監査はcontextcoreと同じ保存形式を使う．
 
 ### 起動
 
 ```
 KARTE_DATA_DIR=/absolute/path/to/dedicated-root karte-mcp [--check]
 ```
+
+配布アーカイブには対象OS・CPU用の`karte-mcp`（Windowsは`karte-mcp.exe`）をKarteのアプリと並べて含める．`scripts/build_local_app.sh`でも`build/bin/karte-mcp`を作成する．Codexへ登録する場合は，専用rootを用意して次のように指定する．
+
+```toml
+[mcp_servers.karte]
+command = "/absolute/path/to/karte-mcp"
+env = { KARTE_DATA_DIR = "/absolute/path/to/dedicated-root" }
+```
+
+1フレームは改行を除くJSON入力が最大1 MiB．超過分は次の改行まで破棄し，次のフレームから処理を再開する．複数タグを指定した場合は全タグに一致する文書だけを返す．
 
 `KARTE_DATA_DIR`が未設定，存在しない，`policy.json`がない，`mcp-scope.json`がない，scopeのactorがpolicyに存在しない，read capabilityが欠けている場合，`karte-mcp`は起動を拒否する．`--check`は環境を検証してexit 0/1を返すだけである．
 

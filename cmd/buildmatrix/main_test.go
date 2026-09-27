@@ -2,12 +2,37 @@ package main
 
 import (
 	"context"
+	"debug/buildinfo"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestBuildKarteMCPBinaryUsesTargetPlatform(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := t.TempDir()
+	target := target{Platform: "windows/amd64", ArtifactDir: artifact}
+	if err := buildKarteMCPBinary(context.Background(), root, target); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(artifact, "karte-mcp.exe")
+	info, err := buildinfo.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := map[string]string{}
+	for _, setting := range info.Settings {
+		settings[setting.Key] = setting.Value
+	}
+	if settings["GOOS"] != "windows" || settings["GOARCH"] != "amd64" {
+		t.Fatalf("wrong target in MCP artifact: GOOS=%q GOARCH=%q", settings["GOOS"], settings["GOARCH"])
+	}
+}
 
 func TestSignAndVerifyAppBundleSealsFinalArtifact(t *testing.T) {
 	if runtime.GOOS == "windows" {

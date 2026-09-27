@@ -1,7 +1,7 @@
 // karte-mcp is the STDIO entrypoint for the read-only Karte context MCP
 // facade. It is designed to be registered in a Codex config as:
 //
-//	[mcpServers.karte]
+//	[mcp_servers.karte]
 //	command = "karte-mcp"
 //	env.KARTE_DATA_DIR = "/absolute/path/to/codex-dedicated-root"
 //

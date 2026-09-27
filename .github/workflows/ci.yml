@@ -205,6 +205,21 @@ jobs:
       - name: Build application
         run: go run ./cmd/buildmatrix --targets ${{ matrix.target }} --clean
 
+      - name: Verify MCP executable in artifact
+        run: |
+          binary="${{ matrix.artifact_path }}/karte-mcp"
+          if [ "${{ matrix.target }}" = "windows" ]; then binary="${binary}.exe"; fi
+          test -s "$binary"
+          info="$(go version -m "$binary")"
+          case "${{ matrix.target }}" in
+            darwin-arm64) expected_os=darwin; expected_arch=arm64 ;;
+            darwin-amd64) expected_os=darwin; expected_arch=amd64 ;;
+            linux) expected_os=linux; expected_arch=amd64 ;;
+            windows) expected_os=windows; expected_arch=amd64 ;;
+          esac
+          grep -F "GOOS=$expected_os" <<< "$info"
+          grep -F "GOARCH=$expected_arch" <<< "$info"
+
       - name: Bundle and verify macOS runtime dependencies
         # PR builds omit the large ASR model payload but still bundle every
         # runtime dylib，so their artifacts can be launched for native UAT.

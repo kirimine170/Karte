@@ -24,6 +24,7 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -47,6 +48,7 @@ const (
 	protocolVersion = "2025-06-18"
 	serverName      = "karte-context"
 	serverVersion   = "0.1.0"
+	maxFrameBytes   = 1 << 20
 )
 
 // Result payloads. They mirror contextcore types so a host can reuse the
@@ -58,9 +60,9 @@ type SearchOutput struct {
 }
 
 type ReadOutput struct {
-	Status      string                    `json:"status"`
-	Document    *contextcore.Document     `json:"document"`
-	Diagnostics []contextcore.Diagnostic  `json:"diagnostics"`
+	Status      string                   `json:"status"`
+	Document    *contextcore.Document    `json:"document"`
+	Diagnostics []contextcore.Diagnostic `json:"diagnostics"`
 }
 
 // Server bundles the read-only contextcore services behind a small interface
@@ -128,29 +130,39 @@ func NewServer(dataDir string) (*Server, error) {
 func (s *Server) DataRoot() string { return s.dataRoot }
 
 // Run reads JSON-RPC lines from in and writes JSON-RPC lines to out until
-// either stream closes or ctx is cancelled. It returns the first protocol
-// error so tests can assert on malformed streams.
+// the input closes or ctx is cancelled. It returns transport failures;
+// malformed requests receive JSON-RPC error responses on out.
 func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
-	// Limit the reader to prevent excessively large JSON-RPC frames
-	reader := bufio.NewReaderSize(in, 1024*1024) // 1MB limit
+	// Closing an input stream on cancellation releases a blocked read. The
+	// command passes os.Stdin; tests also use an io.Pipe.
+	stop := make(chan struct{})
+	if closer, ok := in.(io.Closer); ok {
+		go func() {
+			select {
+			case <-ctx.Done():
+				closer.Close()
+			case <-stop:
+			}
+		}()
+	}
+	defer close(stop)
+	reader := bufio.NewReaderSize(in, 32*1024)
 	encoder := json.NewEncoder(out)
 	for {
-		line, readErr := reader.ReadString('\n')
-		// Reject oversized frames
-		if len(line) > 1024*1024 {
-			// Send error response to client and continue reading
-			err := s.encodeError(encoder, nil, -32000, "frame too large")
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "karte-mcp: failed to encode oversized frame error: %v\n", err)
-			}
-			// Continue reading to handle next frame
-			continue
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		if len(line) > 0 {
-			if err := s.dispatch(encoder, line); err != nil {
-				// Protocol errors are already encoded as JSON-RPC error
-				// responses; we surface them to the caller for logging.
-				fmt.Fprintf(os.Stderr, "karte-mcp: %v\n", err)
+		line, oversized, readErr := readFrame(reader)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if oversized {
+			if err := s.encodeError(encoder, nil, -32000, "frame too large"); err != nil {
+				return err
+			}
+		} else if len(line) > 0 {
+			if err := s.dispatch(encoder, string(line)); err != nil {
+				return err
 			}
 		}
 		if readErr != nil {
@@ -159,10 +171,31 @@ func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 			}
 			return readErr
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+	}
+}
+
+// readFrame bounds retained input to maxFrameBytes, excluding the line
+// delimiter. After overflow it discards chunks until the next delimiter so
+// the following JSON-RPC frame can still be processed.
+func readFrame(reader *bufio.Reader) ([]byte, bool, error) {
+	frame := make([]byte, 0, 32*1024)
+	oversized := false
+	for {
+		part, err := reader.ReadSlice('\n')
+		end := len(part) > 0 && part[len(part)-1] == '\n'
+		if end {
+			part = part[:len(part)-1]
+		}
+		if !oversized {
+			if len(part) > maxFrameBytes-len(frame) {
+				oversized = true
+				frame = nil
+			} else {
+				frame = append(frame, part...)
+			}
+		}
+		if end || err == io.EOF || (err != nil && err != bufio.ErrBufferFull) {
+			return frame, oversized, err
 		}
 	}
 }
@@ -196,6 +229,11 @@ func (s *Server) dispatch(encoder *json.Encoder, line string) error {
 	if req.JSONRPC != "2.0" {
 		return s.encodeError(encoder, req.ID, -32600, "invalid request: jsonrpc must be 2.0")
 	}
+	if req.ID == nil {
+		// JSON-RPC notifications do not receive a response, including unknown
+		// notifications. A request with an explicit null ID is still a request.
+		return nil
+	}
 	switch req.Method {
 	case "initialize":
 		result := map[string]any{
@@ -216,30 +254,30 @@ func (s *Server) dispatch(encoder *json.Encoder, line string) error {
 		return s.encodeResult(encoder, req.ID, map[string]any{
 			"tools": []map[string]any{
 				{
-					"name": "karte_search",
+					"name":        "karte_search",
 					"description": "Search the dedicated Karte data root for Markdown documents. Honors project scope, tag scope, and the policy's sensitivity ceiling. Returns doc_id, relative path, SHA-256, tags, and snippet for each match.",
 					"inputSchema": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
-							"query":         map[string]any{"type": "string", "description": "Text to search for in title, body, and frontmatter fields.", "maxLength": 2048},
-							"top_k":         map[string]any{"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
-							"projects":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict the search to these projects. Omit for all projects allowed by policy."},
-							"tags":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict the search to documents carrying at least one of these tags."},
-							"sensitivity":   map[string]any{"type": "string", "enum": []string{"public", "internal", "confidential", "restricted"}, "description": "Maximum sensitivity level to include. Defaults to the policy ceiling for the configured actor."},
+							"query":       map[string]any{"type": "string", "description": "Text to search for in title, body, and frontmatter fields.", "maxLength": 2048},
+							"top_k":       map[string]any{"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
+							"projects":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict the search to these projects. Omit for all projects allowed by policy."},
+							"tags":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict the search to documents carrying every requested tag."},
+							"sensitivity": map[string]any{"type": "string", "enum": []string{"public", "internal", "confidential", "restricted"}, "description": "Maximum sensitivity level to include. Defaults to the policy ceiling for the configured actor."},
 						},
-						"required": []string{"query"},
+						"required":             []string{"query"},
 						"additionalProperties": false,
 					},
 				},
 				{
-					"name": "karte_read",
+					"name":        "karte_read",
 					"description": "Read a single document by its stable doc_id. The response carries the canonical body, relative path, SHA-256, and frontmatter metadata.",
 					"inputSchema": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
 							"doc_id": map[string]any{"type": "string", "description": "Stable document identifier from frontmatter (doc_id field)."},
 						},
-						"required": []string{"doc_id"},
+						"required":             []string{"doc_id"},
 						"additionalProperties": false,
 					},
 				},
@@ -346,7 +384,7 @@ func (s *Server) currentScope() (contextcore.MCPScope, contextcore.Policy, error
 
 func (s *Server) search(raw json.RawMessage) (any, error) {
 	var params searchParams
-	if err := json.Unmarshal(raw, &params); err != nil {
+	if err := decodeArguments(raw, &params); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 	if strings.TrimSpace(params.Query) == "" {
@@ -394,7 +432,7 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 		}
 	} else if status == "invalid" || status == "error" {
 		// Record audit event for invalid or error operations
-		err := contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "search", status, 0, "")
+		err := contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "search", status, 0, auditErrorCode(searchErr))
 		if err != nil {
 			auditErr = err
 		}
@@ -411,7 +449,7 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 
 func (s *Server) read(raw json.RawMessage) (any, error) {
 	var params readParams
-	if err := json.Unmarshal(raw, &params); err != nil {
+	if err := decodeArguments(raw, &params); err != nil {
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 	if strings.TrimSpace(params.DocID) == "" {
@@ -453,7 +491,7 @@ func (s *Server) read(raw json.RawMessage) (any, error) {
 		}
 	} else if status == "invalid" || status == "error" {
 		// Record audit event for invalid or error operations
-		err := contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "read", status, 0, "")
+		err := contextcore.RecordAudit(s.dataRoot, request.RequestID, request.Actor, "read", status, 0, auditErrorCode(readErr))
 		if err != nil {
 			auditErr = err
 		}
@@ -466,6 +504,27 @@ func (s *Server) read(raw json.RawMessage) (any, error) {
 		return nil, readErr
 	}
 	return ReadOutput{Status: status, Document: document, Diagnostics: diagnostics}, nil
+}
+
+func auditErrorCode(err error) string {
+	var validation *contextcore.ValidationError
+	if errors.As(err, &validation) {
+		return validation.Code
+	}
+	return "processing_failed"
+}
+
+func decodeArguments(raw json.RawMessage, out any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errors.New("trailing argument data")
+	}
+	return nil
 }
 
 func newRequestID() string {
