@@ -18,7 +18,7 @@ const (
 )
 
 var (
-	logicalRefPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*$`)
+	logicalRefPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._/]*$`)
 )
 
 // ExperimentEvidence represents a piece of evidence for an experiment.
@@ -183,6 +183,13 @@ func (s *ExperimentEvidenceStore) Verify(candidateID string, expected []Experime
 
 		if actualSHA256 != expectedEntry.SHA256 {
 			return fmt.Errorf("evidence hash mismatch for %s: expected %s, got %s", entry.LogicalRef, expectedEntry.SHA256, actualSHA256)
+		}
+	}
+
+	// Verify that all expected evidence was processed
+	for _, expectedEntry := range expected {
+		if _, exists := expectedMap[expectedEntry.LogicalRef]; !exists {
+			return fmt.Errorf("expected evidence file missing: %s", expectedEntry.LogicalRef)
 		}
 	}
 
