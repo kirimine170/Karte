@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -329,12 +330,18 @@ func (r *ExperimentRecord) Validate() error {
 		}
 	}
 
-	if r.Interpretation == "" || len(r.Interpretation) > 2048 {
-		return fmt.Errorf("interpretation must not be empty and <= 2048 characters")
+	if r.Interpretation == "" {
+		return fmt.Errorf("interpretation must not be empty")
+	}
+	if utf8.RuneCountInString(r.Interpretation) > 2048 {
+		return fmt.Errorf("interpretation must be <= 2048 Unicode code points")
 	}
 
-	if r.HaltReason == "" || len(r.HaltReason) > 1024 {
-		return fmt.Errorf("halt_reason must not be empty and <= 1024 characters")
+	if r.HaltReason == "" {
+		return fmt.Errorf("halt_reason must not be empty")
+	}
+	if utf8.RuneCountInString(r.HaltReason) > 1024 {
+		return fmt.Errorf("halt_reason must be <= 1024 Unicode code points")
 	}
 
 	if len(r.Evidence) == 0 || len(r.Evidence) > 64 {
