@@ -91,6 +91,11 @@ func (s *ExperimentEvidenceStore) CandidateDir(candidateID string) string {
 
 // WriteEvidence writes experiment evidence to the managed area
 func (s *ExperimentEvidenceStore) WriteEvidence(candidateID string, entries map[string][]byte) error {
+	// Validate candidate ID
+	if !candidateIDPattern.MatchString(candidateID) {
+		return fmt.Errorf("invalid candidate_id: %s", candidateID)
+	}
+
 	candidateDir := s.CandidateDir(candidateID)
 	if err := os.MkdirAll(candidateDir, 0700); err != nil {
 		return fmt.Errorf("failed to create evidence directory: %w", err)
@@ -428,6 +433,12 @@ func BuildExperimentProposal(record ExperimentRecord, now time.Time) (Proposal, 
 
 	if record.State != "experiment" {
 		return Proposal{}, fmt.Errorf("experiment record state must be 'experiment' for proposal")
+	}
+
+	// Reject unknown properties in the record to prevent invalid JSON
+	// This maintains compatibility with the expected schema
+	if record.SchemaVersion != "0.1" {
+		return Proposal{}, fmt.Errorf("unsupported schema version: %s", record.SchemaVersion)
 	}
 
 	// Determine the filename
