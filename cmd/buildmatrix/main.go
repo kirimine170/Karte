@@ -114,6 +114,9 @@ func main() {
 			if err := signAndVerifyAppBundle(ctx, t.ArtifactDir); err != nil {
 				log.Fatalf("failed to seal macOS app bundle for %s: %v", t.Name, err)
 			}
+			if err := signAndVerifyMCPBinary(ctx, t.ArtifactDir); err != nil {
+				log.Fatalf("failed to seal macOS MCP executable for %s: %v", t.Name, err)
+			}
 		}
 
 		fmt.Printf("✅ %s artifacts stored in %s\n", t.Name, t.ArtifactDir)
@@ -580,6 +583,24 @@ func signAndVerifyAppBundle(ctx context.Context, artifactDir string) error {
 	}
 	if err := runCommand(ctx, ".", nil, "codesign", "--verify", "--deep", "--strict", "--verbose=2", appBundle); err != nil {
 		return fmt.Errorf("verify %s: %w", appBundle, err)
+	}
+	return nil
+}
+
+func signAndVerifyMCPBinary(ctx context.Context, artifactDir string) error {
+	binary := filepath.Join(artifactDir, "karte-mcp")
+	if info, err := os.Stat(binary); err != nil || !info.Mode().IsRegular() {
+		return fmt.Errorf("macOS MCP executable not found: %s", binary)
+	}
+	identity := strings.TrimSpace(os.Getenv("MACOS_CODESIGN_IDENTITY"))
+	if identity == "" {
+		identity = "-"
+	}
+	if err := runCommand(ctx, ".", nil, "codesign", "--force", "--sign", identity, "--timestamp=none", binary); err != nil {
+		return fmt.Errorf("sign %s: %w", binary, err)
+	}
+	if err := runCommand(ctx, ".", nil, "codesign", "--verify", "--strict", "--verbose=2", binary); err != nil {
+		return fmt.Errorf("verify %s: %w", binary, err)
 	}
 	return nil
 }

@@ -79,7 +79,7 @@ KarteはMCP（Model Context Protocol）対応のread-only facadeを提供する�
 KARTE_DATA_DIR=/absolute/path/to/dedicated-root karte-mcp [--check]
 ```
 
-配布アーカイブには対象OS・CPU用の`karte-mcp`（Windowsは`karte-mcp.exe`）をKarteのアプリと並べて含める．`scripts/build_local_app.sh`でも`build/bin/karte-mcp`を作成する．Codexへ登録する場合は，専用rootを用意して次のように指定する．
+配布アーカイブには対象OS・CPU用の`karte-mcp`（Windowsは`karte-mcp.exe`）をKarteのアプリと並べて含める．macOS配布物ではappとMCP実行ファイルの両方を署名・検証する．`scripts/build_local_app.sh`でも`build/bin/karte-mcp`を作成する．Codexへ登録する場合は，専用rootを用意して次のように指定する．
 
 ```toml
 [mcp_servers.karte]
@@ -94,6 +94,35 @@ env = { KARTE_DATA_DIR = "/absolute/path/to/dedicated-root" }
 ### mcp-scope.json
 
 `.mdsys/context/v1/mcp-scope.json`は，どのactorがこのdata rootをMCP経由で参照することを許可するかを宣言する．このマーカーがないrootはshared local-only rootであり，MCP facadeは接続を拒否する．
+
+新しい空の専用rootに`.mdsys/context/v1`を作り，次の2ファイルを配置する．`policy.json`はproject `codex` の`internal`以下を検索・読取できるactorを定義する例である．既存rootのpolicyを上書きせず，許可するprojectと感度を実際の用途に合わせて選ぶ．
+
+`.mdsys/context/v1/policy.json`：
+
+```json
+{
+  "protocol_version": "1.0",
+  "actors": {
+    "codex": {
+      "sensitivity_ceiling": "internal",
+      "projects": ["codex"],
+      "capabilities": ["search", "read"]
+    }
+  }
+}
+```
+
+`.mdsys/context/v1/mcp-scope.json`：
+
+```json
+{
+  "protocol_version": "1.0",
+  "actor": "codex",
+  "capabilities": ["search", "read"]
+}
+```
+
+markerのactorはpolicyのactor名と一致させ，capabilitiesはこの順序の`["search", "read"]`を指定する．保存後に`KARTE_DATA_DIR=/absolute/path/to/dedicated-root /absolute/path/to/karte-mcp --check`で起動条件を確認する．
 
 ### 公開tools
 

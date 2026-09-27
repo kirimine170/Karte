@@ -235,7 +235,9 @@ jobs:
 
       - name: Verify final macOS application code seal
         if: runner.os == 'macOS'
-        run: codesign --verify --deep --strict --verbose=2 "${{ matrix.artifact_path }}/Karte.app"
+        run: |
+          codesign --verify --deep --strict --verbose=2 "${{ matrix.artifact_path }}/Karte.app"
+          codesign --verify --strict --verbose=2 "${{ matrix.artifact_path }}/karte-mcp"
 
       - name: Archive artifact (macOS)
         if: runner.os == 'macOS'
