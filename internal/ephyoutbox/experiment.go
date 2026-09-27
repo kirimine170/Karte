@@ -115,6 +115,13 @@ func (s *ExperimentEvidenceStore) WriteEvidence(candidateID string, entries map[
 			return fmt.Errorf("failed to create evidence subdirectory: %w", err)
 		}
 
+		// Check for symlinks before writing
+		if fileInfo, err := os.Lstat(filePath); err == nil {
+			if fileInfo.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("symlink detected in evidence path: %s", filePath)
+			}
+		}
+
 		if err := os.WriteFile(filePath, content, 0600); err != nil {
 			return fmt.Errorf("failed to write evidence file %s: %w", logicalRef, err)
 		}
@@ -132,6 +139,10 @@ func (s *ExperimentEvidenceStore) WriteEvidence(candidateID string, entries map[
 
 	// Write the manifest
 	manifestPath := filepath.Join(candidateDir, "manifest.json")
+	// Reserve manifest.json from evidence references
+	if _, exists := entries["manifest.json"]; exists {
+		return fmt.Errorf("manifest.json is reserved and cannot be used as evidence")
+	}
 	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal manifest: %w", err)
