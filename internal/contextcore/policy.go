@@ -102,6 +102,14 @@ func LoadPolicy(dataRoot string) (Policy, error) {
 	if err != nil {
 		return Policy{}, fmt.Errorf("read context policy: %w", err)
 	}
+	return ParsePolicy(data)
+}
+
+// ParsePolicy parses and validates raw policy JSON. It is the strict entry
+// point for callers that must fail closed on any missing or malformed
+// grant, such as the dedicated-root MCP adapter, which must never fall
+// back to DefaultPolicy mid-session.
+func ParsePolicy(data []byte) (Policy, error) {
 	var policy Policy
 	decoder := json.NewDecoder(strings.NewReader(string(data)))
 	decoder.DisallowUnknownFields()

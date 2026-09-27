@@ -14,5 +14,7 @@ go build \
   -ldflags "-w -s" \
   -o build/bin/karte \
   .
+go build -trimpath -o build/bin/karte-mcp ./cmd/karte-mcp
 
 echo "Built ${KARTE_ROOT}/build/bin/karte"
+echo "Built ${KARTE_ROOT}/build/bin/karte-mcp"

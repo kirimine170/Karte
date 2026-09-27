@@ -2,12 +2,37 @@ package main
 
 import (
 	"context"
+	"debug/buildinfo"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestBuildKarteMCPBinaryUsesTargetPlatform(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := t.TempDir()
+	target := target{Platform: "windows/amd64", ArtifactDir: artifact}
+	if err := buildKarteMCPBinary(context.Background(), root, target); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(artifact, "karte-mcp.exe")
+	info, err := buildinfo.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := map[string]string{}
+	for _, setting := range info.Settings {
+		settings[setting.Key] = setting.Value
+	}
+	if settings["GOOS"] != "windows" || settings["GOARCH"] != "amd64" {
+		t.Fatalf("wrong target in MCP artifact: GOOS=%q GOARCH=%q", settings["GOOS"], settings["GOARCH"])
+	}
+}
 
 func TestSignAndVerifyAppBundleSealsFinalArtifact(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -16,6 +41,9 @@ func TestSignAndVerifyAppBundleSealsFinalArtifact(t *testing.T) {
 	root := t.TempDir()
 	artifactDir := filepath.Join(root, "dist")
 	if err := os.MkdirAll(filepath.Join(artifactDir, "Karte.app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "karte-mcp"), []byte("synthetic executable"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	binDir := filepath.Join(root, "bin")
@@ -34,13 +62,18 @@ func TestSignAndVerifyAppBundleSealsFinalArtifact(t *testing.T) {
 	if err := signAndVerifyAppBundle(context.Background(), artifactDir); err != nil {
 		t.Fatal(err)
 	}
+	if err := signAndVerifyMCPBinary(context.Background(), artifactDir); err != nil {
+		t.Fatal(err)
+	}
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) != 2 || !strings.Contains(lines[0], "--force --deep --sign Developer ID Test --timestamp=none") ||
-		!strings.Contains(lines[1], "--verify --deep --strict --verbose=2") {
+	if len(lines) != 4 || !strings.Contains(lines[0], "--force --deep --sign Developer ID Test --timestamp=none") ||
+		!strings.Contains(lines[1], "--verify --deep --strict --verbose=2") ||
+		!strings.Contains(lines[2], "--force --sign Developer ID Test --timestamp=none "+filepath.Join(artifactDir, "karte-mcp")) ||
+		!strings.Contains(lines[3], "--verify --strict --verbose=2 "+filepath.Join(artifactDir, "karte-mcp")) {
 		t.Fatalf("unexpected codesign calls: %q", lines)
 	}
 }
@@ -48,5 +81,11 @@ func TestSignAndVerifyAppBundleSealsFinalArtifact(t *testing.T) {
 func TestSignAndVerifyAppBundleRequiresBundle(t *testing.T) {
 	if err := signAndVerifyAppBundle(context.Background(), t.TempDir()); err == nil {
 		t.Fatal("missing app bundle was accepted")
+	}
+}
+
+func TestSignAndVerifyMCPBinaryRequiresExecutable(t *testing.T) {
+	if err := signAndVerifyMCPBinary(context.Background(), t.TempDir()); err == nil {
+		t.Fatal("missing MCP executable was accepted")
 	}
 }

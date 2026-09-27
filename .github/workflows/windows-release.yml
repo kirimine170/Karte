@@ -190,6 +190,18 @@ jobs:
           KARTE_GCC_RUNTIME_LICENSE_DIR: C:\msys64\mingw64\share\licenses\gcc-libs
         run: go run ./cmd/buildmatrix --targets windows --clean
 
+      - name: Verify MCP executable in Windows distribution
+        shell: pwsh
+        run: |
+          $binary = 'dist\windows\karte-mcp.exe'
+          if (!(Test-Path $binary)) {
+            throw 'karte-mcp.exe was not packaged'
+          }
+          $info = go version -m $binary
+          if ($LASTEXITCODE -ne 0 -or !($info -match 'GOOS=windows') -or !($info -match 'GOARCH=amd64')) {
+            throw 'karte-mcp.exe has the wrong target platform'
+          }
+
       - name: Sign and verify every packaged PE file
         id: signing
         shell: pwsh

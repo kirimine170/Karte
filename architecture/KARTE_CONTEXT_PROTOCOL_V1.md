@@ -69,6 +69,72 @@ Ephy同梱版のlauncherは，選択した絶対`KARTE_DATA_DIR`を`Karte.app`�
 
 Karteは起動後，現在のPIDを`KARTE_DATA_DIR/.mdsys/runtime/karte.pid`へatomicに公開し，正常終了時は自分がownerである場合だけ削除する．Ephy launcherは実行ファイルのpathだけでなく，期待するdata root内のPID markerと実process identityが一致するKarteだけを再利用する．同じbundleが別data rootで動作中の場合はそのprocessを流用せず，期待root用のinstanceを起動する．`karte.pid`はprocess discovery用のephemeral markerであり，document identity，lock，authorization，またはcanonical stateではない．
 
+## MCP facade（read-only）
+
+KarteはMCP（Model Context Protocol）対応のread-only facadeを提供する．`karte-mcp`バイナリはSTDIOでJSON-RPC 2.0を話す．このfacadeは既存のcontextcore serviceとpolicyを使い，呼出しごとにpolicyとscope markerを再読込してから認可する．検索・読取と監査はcontextcoreと同じ保存形式を使う．
+
+### 起動
+
+```
+KARTE_DATA_DIR=/absolute/path/to/dedicated-root karte-mcp [--check]
+```
+
+配布アーカイブには対象OS・CPU用の`karte-mcp`（Windowsは`karte-mcp.exe`）をKarteのアプリと並べて含める．macOS配布物ではappとMCP実行ファイルの両方を署名・検証する．`scripts/build_local_app.sh`でも`build/bin/karte-mcp`を作成する．Codexへ登録する場合は，専用rootを用意して次のように指定する．
+
+```toml
+[mcp_servers.karte]
+command = "/absolute/path/to/karte-mcp"
+env = { KARTE_DATA_DIR = "/absolute/path/to/dedicated-root" }
+```
+
+1フレームは改行を除くJSON入力が最大1 MiB．超過分は次の改行まで破棄し，次のフレームから処理を再開する．複数タグを指定した場合は全タグに一致する文書だけを返す．
+
+`KARTE_DATA_DIR`が未設定，存在しない，`policy.json`がない，`mcp-scope.json`がない，scopeのactorがpolicyに存在しない，read capabilityが欠けている場合，`karte-mcp`は起動を拒否する．`--check`は環境を検証してexit 0/1を返すだけである．
+
+### mcp-scope.json
+
+`.mdsys/context/v1/mcp-scope.json`は，どのactorがこのdata rootをMCP経由で参照することを許可するかを宣言する．このマーカーがないrootはshared local-only rootであり，MCP facadeは接続を拒否する．
+
+新しい空の専用rootに`.mdsys/context/v1`を作り，次の2ファイルを配置する．`policy.json`はproject `codex` の`internal`以下を検索・読取できるactorを定義する例である．既存rootのpolicyを上書きせず，許可するprojectと感度を実際の用途に合わせて選ぶ．
+
+`.mdsys/context/v1/policy.json`：
+
+```json
+{
+  "protocol_version": "1.0",
+  "actors": {
+    "codex": {
+      "sensitivity_ceiling": "internal",
+      "projects": ["codex"],
+      "capabilities": ["search", "read"]
+    }
+  }
+}
+```
+
+`.mdsys/context/v1/mcp-scope.json`：
+
+```json
+{
+  "protocol_version": "1.0",
+  "actor": "codex",
+  "capabilities": ["search", "read"]
+}
+```
+
+markerのactorはpolicyのactor名と一致させ，capabilitiesはこの順序の`["search", "read"]`を指定する．保存後に`KARTE_DATA_DIR=/absolute/path/to/dedicated-root /absolute/path/to/karte-mcp --check`で起動条件を確認する．
+
+### 公開tools
+
+- `karte_search`：`query`，`top_k`，`projects`，`tags`，`sensitivity`を受け取り，policy判定済み結果を返す．
+- `karte_read`：`doc_id`を受け取り，canonical body，relative path，SHA-256，frontmatterを返す．
+
+両toolとも`Actor.Type="tool"`，`Actor.ID=<scope actor>`でcontextcoreを呼び出すため，policyのactor policyがそのまま適用される．sensitivityが省略された場合，policyのceilingを使う．
+
+### 非公開
+
+MCP facadeはwrite，propose，export，learnを公開しない．auditはcontextcoreのaudit storeに同一形式で書かれる．
+
 ## Compatibility
 
 Contract正本は`schemas/karte-context/v1`に置く．Karte側を先にmergeし，ephy-runtimeのbyte-for-byte fixture checkを後続で更新する．V1内のoptional field追加はreaderがunknown fieldを拒否するため，schema versionを上げずに行わない．

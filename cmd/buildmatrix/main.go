@@ -88,6 +88,9 @@ func main() {
 		if err := moveArtifacts(t.ArtifactDir); err != nil {
 			log.Fatalf("failed to move artifacts for %s: %v", t.Name, err)
 		}
+		if err := buildKarteMCPBinary(ctx, projectRoot, t); err != nil {
+			log.Fatalf("failed to build karte-mcp for %s: %v", t.Name, err)
+		}
 		if isWindowsTarget(t) {
 			if err := packageTemplateIntoArtifact(projectRoot, t.ArtifactDir); err != nil {
 				log.Fatalf("failed to package karte_data_template for %s: %v", t.Name, err)
@@ -110,6 +113,9 @@ func main() {
 			}
 			if err := signAndVerifyAppBundle(ctx, t.ArtifactDir); err != nil {
 				log.Fatalf("failed to seal macOS app bundle for %s: %v", t.Name, err)
+			}
+			if err := signAndVerifyMCPBinary(ctx, t.ArtifactDir); err != nil {
+				log.Fatalf("failed to seal macOS MCP executable for %s: %v", t.Name, err)
 			}
 		}
 
@@ -581,6 +587,24 @@ func signAndVerifyAppBundle(ctx context.Context, artifactDir string) error {
 	return nil
 }
 
+func signAndVerifyMCPBinary(ctx context.Context, artifactDir string) error {
+	binary := filepath.Join(artifactDir, "karte-mcp")
+	if info, err := os.Stat(binary); err != nil || !info.Mode().IsRegular() {
+		return fmt.Errorf("macOS MCP executable not found: %s", binary)
+	}
+	identity := strings.TrimSpace(os.Getenv("MACOS_CODESIGN_IDENTITY"))
+	if identity == "" {
+		identity = "-"
+	}
+	if err := runCommand(ctx, ".", nil, "codesign", "--force", "--sign", identity, "--timestamp=none", binary); err != nil {
+		return fmt.Errorf("sign %s: %w", binary, err)
+	}
+	if err := runCommand(ctx, ".", nil, "codesign", "--verify", "--strict", "--verbose=2", binary); err != nil {
+		return fmt.Errorf("verify %s: %w", binary, err)
+	}
+	return nil
+}
+
 // packageTemplateIntoAppBundle replicates the packaging logic from the old package.sh:
 // - Copy templates/karte_data_template into the build artifact directory
 // - Overlay ASR models from karte_data/data/asr onto that template
@@ -735,4 +759,48 @@ func mergeEnv(base []string, extra map[string]string) []string {
 		merged = append(merged, fmt.Sprintf("%s=%s", k, v))
 	}
 	return merged
+}
+
+func buildKarteMCPBinary(ctx context.Context, projectRoot string, t target) error {
+	parts := strings.Split(t.Platform, "/")
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid target platform %q", t.Platform)
+	}
+	name := "karte-mcp"
+	if parts[0] == "windows" {
+		name += ".exe"
+	}
+	destination := filepath.Join(t.ArtifactDir, name)
+	build := func(arch, output string) error {
+		cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", output, "./cmd/karte-mcp")
+		cmd.Dir = projectRoot
+		cmd.Env = mergeEnv(os.Environ(), map[string]string{"GOOS": parts[0], "GOARCH": arch, "CGO_ENABLED": "0"})
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("build karte-mcp for %s/%s: %w", parts[0], arch, err)
+		}
+		return nil
+	}
+	if parts[0] == "darwin" && parts[1] == "universal" {
+		temporary, err := os.MkdirTemp("", "karte-mcp-universal-")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(temporary)
+		arm := filepath.Join(temporary, "karte-mcp-arm64")
+		amd := filepath.Join(temporary, "karte-mcp-amd64")
+		if err := build("arm64", arm); err != nil {
+			return err
+		}
+		if err := build("amd64", amd); err != nil {
+			return err
+		}
+		cmd := exec.CommandContext(ctx, "lipo", "-create", "-output", destination, arm, amd)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("assemble universal karte-mcp: %w: %s", err, output)
+		}
+		return nil
+	}
+	return build(parts[1], destination)
 }
