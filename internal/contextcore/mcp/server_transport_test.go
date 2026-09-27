@@ -3,6 +3,8 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -216,6 +218,95 @@ func TestMCPReadSchemaAdvertisesDocIDLimit(t *testing.T) {
 		return
 	}
 	t.Fatal("karte_read was not listed")
+}
+
+func TestMCPSearchSchemaAdvertisesFilterBounds(t *testing.T) {
+	root := t.TempDir()
+	buildDedicatedRoot(t, root)
+	frame := frameByID(t, serve(t, root, mcpLine(t, "list", "tools/list", nil)), "list")
+	result := frame["result"].(map[string]any)
+	for _, tool := range result["tools"].([]any) {
+		item := tool.(map[string]any)
+		if item["name"] != "karte_search" {
+			continue
+		}
+		schema := item["inputSchema"].(map[string]any)
+		properties := schema["properties"].(map[string]any)
+		projects := properties["projects"].(map[string]any)
+		projectItem := projects["items"].(map[string]any)
+		if projects["maxItems"] != float64(64) || projectItem["maxLength"] != float64(64) || projectItem["pattern"] != `^(\*|[a-z0-9][a-z0-9._-]{0,63})$` {
+			t.Fatalf("wrong project filter bounds: %v", projects)
+		}
+		tags := properties["tags"].(map[string]any)
+		tagItem := tags["items"].(map[string]any)
+		if tags["maxItems"] != float64(64) || tagItem["maxLength"] != float64(128) || tagItem["minLength"] != float64(1) {
+			t.Fatalf("wrong tag filter bounds: %v", tags)
+		}
+		return
+	}
+	t.Fatal("karte_search was not listed")
+}
+
+func TestMCPInvalidArgumentAuditUsesLiveActor(t *testing.T) {
+	root := t.TempDir()
+	buildDedicatedRoot(t, root)
+	server, err := NewServer(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewritePolicy(t, root, func(policy *contextcore.Policy) {
+		policy.Actors["alternate"] = contextcore.ActorPolicy{
+			SensitivityCeiling: "internal",
+			Projects:           []string{"codex"},
+			Capabilities:       []contextcore.Capability{contextcore.CapabilitySearch, contextcore.CapabilityRead},
+		}
+	})
+	if err := contextcore.WriteMCPScope(root, contextcore.MCPScope{
+		ProtocolVersion: contextcore.ProtocolVersion,
+		Actor:           "alternate",
+		Capabilities:    []string{"search", "read"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.search(json.RawMessage(`{"query":""}`)); err == nil {
+		t.Fatal("empty query was accepted")
+	}
+	entries, err := os.ReadDir(filepath.Join(root, ".mdsys", "context", "v1", "audit"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("expected one audit event: entries=%v err=%v", entries, err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".mdsys", "context", "v1", "audit", entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var event contextcore.AuditEvent
+	if err := json.Unmarshal(data, &event); err != nil {
+		t.Fatal(err)
+	}
+	actorHash := sha256.Sum256([]byte("alternate"))
+	if event.ActorIDSHA256 != hex.EncodeToString(actorHash[:]) || event.Status != "invalid" {
+		t.Fatalf("validation audit was not attributed to live actor: %+v", event)
+	}
+}
+
+func TestMCPRejectsUnknownScopeMarkerFields(t *testing.T) {
+	root := t.TempDir()
+	buildDedicatedRoot(t, root)
+	server, err := NewServer(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(root, ".mdsys", "context", "v1", "mcp-scope.json")
+	data := []byte(`{"protocol_version":"1.0","actor":"codex","capabilities":["search","read"],"projects":["codex"]}`)
+	if err := os.WriteFile(marker, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewServer(root); err == nil {
+		t.Fatal("unknown marker field was accepted at startup")
+	}
+	if _, err := server.search(json.RawMessage(`{"query":"planning"}`)); err == nil {
+		t.Fatal("unknown marker field was accepted after startup")
+	}
 }
 
 func TestMCPAuditFailureIsSanitized(t *testing.T) {

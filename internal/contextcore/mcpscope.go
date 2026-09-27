@@ -1,8 +1,10 @@
 package contextcore
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -64,8 +66,14 @@ func LoadMCPScope(dataRoot string, policy Policy) (MCPScope, error) {
 		return MCPScope{}, fmt.Errorf("refusing to start: read %s: %w", mcpScopeFilename, err)
 	}
 	var scope MCPScope
-	if err := json.Unmarshal(data, &scope); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&scope); err != nil {
 		return MCPScope{}, fmt.Errorf("refusing to start: parse %s: %w", mcpScopeFilename, err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return MCPScope{}, fmt.Errorf("refusing to start: %s contains trailing JSON", mcpScopeFilename)
 	}
 	if scope.ProtocolVersion != ProtocolVersion {
 		return MCPScope{}, fmt.Errorf("refusing to start: %s protocol_version is %q", mcpScopeFilename, scope.ProtocolVersion)

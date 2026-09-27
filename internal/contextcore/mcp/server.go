@@ -261,8 +261,8 @@ func (s *Server) dispatch(encoder *json.Encoder, line string) error {
 						"properties": map[string]any{
 							"query":       map[string]any{"type": "string", "description": "Text to search for in title, body, and frontmatter fields.", "minLength": 1, "maxLength": 2048},
 							"top_k":       map[string]any{"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
-							"projects":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict the search to these projects. Omit for all projects allowed by policy."},
-							"tags":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Restrict the search to documents carrying every requested tag."},
+							"projects":    map[string]any{"type": "array", "maxItems": 64, "items": map[string]any{"type": "string", "maxLength": 64, "pattern": `^(\*|[a-z0-9][a-z0-9._-]{0,63})$`}, "description": "Restrict the search to these projects. Omit for all projects allowed by policy."},
+							"tags":        map[string]any{"type": "array", "maxItems": 64, "items": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "description": "Restrict the search to documents carrying every requested tag."},
 							"sensitivity": map[string]any{"type": "string", "enum": []string{"public", "internal", "confidential", "restricted"}, "description": "Maximum sensitivity level to include. Defaults to the policy ceiling for the configured actor."},
 						},
 						"required":             []string{"query"},
@@ -508,7 +508,16 @@ func (s *Server) read(raw json.RawMessage) (any, error) {
 
 func (s *Server) rejectInvalidArguments(requestID, operation string, validationErr error) error {
 	actor := contextcore.Actor{Type: "tool", ID: s.scope.Actor}
-	if auditErr := contextcore.RecordAudit(s.dataRoot, requestID, actor, operation, "invalid", 0, "invalid_arguments"); auditErr != nil {
+	status, code := "invalid", "invalid_arguments"
+	if scope, _, err := s.currentScope(); err == nil {
+		actor.ID = scope.Actor
+	} else {
+		// A broken live grant cannot provide an actor identity. Record the
+		// reload failure against the startup actor, as for valid calls.
+		status, code = "error", "policy_reload_failed"
+		validationErr = errors.Join(validationErr, err)
+	}
+	if auditErr := contextcore.RecordAudit(s.dataRoot, requestID, actor, operation, status, 0, code); auditErr != nil {
 		return errors.Join(validationErr, auditErr)
 	}
 	return validationErr
