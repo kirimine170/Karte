@@ -18,7 +18,7 @@ const (
 )
 
 var (
-	logicalRefPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._/]*$`)
+	logicalRefPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*$`)
 )
 
 // ExperimentEvidence represents a piece of evidence for an experiment.
@@ -106,6 +106,19 @@ func (s *ExperimentEvidenceStore) WriteEvidence(candidateID string, entries map[
 		CandidateID:   candidateID,
 		Entries:       make([]EvidenceEntry, 0, len(entries)),
 		WrittenAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+
+	// Check for colliding prefixes before writing
+	for logicalRef := range entries {
+		filePath := filepath.Join(candidateDir, logicalRef)
+		// Check if any parent directory already exists
+		for dir := filepath.Dir(filePath); dir != candidateDir; dir = filepath.Dir(dir) {
+			if fileInfo, err := os.Lstat(dir); err == nil {
+				if fileInfo.Mode()&os.ModeSymlink != 0 {
+					return fmt.Errorf("symlink detected in evidence path: %s", dir)
+				}
+			}
+		}
 	}
 
 	for logicalRef, content := range entries {
