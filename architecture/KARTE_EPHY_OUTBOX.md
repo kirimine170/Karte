@@ -1,31 +1,105 @@
-# Karte–Ephy reviewed outbox V1.1
+# KARTE EPHY Outbox Architecture
 
-## Review flow
+This document describes the architecture for the EPHY outbox integration for halted experiments reporting.
 
-Ephy atomically publishes proposal JSON to `KARTE_DATA_DIR/.mdsys/ephy/outbox/pending`．Karte's `Ephy候補` review opens validated candidates and displays operation，Karte-resolved target，placement reason and confidence，alternatives，`base_sha256`，source references，sensitivity，and either a complete create preview or an append diff．The reviewer can accept the original proposal，edit frontmatter／Markdown fragment and accept，or reject it．No action runs automatically．
+## Overview
 
-Proposal表示前とaccept直前に[Personal Context privacy policy](adr/ADR-0004-personal-context-privacy-provenance-policy.md)を再評価する．Ephy actorには`propose`，local humanには`review` capabilityが必要である．appendはcanonical project／kind／sensitivityと一致しなければならず，append patchで`sensitivity`を変更できない．policy denialはtitle，body，path，tag，canonical documentの存在をUIへ返さない．
+The EPHY outbox is responsible for managing proposals for human-readable reports that document halted experiments. These reports are stored in the `.mdsys/ephy/reports` directory and are integrated with the KARTE outbox system.
 
-Karte checks the pending outbox every five seconds while the review dialog is closed．The top-bar action displays `Ephy候補 (N)` when validated pending proposals exist．Opening the dialog refreshes immediately，and background refresh is suspended while the reviewer is editing so a poll cannot overwrite reviewed frontmatter or body text．
+## Key Components
 
-For a local unpackaged acceptance build，run `bash scripts/build_local_app.sh` and start `build/bin/karte` with the intended `KARTE_DATA_DIR`．A compatible Wails CLI may instead create the packaged application with `wails build`．
+### ExperimentRecord
 
-Acceptance is the only path that calls Karte's existing `SaveFile` method．Create derives a deterministic Karte-owned `doc_id` from the unique candidate identity，then applies `content/projects/<project>/<kind>/<YYYY-MM>/<preferred_filename>`．A path owned by another `doc_id` receives `--<doc_id先頭8文字>` before `.md`，extending the prefix only on another collision．Append verifies `target_doc_id`，project，kind，and the SHA-256 of current canonical file bytes before appending the reviewed fragment at document end．A mismatch produces a conflict receipt and does not write canonical content．
+An `ExperimentRecord` represents a halted experiment that needs to be documented in a human-readable report.
 
-## Placement and consultation
+```go
+type ExperimentRecord struct {
+	SchemaVersion  string               `json:"schema_version"`
+	CandidateID    string               `json:"candidate_id"`
+	ExperimentID   string               `json:"experiment_id"`
+	RunID          string               `json:"run_id"`
+	AttemptID      string               `json:"attempt_id"`
+	TargetCommit   string               `json:"target_commit"`
+	PatchSHA256    string               `json:"patch_sha256"`
+	Environment    string               `json:"environment"`
+	Model          string               `json:"model"`
+	Checker        string               `json:"checker"`
+	Observations   []string             `json:"observations"`
+	Interpretation string               `json:"interpretation"`
+	HaltReason     string               `json:"halt_reason"`
+	Evidence       []ExperimentEvidence `json:"evidence"`
+	Verification   string               `json:"verification"`
+	State          string               `json:"state"` // saved | experiment | adopted
+	Project        string               `json:"project"`
+	Title          string               `json:"title"`
+	ReportedAt     string               `json:"reported_at"`
+}
+```
 
-`project`，`kind`，`year_month`，confidence，and a path-safe filename candidate are mandatory．V1.1 kinds are `note`，`meeting`，`decision`，`plan`，`task`，`research`，`reference`，`report`，`person`，`organization`，and `journal`．Tags remain independent cross-directory search metadata．Cross-project people，organizations，and journals use the `master` project when Ephy and the user classify them that way．
+### ExperimentEvidence
 
-Ephy may retain up to three project／kind alternatives．When classification is unresolved or a similar document may be a better append target，`consultation_required` is true and Ephy must ask the user before publication．Both Ephy and Karte reject unresolved proposals from the executable review path．Sensitivity is displayed and retained but does not silently alter placement in V1.1．
+Evidence represents a piece of evidence for an experiment.
 
-Ephy recommends append only when an exact `doc_id` match also agrees on project and kind and supplies the current canonical byte hash．A similar document without exact identity，or an identity whose content classification disagrees，requires consultation．No exact or similar match produces a create recommendation．
+```go
+type ExperimentEvidence struct {
+	LogicalRef string `json:"logical_ref"`
+	SHA256     string `json:"sha256"`
+}
+```
 
-## Atomic processing and recovery
+### ExperimentEvidenceStore
 
-Proposal and receipt files are written on the same filesystem using a temporary file，flush，and rename．Karte records a short-lived transaction under `.mdsys/ephy/outbox/transactions` before saving．After `SaveFile` succeeds，the transaction records the resulting canonical SHA-256 before the receipt is attempted．
+The `ExperimentEvidenceStore` manages experiment evidence in the secret managed area.
 
-If receipt publication fails，leave the pending proposal and transaction in place，correct the storage failure，and retry the same `candidate_id` from Karte．Karte verifies the saved transaction against canonical bytes，writes the receipt，archives the proposal，and removes the transaction without calling `SaveFile` again．Do not manually copy the proposal into `content`，change the candidate ID，or delete the transaction while recovering．
+```go
+type ExperimentEvidenceStore struct {
+	dataRoot string
+	root     string
+}
+```
 
-Accepted proposals move to `accepted`，rejected proposals move to `rejected`，and receipts are stored in `receipts`．Conflict proposals retain their pending JSON for audit but are hidden from repeat review once the final conflict receipt exists．Ephy must submit a new candidate based on the new canonical hash．Move，rename，delete，and arbitrary-position patch operations remain disabled．
+### Proposal Structure
 
-Invalid proposal files never reach `SaveFile`．Validation errors contain filename，candidate ID when safely available，and an error code，but never proposal body text．
+The proposal generated from an experiment record follows the KARTE outbox schema:
+
+```go
+type Proposal struct {
+	SchemaVersion       string         `json:"schema_version"`
+	CandidateID         string         `json:"candidate_id"`
+	Operation           string         `json:"operation"`
+	ProposedFrontmatter map[string]any `json:"proposed_frontmatter"`
+	ProposedBody        string         `json:"proposed_body"`
+	Placement           PlacementHint  `json:"placement"`
+	SourceRefs          []SourceRef    `json:"source_refs"`
+	Sensitivity         string         `json:"sensitivity"`
+	CreatedAt           string         `json:"created_at"`
+}
+```
+
+## Flow
+
+1. An experiment halts and creates an `ExperimentRecord`
+2. The `ExperimentPublisher` stores evidence in the managed area
+3. Evidence is verified to ensure integrity
+4. A `Proposal` is created and converted from the `ExperimentRecord`
+5. The proposal is stored in the KARTE outbox for human review
+
+## Evidence Storage
+
+Evidence is stored in the managed area under `.mdsys/ephy/experiments/{candidateID}/` with a manifest file `manifest.json` that contains references to all evidence files.
+
+## Report Generation
+
+The `RenderExperimentReport` function transforms an `ExperimentRecord` into a human-readable Markdown report that includes:
+- Status information
+- Identity details
+- Target commit and patch information
+- Environment details
+- Observed facts
+- Interpretation
+- Halt reason
+- Evidence references
+
+## Validation
+
+All records are validated before processing to ensure they meet the required schema and constraints.
