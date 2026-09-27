@@ -285,6 +285,10 @@ func (r *ExperimentRecord) Validate() error {
 		if !isValidHex(r.TargetCommit) {
 			return fmt.Errorf("target_commit must be valid hex string")
 		}
+		// Require lowercase hex digits for target commit
+		if r.TargetCommit != strings.ToLower(r.TargetCommit) {
+			return fmt.Errorf("target_commit must be lowercase")
+		}
 	}
 
 	if r.PatchSHA256 == "" {
@@ -296,6 +300,10 @@ func (r *ExperimentRecord) Validate() error {
 		}
 		if !isValidHex(r.PatchSHA256) {
 			return fmt.Errorf("patch_sha256 must be valid hex string")
+		}
+		// Require lowercase hex digits for patch SHA256
+		if r.PatchSHA256 != strings.ToLower(r.PatchSHA256) {
+			return fmt.Errorf("patch_sha256 must be lowercase")
 		}
 	}
 
@@ -313,6 +321,9 @@ func (r *ExperimentRecord) Validate() error {
 		return fmt.Errorf("observations must be 1-64 items")
 	}
 	for _, obs := range r.Observations {
+		if len(obs) == 0 {
+			return fmt.Errorf("observation must not be empty")
+		}
 		if len(obs) > 1024 {
 			return fmt.Errorf("observation must be <= 1024 characters")
 		}
