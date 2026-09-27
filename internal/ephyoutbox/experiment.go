@@ -112,7 +112,7 @@ func (s *ExperimentEvidenceStore) WriteEvidence(candidateID string, entries map[
 	for logicalRef := range entries {
 		filePath := filepath.Join(candidateDir, logicalRef)
 		// Check if any parent directory already exists
-		for dir := filepath.Dir(filePath); dir != candidateDir; dir = filepath.Dir(dir) {
+		for dir := filepath.Dir(filePath); dir != candidateDir && dir != "/"; dir = filepath.Dir(dir) {
 			if fileInfo, err := os.Lstat(dir); err == nil {
 				if fileInfo.Mode()&os.ModeSymlink != 0 {
 					return fmt.Errorf("symlink detected in evidence path: %s", dir)
@@ -341,6 +341,10 @@ func (r *ExperimentRecord) Validate() error {
 		}
 		if !isValidHex(ev.SHA256) {
 			return fmt.Errorf("evidence sha256 must be valid hex string")
+		}
+		// Reject uppercase hex digits to enforce lowercase in evidence digests
+		if ev.SHA256 != strings.ToLower(ev.SHA256) {
+			return fmt.Errorf("evidence sha256 must be lowercase")
 		}
 	}
 
