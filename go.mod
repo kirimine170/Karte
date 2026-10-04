@@ -11,6 +11,7 @@ require (
 	github.com/k2-fsa/sherpa-onnx-go-macos v1.13.4
 	github.com/k2-fsa/sherpa-onnx-go-windows v1.13.4
 	github.com/kirimine170/KarteRenderer v0.0.0
+	github.com/stretchr/testify v1.11.1
 	github.com/wailsapp/wails/v2 v2.13.0
 	github.com/yuin/goldmark v1.8.5
 	golang.org/x/image v0.44.0
@@ -30,6 +31,7 @@ require (
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-git/go-billy/v5 v5.9.0 // indirect
@@ -55,6 +57,7 @@ require (
 	github.com/pjbgf/sha1cd v0.6.0 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/samber/lo v1.49.1 // indirect
 	github.com/sergi/go-diff v1.4.0 // indirect

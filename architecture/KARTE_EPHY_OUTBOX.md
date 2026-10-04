@@ -29,3 +29,9 @@ If receipt publication fails，leave the pending proposal and transaction in pla
 Accepted proposals move to `accepted`，rejected proposals move to `rejected`，and receipts are stored in `receipts`．Conflict proposals retain their pending JSON for audit but are hidden from repeat review once the final conflict receipt exists．Ephy must submit a new candidate based on the new canonical hash．Move，rename，delete，and arbitrary-position patch operations remain disabled．
 
 Invalid proposal files never reach `SaveFile`．Validation errors contain filename，candidate ID when safely available，and an error code，but never proposal body text．
+
+## Halted experiment evidence extension v0.1
+
+The existing V1.1 review, Personal Context, placement, acceptance, and recovery rules above remain authoritative．The experiment extension prepares a validated `kind=report` proposal and preserves synthetic or producer-supplied evidence under `.mdsys/ephy/experiments/<candidate_id>/`．It does not publish pending proposals, invoke workers, save canonical content, or approve a report．
+
+See [the experiment contract](KARTE_EPHY_EXPERIMENT_REPORT_V01.md) for evidence integrity, immutable retries, and deterministic proposal dates．
