@@ -9,6 +9,90 @@ import (
 	"testing"
 )
 
+func TestStoreRejectsOtherCandidateArtifactsBeforeMutation(t *testing.T) {
+	for _, artifact := range []string{"pending", "transaction"} {
+		for _, identity := range []string{"lower-name-and-payload", "lower-name", "lower-payload"} {
+			t.Run(artifact+"/"+identity, func(t *testing.T) {
+				dataRoot := t.TempDir()
+				store, err := NewStore(dataRoot)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := store.EnsureLayout(); err != nil {
+					t.Fatal(err)
+				}
+				var proposal Proposal
+				if err := json.Unmarshal(fixtureBytes(t, "append-proposal.json"), &proposal); err != nil {
+					t.Fatal(err)
+				}
+				lowerID, requestedID := proposal.CandidateID, strings.ToUpper(proposal.CandidateID)
+				nameID, payloadID := requestedID, requestedID
+				if identity != "lower-payload" {
+					nameID = lowerID
+				}
+				if identity != "lower-name" {
+					payloadID = lowerID
+				}
+				proposal.CandidateID = payloadID
+				var value any = proposal
+				dir := store.pendingDir
+				if artifact == "transaction" {
+					dir = store.transactionsDir
+					sha := SHA256Bytes([]byte("synthetic canonical"))
+					value = Transaction{
+						SchemaVersion: SchemaVersion, CandidateID: payloadID,
+						RelativePath: *proposal.TargetRelativePath, DocID: *proposal.TargetDocID,
+						BaseSHA256: proposal.BaseSHA256, PreparedContent: "synthetic canonical",
+						State: "saved", ResultingSHA256: &sha, StartedAt: "2026-09-01T00:00:00Z",
+					}
+				}
+				payload, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(dir, nameID+".json")
+				if err := os.WriteFile(path, payload, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if nameID != requestedID {
+					if _, err := os.Stat(filepath.Join(dir, requestedID+".json")); os.IsNotExist(err) {
+						t.Skip("case-sensitive filesystem: no case alias to exercise")
+					} else if err != nil {
+						t.Fatal(err)
+					}
+					t.Log("case-insensitive filesystem alias confirmed")
+				}
+				for attempt := 0; attempt < 2; attempt++ {
+					var readErr, mutateErr error
+					if artifact == "pending" {
+						_, readErr = store.ReadPending(requestedID)
+						mutateErr = store.MoveProposal(requestedID, "accepted")
+					} else {
+						_, readErr = store.ReadTransaction(requestedID)
+						mutateErr = store.RemoveTransaction(requestedID)
+					}
+					for _, err := range []error{readErr, mutateErr} {
+						if err == nil || !strings.Contains(err.Error(), "candidate_id does not match filename") {
+							t.Errorf("attempt %d trusted another candidate: err=%v", attempt, err)
+						}
+					}
+					current, err := os.ReadFile(path)
+					if err != nil || !bytes.Equal(current, payload) {
+						t.Fatalf("attempt %d changed artifact bytes: err=%v", attempt, err)
+					}
+					if entries, err := os.ReadDir(store.acceptedDir); err != nil || len(entries) != 0 {
+						t.Fatalf("attempt %d archived another candidate: entries=%v err=%v", attempt, entries, err)
+					}
+					store, err = NewStore(dataRoot)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestStoreRejectsReceiptCandidateIDMismatch(t *testing.T) {
 	for _, result := range []string{"accepted", "rejected", "conflict", "invalid"} {
 		t.Run(result, func(t *testing.T) {

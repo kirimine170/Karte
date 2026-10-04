@@ -122,10 +122,25 @@ func (store *Store) ListPending() ([]Proposal, []ProposalError, error) {
 }
 
 func (store *Store) ReadPending(candidateID string) (Proposal, error) {
+	return store.readCandidateProposal(store.pendingDir, candidateID)
+}
+
+func (store *Store) readCandidateProposal(dir, candidateID string) (Proposal, error) {
 	if !candidateIDPattern.MatchString(candidateID) {
 		return Proposal{}, fmt.Errorf("invalid candidate_id")
 	}
-	return store.readProposalFile(filepath.Join(store.pendingDir, candidateID+".json"))
+	filePath := filepath.Join(dir, candidateID+".json")
+	proposal, err := store.readProposalFile(filePath)
+	if err != nil {
+		return Proposal{}, err
+	}
+	if proposal.CandidateID != candidateID {
+		return Proposal{}, fmt.Errorf("proposal candidate_id does not match filename")
+	}
+	if err := requireExactFilename(filePath, "proposal"); err != nil {
+		return Proposal{}, err
+	}
+	return proposal, nil
 }
 
 func (store *Store) ReadReceipt(candidateID string) (*Receipt, error) {
@@ -166,17 +181,10 @@ func (store *Store) ReadReceipt(candidateID string) (*Receipt, error) {
 	if receipt.CandidateID != candidateID {
 		return nil, fmt.Errorf("receipt candidate_id does not match filename")
 	}
-	// The requested path can open a differently cased directory entry.
-	entries, err := os.ReadDir(store.receiptsDir)
-	if err != nil {
-		return nil, fmt.Errorf("inspect receipt filename: %w", err)
+	if err := requireExactFilename(filePath, "receipt"); err != nil {
+		return nil, err
 	}
-	for _, entry := range entries {
-		if entry.Name() == candidateID+".json" {
-			return &receipt, nil
-		}
-	}
-	return nil, fmt.Errorf("receipt candidate_id does not match filename")
+	return &receipt, nil
 }
 
 func (store *Store) WriteReceipt(receipt Receipt) error {
@@ -203,6 +211,9 @@ func (store *Store) WriteReceipt(receipt Receipt) error {
 }
 
 func (store *Store) MoveProposal(candidateID, result string) error {
+	if !candidateIDPattern.MatchString(candidateID) {
+		return fmt.Errorf("invalid candidate_id")
+	}
 	var destinationDir string
 	switch result {
 	case "accepted":
@@ -217,16 +228,23 @@ func (store *Store) MoveProposal(candidateID, result string) error {
 	}
 	source := filepath.Join(store.pendingDir, candidateID+".json")
 	destination := filepath.Join(destinationDir, candidateID+".json")
-	if destinationInfo, err := os.Lstat(destination); err == nil {
-		if destinationInfo.Mode()&os.ModeSymlink != 0 || !destinationInfo.Mode().IsRegular() {
-			return fmt.Errorf("processed proposal must be a regular file")
+	if _, err := os.Lstat(destination); err == nil {
+		if _, err := store.readCandidateProposal(destinationDir, candidateID); err != nil {
+			return err
 		}
-		if _, sourceErr := os.Stat(source); errors.Is(sourceErr, os.ErrNotExist) {
+		if _, sourceErr := os.Lstat(source); errors.Is(sourceErr, os.ErrNotExist) {
 			return nil
+		} else if sourceErr != nil {
+			return sourceErr
+		}
+		if _, err := store.ReadPending(candidateID); err != nil {
+			return err
 		}
 		return fmt.Errorf("processed proposal exists while pending proposal remains")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
-	if err := store.assertExistingWithinDataRoot(source); err != nil {
+	if _, err := store.ReadPending(candidateID); err != nil {
 		return err
 	}
 	if err := os.Rename(source, destination); err != nil {
@@ -239,6 +257,9 @@ func (store *Store) MoveProposal(candidateID, result string) error {
 }
 
 func (store *Store) ReadTransaction(candidateID string) (*Transaction, error) {
+	if !candidateIDPattern.MatchString(candidateID) {
+		return nil, fmt.Errorf("invalid candidate_id")
+	}
 	filePath := filepath.Join(store.transactionsDir, candidateID+".json")
 	info, err := os.Lstat(filePath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -267,6 +288,9 @@ func (store *Store) ReadTransaction(candidateID string) (*Transaction, error) {
 	if err := transaction.Validate(); err != nil {
 		return nil, err
 	}
+	if err := requireExactFilename(filePath, "transaction"); err != nil {
+		return nil, err
+	}
 	return &transaction, nil
 }
 
@@ -281,11 +305,33 @@ func (store *Store) WriteTransaction(transaction Transaction) error {
 }
 
 func (store *Store) RemoveTransaction(candidateID string) error {
+	transaction, err := store.ReadTransaction(candidateID)
+	if err != nil {
+		return err
+	}
+	if transaction == nil {
+		return nil
+	}
 	filePath := filepath.Join(store.transactionsDir, candidateID+".json")
 	if err := os.Remove(filePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return syncDirectory(store.transactionsDir)
+}
+
+// The requested path may open a differently cased directory entry on Windows
+// and macOS. Check the stored spelling before trusting or mutating that file.
+func requireExactFilename(filePath, kind string) error {
+	entries, err := os.ReadDir(filepath.Dir(filePath))
+	if err != nil {
+		return fmt.Errorf("inspect %s filename: %w", kind, err)
+	}
+	for _, entry := range entries {
+		if entry.Name() == filepath.Base(filePath) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s candidate_id does not match filename", kind)
 }
 
 func (store *Store) readProposalFile(filePath string) (Proposal, error) {
