@@ -163,6 +163,9 @@ func (store *Store) ReadReceipt(candidateID string) (*Receipt, error) {
 	if err := receipt.Validate(); err != nil {
 		return nil, err
 	}
+	if receipt.CandidateID != candidateID {
+		return nil, fmt.Errorf("receipt candidate_id does not match filename")
+	}
 	return &receipt, nil
 }
 
