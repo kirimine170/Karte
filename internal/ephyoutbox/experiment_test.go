@@ -12,9 +12,7 @@ import (
 
 func TestExperimentEvidenceStore(t *testing.T) {
 	// Create a temporary directory for the test
-	tempDir, err := os.MkdirTemp("", "experiment_evidence_test")
-	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
+	tempDir := t.TempDir()
 
 	store, err := newExperimentTestStore(t, tempDir)
 	require.NoError(t, err)
@@ -69,9 +67,7 @@ func TestSlugify(t *testing.T) {
 
 func TestExperimentPublisher(t *testing.T) {
 	// Create a temporary directory for the test
-	tempDir, err := os.MkdirTemp("", "publisher_test")
-	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
+	tempDir := t.TempDir()
 
 	publisher, err := newExperimentTestPublisher(t, tempDir)
 	require.NoError(t, err)
