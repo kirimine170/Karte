@@ -2373,10 +2373,17 @@ func (a *App) AcceptEphyProposal(candidateID string, editedFrontmatter map[strin
 	if existing, readErr := store.ReadReceipt(candidateID); readErr != nil {
 		return nil, readErr
 	} else if existing != nil {
+		// Validate recovery artifacts before archiving anything. An exact receipt
+		// must not authorize a differently cased or mismatched transaction.
+		if _, transactionErr := store.ReadTransaction(candidateID); transactionErr != nil {
+			return nil, transactionErr
+		}
 		if moveErr := store.MoveProposal(candidateID, existing.Result); moveErr != nil {
 			return nil, moveErr
 		}
-		_ = store.RemoveTransaction(candidateID)
+		if removeErr := store.RemoveTransaction(candidateID); removeErr != nil {
+			return nil, removeErr
+		}
 		return existing, nil
 	}
 	proposal, err := store.ReadPending(candidateID)
