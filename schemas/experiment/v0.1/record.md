@@ -85,7 +85,7 @@ Each evidence item contains:
 - `interpretation` must not be empty and <= 2048 characters
 - `halt_reason` must not be empty and <= 1024 characters
 - `evidence` must be 1-64 items
-- `verification` must not be empty
+- `verification` must be one of "verified", "unverified", "unacquired"
 - `state` must be one of "saved", "experiment", "adopted"
 - `project` must be a valid project name
 - `title` must not be empty and <= 256 characters

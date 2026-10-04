@@ -276,7 +276,10 @@ func walkVerifiedEvidence(root *os.Root, entries map[string]EvidenceEntry, seen 
 		if !exists {
 			return fmt.Errorf("unreferenced evidence file: %s", name)
 		}
-		info, err := entry.Info()
+		// Go 1.25 Unix DirEntry.Info resolves the display name against cwd.
+		// OpenRoot names may be relative (or stale after a directory move), so
+		// inspect the entry through the already-open root handle instead.
+		info, err := root.Lstat(name)
 		if err != nil {
 			return err
 		}

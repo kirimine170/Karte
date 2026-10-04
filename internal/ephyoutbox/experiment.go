@@ -197,8 +197,10 @@ func (r *ExperimentRecord) Validate() error {
 		return err
 	}
 
-	if r.Verification == "" {
-		return fmt.Errorf("verification must not be empty")
+	switch r.Verification {
+	case "verified", "unverified", Unacquired:
+	default:
+		return fmt.Errorf("verification must be 'verified', 'unverified', or 'unacquired'")
 	}
 	if r.State == "" {
 		return fmt.Errorf("state must not be empty")
