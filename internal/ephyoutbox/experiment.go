@@ -1,0 +1,451 @@
+package ephyoutbox
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
+)
+
+const (
+	ExperimentSchemaVersion = "0.1"
+	Unacquired              = "unacquired"
+)
+
+var (
+	logicalRefPattern         = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*$`)
+	experimentIdentityPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*$`)
+)
+
+// ExperimentEvidence represents a piece of evidence for an experiment.
+type ExperimentEvidence struct {
+	LogicalRef string `json:"logical_ref"`
+	SHA256     string `json:"sha256"`
+}
+
+// ExperimentRecord describes a halted experiment.
+type ExperimentRecord struct {
+	SchemaVersion  string               `json:"schema_version"`
+	CandidateID    string               `json:"candidate_id"`
+	ExperimentID   string               `json:"experiment_id"`
+	RunID          string               `json:"run_id"`
+	AttemptID      string               `json:"attempt_id"`
+	TargetCommit   string               `json:"target_commit"`
+	PatchSHA256    string               `json:"patch_sha256"`
+	Environment    string               `json:"environment"`
+	Model          string               `json:"model"`
+	Checker        string               `json:"checker"`
+	Observations   []string             `json:"observations"`
+	Interpretation string               `json:"interpretation"`
+	HaltReason     string               `json:"halt_reason"`
+	Evidence       []ExperimentEvidence `json:"evidence"`
+	Verification   string               `json:"verification"`
+	State          string               `json:"state"` // saved | experiment | adopted
+	Project        string               `json:"project"`
+	Title          string               `json:"title"`
+	ReportedAt     string               `json:"reported_at"`
+}
+
+// EvidenceManifest is the manifest for evidence stored for an experiment
+type EvidenceManifest struct {
+	SchemaVersion string          `json:"schema_version"`
+	CandidateID   string          `json:"candidate_id"`
+	Entries       []EvidenceEntry `json:"entries"`
+	WrittenAt     string          `json:"written_at"`
+}
+
+// EvidenceEntry is a single entry in an evidence manifest
+type EvidenceEntry struct {
+	LogicalRef string `json:"logical_ref"`
+	SHA256     string `json:"sha256"`
+	SizeBytes  int64  `json:"size_bytes"`
+}
+
+// ExperimentEvidenceStore manages experiment evidence in the secret managed area
+type ExperimentEvidenceStore struct {
+	dataRoot   string
+	root       string
+	dataHandle *os.Root
+	closeOnce  sync.Once
+	closeErr   error
+}
+
+// DecodeExperimentRecord decodes a JSON byte array into an ExperimentRecord.
+func DecodeExperimentRecord(raw []byte) (*ExperimentRecord, error) {
+	var record ExperimentRecord
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal experiment record: %w", err)
+	}
+
+	if record.SchemaVersion != ExperimentSchemaVersion {
+		return nil, fmt.Errorf("unsupported schema version: %s", record.SchemaVersion)
+	}
+
+	return &record, nil
+}
+
+// Validate validates an experiment record.
+func (r *ExperimentRecord) Validate() error {
+	if r.SchemaVersion != ExperimentSchemaVersion {
+		return fmt.Errorf("schema_version must be %s", ExperimentSchemaVersion)
+	}
+
+	if !validEvidenceCandidate(r.CandidateID) {
+		return fmt.Errorf("candidate_id is invalid")
+	}
+
+	for _, field := range []struct{ name, value string }{
+		{"experiment_id", r.ExperimentID}, {"run_id", r.RunID}, {"attempt_id", r.AttemptID},
+	} {
+		if len(field.value) > 128 || !experimentIdentityPattern.MatchString(field.value) {
+			return fmt.Errorf("%s must match the 1-128 character experiment identity contract", field.name)
+		}
+	}
+
+	if r.TargetCommit == "" {
+		return fmt.Errorf("target_commit must not be empty")
+	}
+	if r.TargetCommit != Unacquired {
+		if len(r.TargetCommit) != 40 {
+			return fmt.Errorf("target_commit must be 40-character hex string")
+		}
+		if !isValidHex(r.TargetCommit) {
+			return fmt.Errorf("target_commit must be valid hex string")
+		}
+		// Require lowercase hex digits for target commit
+		if r.TargetCommit != strings.ToLower(r.TargetCommit) {
+			return fmt.Errorf("target_commit must be lowercase")
+		}
+	}
+
+	if r.PatchSHA256 == "" {
+		return fmt.Errorf("patch_sha256 must not be empty")
+	}
+	if r.PatchSHA256 != Unacquired {
+		if len(r.PatchSHA256) != 64 {
+			return fmt.Errorf("patch_sha256 must be 64-character hex string")
+		}
+		if !isValidHex(r.PatchSHA256) {
+			return fmt.Errorf("patch_sha256 must be valid hex string")
+		}
+		// Require lowercase hex digits for patch SHA256
+		if r.PatchSHA256 != strings.ToLower(r.PatchSHA256) {
+			return fmt.Errorf("patch_sha256 must be lowercase")
+		}
+	}
+
+	for _, field := range []struct{ name, value string }{
+		{"environment", r.Environment}, {"model", r.Model}, {"checker", r.Checker},
+	} {
+		if field.value == "" || utf8.RuneCountInString(field.value) > 256 || strings.ContainsAny(field.value, "\r\n") {
+			return fmt.Errorf("%s must be 1-256 Unicode code points without CR or LF", field.name)
+		}
+	}
+
+	if len(r.Observations) == 0 || len(r.Observations) > 64 {
+		return fmt.Errorf("observations must be 1-64 items")
+	}
+	for _, obs := range r.Observations {
+		if len(obs) == 0 {
+			return fmt.Errorf("observation must not be empty")
+		}
+		if len(obs) > 1024 {
+			return fmt.Errorf("observation must be <= 1024 characters")
+		}
+	}
+
+	if r.Interpretation == "" {
+		return fmt.Errorf("interpretation must not be empty")
+	}
+	if utf8.RuneCountInString(r.Interpretation) > 2048 {
+		return fmt.Errorf("interpretation must be <= 2048 Unicode code points")
+	}
+
+	if r.HaltReason == "" {
+		return fmt.Errorf("halt_reason must not be empty")
+	}
+	if utf8.RuneCountInString(r.HaltReason) > 1024 {
+		return fmt.Errorf("halt_reason must be <= 1024 Unicode code points")
+	}
+
+	if len(r.Evidence) == 0 || len(r.Evidence) > 64 {
+		return fmt.Errorf("evidence must be 1-64 items")
+	}
+	for _, ev := range r.Evidence {
+		if ev.LogicalRef == "" || len(ev.LogicalRef) > 2048 {
+			return fmt.Errorf("evidence logical_ref must not be empty and <= 2048 characters")
+		}
+		if !isValidLogicalRef(ev.LogicalRef) {
+			return fmt.Errorf("evidence logical_ref contains invalid characters: %s", ev.LogicalRef)
+		}
+		if len(ev.SHA256) != 64 {
+			return fmt.Errorf("evidence sha256 must be 64-character hex string")
+		}
+		if !isValidHex(ev.SHA256) {
+			return fmt.Errorf("evidence sha256 must be valid hex string")
+		}
+		// Reject uppercase hex digits to enforce lowercase in evidence digests
+		if ev.SHA256 != strings.ToLower(ev.SHA256) {
+			return fmt.Errorf("evidence sha256 must be lowercase")
+		}
+	}
+	if _, err := evidenceRefs(r.Evidence); err != nil {
+		return err
+	}
+
+	switch r.Verification {
+	case "verified", "unverified", Unacquired:
+	default:
+		return fmt.Errorf("verification must be 'verified', 'unverified', or 'unacquired'")
+	}
+	if r.State == "" {
+		return fmt.Errorf("state must not be empty")
+	}
+	if r.State != "saved" && r.State != "experiment" && r.State != "adopted" {
+		return fmt.Errorf("state must be 'saved', 'experiment', or 'adopted'")
+	}
+	if r.State == "adopted" {
+		return fmt.Errorf("experiment record state must be 'experiment' for proposal")
+	}
+
+	if r.Project == "" || !projectPattern.MatchString(r.Project) {
+		return fmt.Errorf("project must be a valid project name")
+	}
+
+	if r.Title == "" || len(r.Title) > 256 {
+		return fmt.Errorf("title must not be empty and <= 256 characters")
+	}
+
+	if r.ReportedAt == "" {
+		return fmt.Errorf("reported_at must not be empty")
+	}
+	if _, err := time.Parse(time.RFC3339, r.ReportedAt); err != nil {
+		return fmt.Errorf("reported_at must be valid RFC3339 timestamp")
+	}
+
+	return nil
+}
+
+// isValidHex checks if a string is a valid hexadecimal string
+func isValidHex(s string) bool {
+	for _, r := range s {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+// RenderExperimentReport renders an experiment record into a Markdown report.
+func RenderExperimentReport(record *ExperimentRecord) (string, error) {
+	if err := record.Validate(); err != nil {
+		return "", fmt.Errorf("invalid experiment record: %w", err)
+	}
+
+	var buf strings.Builder
+
+	buf.WriteString(fmt.Sprintf("# %s\n\n", record.Title))
+
+	buf.WriteString("## Status\n\n")
+	buf.WriteString(fmt.Sprintf("- Record: experiment v0.1 (halted, not re-run, not adopted)\n"))
+	buf.WriteString(fmt.Sprintf("- State: %s\n", record.State))
+	buf.WriteString(fmt.Sprintf("- Verification: %s\n\n", record.Verification))
+
+	buf.WriteString("## Identity\n\n")
+	buf.WriteString(fmt.Sprintf("- Experiment: %s\n", record.ExperimentID))
+	buf.WriteString(fmt.Sprintf("- Run: %s\n", record.RunID))
+	buf.WriteString(fmt.Sprintf("- Attempt: %s\n\n", record.AttemptID))
+
+	buf.WriteString("## Target\n\n")
+	buf.WriteString(fmt.Sprintf("- Commit: %s\n", record.TargetCommit))
+	buf.WriteString(fmt.Sprintf("- Patch SHA-256: %s\n\n", record.PatchSHA256))
+
+	buf.WriteString("## Environment\n\n")
+	buf.WriteString(fmt.Sprintf("- Environment: %s\n", record.Environment))
+	buf.WriteString(fmt.Sprintf("- Model: %s\n", record.Model))
+	buf.WriteString(fmt.Sprintf("- Checker: %s\n\n", record.Checker))
+
+	buf.WriteString("## Observed facts\n\n")
+	for _, obs := range record.Observations {
+		buf.WriteString(fmt.Sprintf("- %s\n", obs))
+	}
+	buf.WriteString("\n")
+
+	buf.WriteString("## Interpretation\n\n")
+	buf.WriteString(fmt.Sprintf("%s\n\n", record.Interpretation))
+
+	buf.WriteString("## Halt reason\n\n")
+	buf.WriteString(fmt.Sprintf("%s\n\n", record.HaltReason))
+
+	buf.WriteString("## Evidence\n\n")
+	for _, ev := range record.Evidence {
+		buf.WriteString(fmt.Sprintf("- `%s` — sha256:%s\n", ev.LogicalRef, ev.SHA256))
+		buf.WriteString(fmt.Sprintf("  (stored under .mdsys/ephy/experiments/%s/%s; not embedded in this document)\n\n", record.CandidateID, ev.LogicalRef))
+	}
+
+	buf.WriteString("## Verification\n\n")
+	buf.WriteString(fmt.Sprintf("%s\n", record.Verification))
+
+	return buf.String(), nil
+}
+
+// BuildExperimentProposal converts an experiment record into an ephy outbox proposal.
+func BuildExperimentProposal(record ExperimentRecord, _ time.Time) (Proposal, error) {
+	if err := record.Validate(); err != nil {
+		return Proposal{}, fmt.Errorf("invalid experiment record: %w", err)
+	}
+
+	if record.State != "experiment" {
+		return Proposal{}, fmt.Errorf("experiment record state must be 'experiment' for proposal")
+	}
+
+	// reported_at is authoritative; retain the clock argument for existing callers.
+	reportedAt, err := time.Parse(time.RFC3339Nano, record.ReportedAt)
+	if err != nil {
+		return Proposal{}, err
+	}
+	body, err := RenderExperimentReport(&record)
+	if err != nil {
+		return Proposal{}, err
+	}
+
+	// Determine the filename
+	filename := slugify(record.ExperimentID) + ".md"
+	if !filenamePattern.MatchString(filename) {
+		filename = "experiment-report.md"
+	}
+
+	// Create the proposal
+	proposal := Proposal{
+		SchemaVersion: "1.1",
+		CandidateID:   record.CandidateID,
+		Operation:     "create",
+		ProposedFrontmatter: map[string]any{
+			"title": record.Title,
+			"tags":  "ephy, experiment, halted",
+		},
+		ProposedBody: body,
+		Placement: PlacementHint{
+			Project:              record.Project,
+			Kind:                 "report",
+			YearMonth:            reportedAt.UTC().Format("2006-01"),
+			Confidence:           float64Ptr(0.9),
+			PreferredFilename:    filename,
+			Candidates:           []PlacementCandidate{{Project: record.Project, Kind: "report", Confidence: float64Ptr(0.9), Reason: "Halted experiment record v0.1 maps to a human-readable report."}},
+			ConsultationRequired: false,
+		},
+		SourceRefs:  make([]SourceRef, 0, len(record.Evidence)),
+		Sensitivity: "internal",
+		CreatedAt:   reportedAt.UTC().Format(time.RFC3339Nano),
+	}
+
+	// Add evidence source references
+	for _, ev := range record.Evidence {
+		proposal.SourceRefs = append(proposal.SourceRefs, SourceRef{
+			Type:      "experiment-evidence",
+			Reference: ev.LogicalRef,
+			SHA256:    ev.SHA256,
+		})
+	}
+
+	if err := proposal.Validate(); err != nil {
+		return Proposal{}, fmt.Errorf("invalid generated proposal: %w", err)
+	}
+	return proposal, nil
+}
+
+// slugify converts a string to a valid filename
+func slugify(s string) string {
+	if s == "" {
+		return "experiment-report"
+	}
+	s = strings.ToLower(s)
+	var buf strings.Builder
+	prevIsDash := false
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			buf.WriteRune(r)
+			prevIsDash = false
+		} else if !prevIsDash {
+			buf.WriteRune('-')
+			prevIsDash = true
+		}
+	}
+	result := buf.String()
+	result = strings.Trim(result, "-")
+	if result == "" {
+		return "experiment-report"
+	}
+	return result
+}
+
+// float64Ptr returns a pointer to a float64
+func float64Ptr(v float64) *float64 {
+	return &v
+}
+
+// ExperimentPublisher is a helper for publishing experiment records
+type ExperimentPublisher struct {
+	dataDir string
+	store   *ExperimentEvidenceStore
+}
+
+// NewExperimentPublisher creates a publisher that owns a rooted evidence store.
+// The caller must call Close when the publisher is no longer needed.
+func NewExperimentPublisher(dataDir string) (*ExperimentPublisher, error) {
+	store, err := NewExperimentEvidenceStore(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	return &ExperimentPublisher{
+		dataDir: dataDir,
+		store:   store,
+	}, nil
+}
+
+// Close releases the publisher's evidence-store root handle. In-flight store
+// operations may finish; subsequent operations fail. Close is idempotent.
+func (p *ExperimentPublisher) Close() error {
+	return p.store.Close()
+}
+
+// Publish converts an experiment record to a proposal and stores evidence
+func (p *ExperimentPublisher) Publish(record ExperimentRecord, evidence map[string][]byte) (Proposal, error) {
+	// Complete record/proposal and payload validation before changing evidence.
+	proposal, err := BuildExperimentProposal(record, time.Time{})
+	if err != nil {
+		return Proposal{}, err
+	}
+	contents, expected, err := prepareEvidence(evidence)
+	if err != nil {
+		return Proposal{}, err
+	}
+	refs, err := evidenceRefs(record.Evidence)
+	if err != nil {
+		return Proposal{}, err
+	}
+	if len(refs) != len(expected) {
+		return Proposal{}, fmt.Errorf("record and supplied evidence sets differ")
+	}
+	for _, entry := range expected {
+		if refs[entry.LogicalRef] != entry.SHA256 {
+			return Proposal{}, fmt.Errorf("supplied evidence does not match record: %s", entry.LogicalRef)
+		}
+	}
+
+	// Store the evidence
+	if err := p.store.WriteEvidence(record.CandidateID, contents); err != nil {
+		return Proposal{}, fmt.Errorf("failed to store evidence: %w", err)
+	}
+
+	// Verify the evidence
+	if err := p.store.Verify(record.CandidateID, record.Evidence); err != nil {
+		return Proposal{}, fmt.Errorf("failed to verify evidence: %w", err)
+	}
+
+	return proposal, nil
+}
