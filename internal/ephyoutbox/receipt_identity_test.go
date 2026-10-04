@@ -94,3 +94,51 @@ func TestStoreMatchingReceiptIsIdempotentAfterRestart(t *testing.T) {
 		t.Fatalf("idempotent retry changed receipt bytes: err=%v", err)
 	}
 }
+
+func TestStoreReceiptIdentityUsesActualFilenameCase(t *testing.T) {
+	for _, result := range []string{"accepted", "rejected", "conflict", "invalid"} {
+		t.Run(result, func(t *testing.T) {
+			dataRoot := t.TempDir()
+			store, err := NewStore(dataRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.EnsureLayout(); err != nil {
+				t.Fatal(err)
+			}
+			var receipt Receipt
+			if err := json.Unmarshal(fixtureBytes(t, "accepted-receipt.json"), &receipt); err != nil {
+				t.Fatal(err)
+			}
+			actualID := receipt.CandidateID
+			receipt.CandidateID, receipt.Result = strings.ToUpper(actualID), result
+			if err := receipt.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			payload, err := json.Marshal(receipt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			filePath := filepath.Join(store.receiptsDir, actualID+".json")
+			if err := os.WriteFile(filePath, payload, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, aliasErr := os.Stat(filepath.Join(store.receiptsDir, receipt.CandidateID+".json"))
+			if aliasErr != nil && !os.IsNotExist(aliasErr) {
+				t.Fatal(aliasErr)
+			}
+			got, readErr := store.ReadReceipt(receipt.CandidateID)
+			if os.IsNotExist(aliasErr) {
+				if got != nil || readErr != nil {
+					t.Fatalf("missing exact filename was not absent: receipt=%#v err=%v", got, readErr)
+				}
+			} else if got != nil || readErr == nil || !strings.Contains(readErr.Error(), "candidate_id does not match filename") {
+				t.Errorf("case-insensitive alias trusted the caller's filename: receipt=%#v err=%v", got, readErr)
+			}
+			current, err := os.ReadFile(filePath)
+			if err != nil || !bytes.Equal(current, payload) {
+				t.Fatalf("case mismatch changed receipt bytes: err=%v", err)
+			}
+		})
+	}
+}

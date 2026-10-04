@@ -13,8 +13,16 @@ import (
 
 func TestEphyReceiptMismatchDoesNotProcessPendingProposal(t *testing.T) {
 	for _, result := range []string{"accepted", "rejected"} {
-		for _, action := range []string{"accept", "reject"} {
-			t.Run(result+"/"+action, func(t *testing.T) {
+		for _, scenario := range []struct {
+			action    string
+			caseAlias bool
+		}{{"accept", false}, {"reject", false}, {"accept", true}, {"reject", true}} {
+			action := scenario.action
+			name := result + "/" + action
+			if scenario.caseAlias {
+				name += "/case-alias"
+			}
+			t.Run(name, func(t *testing.T) {
 				app, dataRoot := newEphyTestApp(t)
 				canonicalPath, canonical := writeAppendTarget(t, dataRoot)
 				pending := appendProposalWithHash(t, canonical)
@@ -35,6 +43,11 @@ func TestEphyReceiptMismatchDoesNotProcessPendingProposal(t *testing.T) {
 					t.Fatal(err)
 				}
 				receipt.CandidateID, receipt.Result = "candidate-other-001", result
+				requestedID := proposal.CandidateID
+				if scenario.caseAlias {
+					receipt.CandidateID = strings.ToUpper(proposal.CandidateID)
+					requestedID = receipt.CandidateID
+				}
 				if err := receipt.Validate(); err != nil {
 					t.Fatal(err)
 				}
@@ -62,6 +75,12 @@ func TestEphyReceiptMismatchDoesNotProcessPendingProposal(t *testing.T) {
 				if err := os.WriteFile(receiptPath, receiptBytes, 0o600); err != nil {
 					t.Fatal(err)
 				}
+				if _, err := os.Stat(filepath.Join(outboxRoot, "receipts", requestedID+".json")); os.IsNotExist(err) {
+					// Case-sensitive filesystems exercise the mismatched actual entry.
+					requestedID = proposal.CandidateID
+				} else if err != nil {
+					t.Fatal(err)
+				}
 				inbox, err := app.ListEphyProposals()
 				if err != nil {
 					t.Fatal(err)
@@ -75,9 +94,9 @@ func TestEphyReceiptMismatchDoesNotProcessPendingProposal(t *testing.T) {
 				}
 				var got *ephyoutbox.Receipt
 				if action == "accept" {
-					got, err = app.AcceptEphyProposal(proposal.CandidateID, proposal.ProposedFrontmatter, proposal.ProposedBody)
+					got, err = app.AcceptEphyProposal(requestedID, proposal.ProposedFrontmatter, proposal.ProposedBody)
 				} else {
-					got, err = app.RejectEphyProposal(proposal.CandidateID, "Synthetic rejection")
+					got, err = app.RejectEphyProposal(requestedID, "Synthetic rejection")
 				}
 				if err == nil || !strings.Contains(err.Error(), "candidate_id does not match filename") || got != nil {
 					t.Errorf("%s accepted another candidate's receipt: receipt=%#v err=%v", action, got, err)

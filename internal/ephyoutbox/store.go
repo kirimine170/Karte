@@ -166,7 +166,17 @@ func (store *Store) ReadReceipt(candidateID string) (*Receipt, error) {
 	if receipt.CandidateID != candidateID {
 		return nil, fmt.Errorf("receipt candidate_id does not match filename")
 	}
-	return &receipt, nil
+	// The requested path can open a differently cased directory entry.
+	entries, err := os.ReadDir(store.receiptsDir)
+	if err != nil {
+		return nil, fmt.Errorf("inspect receipt filename: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.Name() == candidateID+".json" {
+			return &receipt, nil
+		}
+	}
+	return nil, fmt.Errorf("receipt candidate_id does not match filename")
 }
 
 func (store *Store) WriteReceipt(receipt Receipt) error {
