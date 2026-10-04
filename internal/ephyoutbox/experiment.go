@@ -3,8 +3,10 @@ package ephyoutbox
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -15,7 +17,8 @@ const (
 )
 
 var (
-	logicalRefPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*$`)
+	logicalRefPattern         = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*$`)
+	experimentIdentityPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*$`)
 )
 
 // ExperimentEvidence represents a piece of evidence for an experiment.
@@ -64,8 +67,11 @@ type EvidenceEntry struct {
 
 // ExperimentEvidenceStore manages experiment evidence in the secret managed area
 type ExperimentEvidenceStore struct {
-	dataRoot string
-	root     string
+	dataRoot   string
+	root       string
+	dataHandle *os.Root
+	closeOnce  sync.Once
+	closeErr   error
 }
 
 // DecodeExperimentRecord decodes a JSON byte array into an ExperimentRecord.
@@ -92,16 +98,12 @@ func (r *ExperimentRecord) Validate() error {
 		return fmt.Errorf("candidate_id is invalid")
 	}
 
-	if r.ExperimentID == "" || len(r.ExperimentID) > 128 {
-		return fmt.Errorf("experiment_id must be 1-128 characters")
-	}
-
-	if r.RunID == "" || len(r.RunID) > 128 {
-		return fmt.Errorf("run_id must be 1-128 characters")
-	}
-
-	if r.AttemptID == "" || len(r.AttemptID) > 128 {
-		return fmt.Errorf("attempt_id must be 1-128 characters")
+	for _, field := range []struct{ name, value string }{
+		{"experiment_id", r.ExperimentID}, {"run_id", r.RunID}, {"attempt_id", r.AttemptID},
+	} {
+		if len(field.value) > 128 || !experimentIdentityPattern.MatchString(field.value) {
+			return fmt.Errorf("%s must match the 1-128 character experiment identity contract", field.name)
+		}
 	}
 
 	if r.TargetCommit == "" {
@@ -136,14 +138,12 @@ func (r *ExperimentRecord) Validate() error {
 		}
 	}
 
-	if r.Environment == "" && r.Environment != Unacquired {
-		return fmt.Errorf("environment must not be empty or 'unacquired'")
-	}
-	if r.Model == "" && r.Model != Unacquired {
-		return fmt.Errorf("model must not be empty or 'unacquired'")
-	}
-	if r.Checker == "" && r.Checker != Unacquired {
-		return fmt.Errorf("checker must not be empty or 'unacquired'")
+	for _, field := range []struct{ name, value string }{
+		{"environment", r.Environment}, {"model", r.Model}, {"checker", r.Checker},
+	} {
+		if field.value == "" || utf8.RuneCountInString(field.value) > 256 || strings.ContainsAny(field.value, "\r\n") {
+			return fmt.Errorf("%s must be 1-256 Unicode code points without CR or LF", field.name)
+		}
 	}
 
 	if len(r.Observations) == 0 || len(r.Observations) > 64 {
@@ -394,7 +394,8 @@ type ExperimentPublisher struct {
 	store   *ExperimentEvidenceStore
 }
 
-// NewExperimentPublisher creates a new experiment publisher
+// NewExperimentPublisher creates a publisher that owns a rooted evidence store.
+// The caller must call Close when the publisher is no longer needed.
 func NewExperimentPublisher(dataDir string) (*ExperimentPublisher, error) {
 	store, err := NewExperimentEvidenceStore(dataDir)
 	if err != nil {
@@ -404,6 +405,12 @@ func NewExperimentPublisher(dataDir string) (*ExperimentPublisher, error) {
 		dataDir: dataDir,
 		store:   store,
 	}, nil
+}
+
+// Close releases the publisher's evidence-store root handle. In-flight store
+// operations may finish; subsequent operations fail. Close is idempotent.
+func (p *ExperimentPublisher) Close() error {
+	return p.store.Close()
 }
 
 // Publish converts an experiment record to a proposal and stores evidence

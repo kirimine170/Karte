@@ -16,7 +16,7 @@ func TestExperimentEvidenceStore(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 
-	store, err := NewExperimentEvidenceStore(tempDir)
+	store, err := newExperimentTestStore(t, tempDir)
 	require.NoError(t, err)
 
 	// Test writing evidence
@@ -73,7 +73,7 @@ func TestExperimentPublisher(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 
-	publisher, err := NewExperimentPublisher(tempDir)
+	publisher, err := newExperimentTestPublisher(t, tempDir)
 	require.NoError(t, err)
 
 	// Test a valid record

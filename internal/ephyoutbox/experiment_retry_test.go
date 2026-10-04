@@ -25,7 +25,7 @@ func TestExperimentConcurrentGoroutineRetries(t *testing.T) {
 		go func() {
 			defer workers.Done()
 			<-start
-			publisher, err := NewExperimentPublisher(root)
+			publisher, err := newExperimentTestPublisher(t, root)
 			if err == nil {
 				_, err = publisher.Publish(record, evidence)
 			}
@@ -40,7 +40,7 @@ func TestExperimentConcurrentGoroutineRetries(t *testing.T) {
 			t.Errorf("identical concurrent retry failed: %v", err)
 		}
 	}
-	store, err := NewExperimentEvidenceStore(root)
+	store, err := newExperimentTestStore(t, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestExperimentConcurrentGoroutineRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := experimentSnapshot(t, root)
-	publisher, err := NewExperimentPublisher(root)
+	publisher, err := newExperimentTestPublisher(t, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestExperimentConcurrentProcessRetries(t *testing.T) {
 			evidence["halt/stderr.txt"] = []byte("other synthetic evidence\n")
 			record.Evidence[0].SHA256 = SHA256Bytes(evidence["halt/stderr.txt"])
 		}
-		publisher, err := NewExperimentPublisher(root)
+		publisher, err := newExperimentTestPublisher(t, root)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -141,7 +141,7 @@ func TestExperimentConcurrentProcessRetries(t *testing.T) {
 				evidence["halt/stderr.txt"] = []byte("other synthetic evidence\n")
 				record.Evidence[0].SHA256 = SHA256Bytes(evidence["halt/stderr.txt"])
 			}
-			store, err := NewExperimentEvidenceStore(root)
+			store, err := newExperimentTestStore(t, root)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -149,7 +149,7 @@ func TestExperimentConcurrentProcessRetries(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := experimentSnapshot(t, root)
-			publisher, err := NewExperimentPublisher(root)
+			publisher, err := newExperimentTestPublisher(t, root)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -222,7 +222,7 @@ func TestExperimentWindowsAliasControls(t *testing.T) {
 	for _, kind := range []string{"candidate", "candidate-inverse", "manifest", "file", "directory"} {
 		t.Run(kind, func(t *testing.T) {
 			dataDir := t.TempDir()
-			store, err := NewExperimentEvidenceStore(dataDir)
+			store, err := newExperimentTestStore(t, dataDir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -290,7 +290,7 @@ func TestExperimentWindowsAliasControls(t *testing.T) {
 				if !reflect.DeepEqual(before, experimentSnapshot(t, dataDir)) {
 					t.Error("case alias operation changed bytes")
 				}
-				store, err = NewExperimentEvidenceStore(dataDir)
+				store, err = newExperimentTestStore(t, dataDir)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -303,7 +303,7 @@ func TestExperimentInvalidPayloadPreflight(t *testing.T) {
 	for _, kind := range []string{"trailing-dot", "device", "empty-segment", "dot-segment", "reserved-manifest", "prefix-collision"} {
 		t.Run(kind, func(t *testing.T) {
 			root := t.TempDir()
-			store, err := NewExperimentEvidenceStore(root)
+			store, err := newExperimentTestStore(t, root)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -343,7 +343,7 @@ func TestExperimentMaximumEvidenceCreatesValidProposal(t *testing.T) {
 
 func TestExperimentAbandonedStagingSurvivesRestart(t *testing.T) {
 	root := t.TempDir()
-	store, err := NewExperimentEvidenceStore(root)
+	store, err := newExperimentTestStore(t, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,14 +357,14 @@ func TestExperimentAbandonedStagingSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	record, evidence := syntheticExperiment()
-	publisher, err := NewExperimentPublisher(root)
+	publisher, err := newExperimentTestPublisher(t, root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := publisher.Publish(record, evidence); err != nil {
 		t.Fatal(err)
 	}
-	store, err = NewExperimentEvidenceStore(root)
+	store, err = newExperimentTestStore(t, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +381,7 @@ func TestExperimentAbandonedStagingSurvivesRestart(t *testing.T) {
 
 func TestExperimentProposalValidationPrecedesEvidenceWrite(t *testing.T) {
 	root := t.TempDir()
-	publisher, err := NewExperimentPublisher(root)
+	publisher, err := newExperimentTestPublisher(t, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +419,7 @@ func TestExperimentRecordFixtureValidation(t *testing.T) {
 
 func TestExperimentMultipleEvidenceRetryKeepsManifestOrder(t *testing.T) {
 	root := t.TempDir()
-	store, err := NewExperimentEvidenceStore(root)
+	store, err := newExperimentTestStore(t, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +440,7 @@ func TestExperimentMultipleEvidenceRetryKeepsManifestOrder(t *testing.T) {
 		t.Fatalf("manifest is not sorted: %#v", manifest.Entries)
 	}
 	before := experimentSnapshot(t, root)
-	store, err = NewExperimentEvidenceStore(root)
+	store, err = newExperimentTestStore(t, root)
 	if err != nil {
 		t.Fatal(err)
 	}

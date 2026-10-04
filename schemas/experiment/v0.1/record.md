@@ -85,6 +85,8 @@ Each evidence item contains:
 - `interpretation` must not be empty and <= 2048 characters
 - `halt_reason` must not be empty and <= 1024 characters
 - `evidence` must be 1-64 items
+- `experiment_id`, `run_id`, and `attempt_id` must match `^[A-Za-z0-9][A-Za-z0-9._:/-]*$` and contain 1-128 characters
+- `environment`, `model`, and `checker` must contain 1-256 Unicode code points without CR or LF; `unacquired` is allowed
 - `verification` must be one of "verified", "unverified", "unacquired"
 - `state` must be one of "saved", "experiment", "adopted"
 - `project` must be a valid project name

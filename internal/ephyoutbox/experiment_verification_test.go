@@ -30,7 +30,7 @@ func TestExperimentVerificationContract(t *testing.T) {
 				t.Error("invalid verification status produced a proposal")
 			}
 			root := t.TempDir()
-			publisher, err := NewExperimentPublisher(root)
+			publisher, err := newExperimentTestPublisher(t, root)
 			if err != nil {
 				t.Fatal(err)
 			}

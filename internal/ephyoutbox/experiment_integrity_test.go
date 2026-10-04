@@ -56,7 +56,7 @@ func experimentSnapshot(t *testing.T, root string) map[string][]byte {
 
 func TestExperimentTraversalTerminatesWithoutWriting(t *testing.T) {
 	if root := os.Getenv("KARTE_SYNTHETIC_TRAVERSAL_ROOT"); root != "" {
-		store, err := NewExperimentEvidenceStore(root)
+		store, err := newExperimentTestStore(t, root)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -87,7 +87,7 @@ func TestExperimentManifestIntegrity(t *testing.T) {
 	for _, scenario := range []string{"candidate", "version", "date", "negative-size", "wrong-size", "missing-size", "null-size", "digest", "missing-entry", "duplicate-entry", "expected-duplicate", "unknown-field", "trailing-json"} {
 		t.Run(scenario, func(t *testing.T) {
 			root := t.TempDir()
-			store, err := NewExperimentEvidenceStore(root)
+			store, err := newExperimentTestStore(t, root)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -171,7 +171,7 @@ func TestExperimentManifestIntegrity(t *testing.T) {
 
 func TestExperimentVerifyRejectsTraversal(t *testing.T) {
 	root := t.TempDir()
-	store, err := NewExperimentEvidenceStore(root)
+	store, err := newExperimentTestStore(t, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestExperimentInvalidRetryPreservesEvidence(t *testing.T) {
 	for _, scenario := range []string{"wrong-hash", "missing-content", "extra-content", "reserved-manifest", "saved-state"} {
 		t.Run(scenario, func(t *testing.T) {
 			root := t.TempDir()
-			publisher, err := NewExperimentPublisher(root)
+			publisher, err := newExperimentTestPublisher(t, root)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -242,7 +242,7 @@ func TestExperimentInvalidRetryPreservesEvidence(t *testing.T) {
 func TestExperimentRetryIsImmutableAndDeterministic(t *testing.T) {
 	root := t.TempDir()
 	record, evidence := syntheticExperiment()
-	publisher, err := NewExperimentPublisher(root)
+	publisher, err := newExperimentTestPublisher(t, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestExperimentRetryIsImmutableAndDeterministic(t *testing.T) {
 	if first.CreatedAt != "2026-09-01T01:30:00Z" || first.Placement.YearMonth != "2026-09" {
 		t.Error("proposal dates do not derive from reported_at in UTC")
 	}
-	publisher, err = NewExperimentPublisher(root)
+	publisher, err = newExperimentTestPublisher(t, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +316,7 @@ func TestExperimentSymlinkControls(t *testing.T) {
 	for _, scenario := range []string{"candidate", "manifest", "evidence", "managed-root"} {
 		t.Run(scenario, func(t *testing.T) {
 			root, outside := t.TempDir(), t.TempDir()
-			store, err := NewExperimentEvidenceStore(root)
+			store, err := newExperimentTestStore(t, root)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -356,7 +356,7 @@ func TestExperimentSymlinkControls(t *testing.T) {
 
 func TestExperimentExistingChecksRemainEnforced(t *testing.T) {
 	root := t.TempDir()
-	store, err := NewExperimentEvidenceStore(root)
+	store, err := newExperimentTestStore(t, root)
 	if err != nil {
 		t.Fatal(err)
 	}

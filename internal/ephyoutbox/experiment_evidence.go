@@ -21,6 +21,7 @@ import (
 // NewExperimentEvidenceStore anchors operations in an existing data directory.
 // Store operations reject links in the managed area and never resolve evidence
 // references through absolute paths.
+// The caller owns the store and must call Close to release its root handle.
 func NewExperimentEvidenceStore(dataDir string) (*ExperimentEvidenceStore, error) {
 	abs, err := filepath.Abs(dataDir)
 	if err != nil {
@@ -33,7 +34,27 @@ func NewExperimentEvidenceStore(dataDir string) (*ExperimentEvidenceStore, error
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("data directory must be a directory, not a symlink")
 	}
-	return &ExperimentEvidenceStore{dataRoot: abs, root: filepath.Join(abs, ".mdsys", "ephy", "experiments")}, nil
+	handle, err := os.OpenRoot(abs)
+	if err != nil {
+		return nil, err
+	}
+	openedInfo, err := handle.Stat(".")
+	if err != nil || !os.SameFile(info, openedInfo) {
+		handle.Close()
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("data directory changed while opening its root")
+	}
+	return &ExperimentEvidenceStore{dataRoot: abs, root: filepath.Join(abs, ".mdsys", "ephy", "experiments"), dataHandle: handle}, nil
+}
+
+// Close releases the store's retained data-directory handle. Operations that
+// already acquired an independent root may finish; subsequent operations fail.
+// Close is safe to repeat, including concurrently.
+func (s *ExperimentEvidenceStore) Close() error {
+	s.closeOnce.Do(func() { s.closeErr = s.dataHandle.Close() })
+	return s.closeErr
 }
 
 // CandidateDir is a diagnostic path; filesystem operations use rooted handles.
@@ -148,7 +169,8 @@ func openEvidenceDirectory(root *os.Root, name string) (*os.Root, error) {
 }
 
 func (s *ExperimentEvidenceStore) openManaged(create bool) (*os.Root, error) {
-	root, err := os.OpenRoot(s.dataRoot)
+	// Duplicate the retained root for this operation; never re-resolve dataDir.
+	root, err := s.dataHandle.OpenRoot(".")
 	if err != nil {
 		return nil, err
 	}
