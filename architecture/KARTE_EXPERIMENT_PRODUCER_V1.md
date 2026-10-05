@@ -154,3 +154,16 @@ otherwise contain or occupy derived output even when the data root itself is
 outside the source. Regressions assert rejection without new files or empty
 directories in all these layouts. Disjoint sources at `.mdsys/worker-source`
 and `.mdsys/ephy-other` remain valid and unchanged after prepare/publish.
+
+Linux v1 additionally checks each actual retained root's filesystem device and
+mount ID against bounded, read-only `/proc/self/mountinfo` and `fdinfo`. A root
+is supported only on a uniquely mounted full filesystem; bind mounts, subvolume
+roots, and multiple mounts of the same filesystem are refused before importing
+or creating managed directories. This deliberately fails closed for namespace
+aliases that `/proc/self/fd` path comparisons cannot distinguish. Missing or
+inconsistent proc information also refuses preparation. There is no mount,
+privileged test, host namespace change, or security configuration change.
+Mount-table regressions cover a bind alias of `data/.mdsys`, aliased managed
+children, whole-filesystem aliases, hidden originals, subvolume roots, independent
+filesystems, and malformed information. The mount root and device semantics
+follow the [Linux mountinfo documentation](https://man7.org/linux/man-pages/man5/proc_pid_mountinfo.5.html).

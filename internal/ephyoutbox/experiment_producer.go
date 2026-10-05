@@ -185,6 +185,9 @@ func (p *ExperimentProducer) Prepare(bundleDir, metadataPath string) (Experiment
 	if os.SameFile(inputInfo, dataInfo) {
 		return ExperimentProducerStatus{}, fmt.Errorf("Karte data root is the original Worker bundle")
 	}
+	if err := validateProducerMountAliases(inputRoot, root); err != nil {
+		return ExperimentProducerStatus{}, err
+	}
 	inputPath, err := producerRootPath(inputRoot)
 	if err != nil {
 		return ExperimentProducerStatus{}, err
