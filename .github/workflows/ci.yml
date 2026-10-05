@@ -159,7 +159,7 @@ jobs:
           $dllDir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Run EPHY outbox integrity regression tests
-        run: go test -race -count=1 -v ./internal/ephyoutbox
+        run: go test -race -count=1 -v ./internal/ephyoutbox ./cmd/karte-experiment
 
       - name: Install frontend dependencies
         working-directory: frontend

@@ -1,0 +1,184 @@
+{
+  "schema_version": "ephy.evidence-manifest.v1",
+  "audit_id": "synthetic-audit-001",
+  "job_id": "synthetic-job-001",
+  "created_at": "2026-10-05T00:00:00Z",
+  "artifacts": [
+    {
+      "artifact_id": "system_development_policy",
+      "path": "artifacts/system_development_policy.txt",
+      "size_bytes": 50,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "bb74ef74930013ec1f0bead2f931a9c41c3b8ce08eb80c685b5611f638299538"
+    },
+    {
+      "artifact_id": "task_spec",
+      "path": "artifacts/task_spec.txt",
+      "size_bytes": 34,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "e45553fe0f0e4cbea983d3a70cfe3c1c20a0cd4a7a81908caca8cde8edf24a95"
+    },
+    {
+      "artifact_id": "required_skill",
+      "path": "artifacts/required_skill.txt",
+      "size_bytes": 39,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "d5055f0b685ca11524af8feeebf34c0a448f949aa05800de0f2f56922d88aef3"
+    },
+    {
+      "artifact_id": "evaluation_contract",
+      "path": "artifacts/evaluation_contract.txt",
+      "size_bytes": 44,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "70cccb768cd6ca2389feaeb2835c6ef1ce525b327e55481724ae3ccc1b585a7b"
+    },
+    {
+      "artifact_id": "environment_contract",
+      "path": "artifacts/environment_contract.txt",
+      "size_bytes": 45,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "a6bc4a79df70e364c15c4db4e541bf50615c899162614f412785287af022637c"
+    },
+    {
+      "artifact_id": "audit_contract",
+      "path": "artifacts/audit_contract.txt",
+      "size_bytes": 39,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "322fdec229a55b5a6ea7d2933d8906a700ed391953e6c3277d960e6667357b43"
+    },
+    {
+      "artifact_id": "audit_prompt",
+      "path": "artifacts/audit_prompt.txt",
+      "size_bytes": 37,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "decbefd0ae941512d775efa8138f4e414507bfd5ba6e0a56d32701a3929ef4bf"
+    },
+    {
+      "artifact_id": "audit_input_schema",
+      "path": "artifacts/audit_input_schema.txt",
+      "size_bytes": 43,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "248dc1fb7865b5383933310984d5f77e158f3bcaa047d1b916158faedb7c0d7a"
+    },
+    {
+      "artifact_id": "evidence_manifest_schema",
+      "path": "artifacts/evidence_manifest_schema.txt",
+      "size_bytes": 49,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "f394e6675c81a1b1a963c646ea75ce15acb6beb32a7477be0770ecc71005f6d2"
+    },
+    {
+      "artifact_id": "audit_result_schema",
+      "path": "artifacts/audit_result_schema.txt",
+      "size_bytes": 44,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "c3e6baa17c68e5b9c8c57af19d1332ff6dcd2856f6559b011db15d6247c80b8c"
+    },
+    {
+      "artifact_id": "preflight_result",
+      "path": "artifacts/preflight_result.txt",
+      "size_bytes": 41,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "471c2513e5205b05d6d0a413066e9179e1c27dd8ba5bde1c8eede8c9ba2184c7"
+    },
+    {
+      "artifact_id": "lead_plan",
+      "path": "artifacts/lead_plan.txt",
+      "size_bytes": 34,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "37bbd25a75fd2c8956961cbfa9b99a85e6930ad112eca6d970bf7d9046bbbac2"
+    },
+    {
+      "artifact_id": "workflow_events",
+      "path": "artifacts/workflow_events.txt",
+      "size_bytes": 40,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "aa8a6d48bfe2ea963c90bb55d695f5860523ce326a3b2227005c90d9c691931f"
+    },
+    {
+      "artifact_id": "model_provenance",
+      "path": "artifacts/model_provenance.txt",
+      "size_bytes": 41,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "f801b2c5b2ea1874fb9809cf061f46834d8ea2d86b3d3800f014a5dd1a7f7c92"
+    },
+    {
+      "artifact_id": "candidate_patch",
+      "path": "artifacts/candidate_patch.txt",
+      "size_bytes": 40,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "1b7870e3b2d60285c28faf869886801a79ef02a5ec1dcd958fbead881896bae4"
+    },
+    {
+      "artifact_id": "candidate_changed_files",
+      "path": "artifacts/candidate_changed_files.txt",
+      "size_bytes": 48,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "1bb0ae2809c416ff52943091d9023763f9c75de7868a1d7ac996080eb2ad978a"
+    },
+    {
+      "artifact_id": "candidate_snapshot_manifest",
+      "path": "artifacts/candidate_snapshot_manifest.txt",
+      "size_bytes": 52,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "f19aa944a5621315edd6bfdc6d3bf10b962b8557a5e18e8399b7f064c4e9185f"
+    },
+    {
+      "artifact_id": "verification_plan",
+      "path": "artifacts/verification_plan.txt",
+      "size_bytes": 42,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "10e30507b2ef145bf0c7b9884b71f6dd2ccfba22766c6603fd81be9cac8284cd"
+    },
+    {
+      "artifact_id": "verification_results",
+      "path": "artifacts/verification_results.txt",
+      "size_bytes": 45,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "80f3260038bbd8260fd6f09e4ff89c58db7b6c047f68483c021b4a9226d3f036"
+    },
+    {
+      "artifact_id": "checker_source",
+      "path": "artifacts/checker_source.txt",
+      "size_bytes": 39,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "256012c67733137ffbdb56f05119a3f307022f52047b424a5681fb4ad262de38"
+    },
+    {
+      "artifact_id": "checker_control_results",
+      "path": "artifacts/checker_control_results.txt",
+      "size_bytes": 48,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "1df57976a2a01769617f8b775b45d9c554b9881a1a2243d5889a8b2d5caac71d"
+    },
+    {
+      "artifact_id": "command_transcripts",
+      "path": "artifacts/command_transcripts.txt",
+      "size_bytes": 44,
+      "media_type": "text/plain",
+      "producer": "synthetic-test-harness",
+      "sha256": "7b9ccc8d1d11c9035c9df651d56ea0275551ede92663a9dc30a5843943eebd04"
+    }
+  ]
+}

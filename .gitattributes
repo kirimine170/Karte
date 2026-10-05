@@ -1,2 +1,5 @@
 # Shared contract bytes participate in hashes and signatures on every OS．
 schemas/**/*.json text eol=lf
+
+# Synthetic Worker manifest hashes bind exact fixture bytes on every OS.
+testdata/worker-experiment-v1/** text eol=lf
