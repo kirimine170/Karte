@@ -263,15 +263,19 @@ func buildProducerBinding(contents map[string][]byte) (producerBinding, error) {
 }
 
 func loadWorkerBundle(bundleDir, metadataPath string) (producerBinding, map[string][]byte, error) {
-	metadataRaw, err := readProducerInputFile(metadataPath, producerMaxJSON)
-	if err != nil {
-		return producerBinding{}, nil, err
-	}
 	root, err := openProducerInputRoot(bundleDir)
 	if err != nil {
 		return producerBinding{}, nil, err
 	}
 	defer root.Close()
+	return loadWorkerBundleRoot(root, metadataPath)
+}
+
+func loadWorkerBundleRoot(root *os.Root, metadataPath string) (producerBinding, map[string][]byte, error) {
+	metadataRaw, err := readProducerInputFile(metadataPath, producerMaxJSON)
+	if err != nil {
+		return producerBinding{}, nil, err
+	}
 	manifestRaw, err := readProducerRootFile(root, "evidence-manifest.json", producerMaxJSON)
 	if err != nil {
 		return producerBinding{}, nil, err

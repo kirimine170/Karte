@@ -164,34 +164,50 @@ func installProducerJSON(root *os.Root, name string, raw []byte) error {
 
 func (p *ExperimentProducer) Prepare(bundleDir, metadataPath string) (ExperimentProducerStatus, error) {
 	// Never put derived managed writes inside the original Worker bundle.
-	inputPath, err := filepath.EvalSymlinks(bundleDir)
+	inputRoot, err := openProducerInputRoot(bundleDir)
 	if err != nil {
 		return ExperimentProducerStatus{}, err
 	}
-	inputPath, err = filepath.Abs(inputPath)
-	if err != nil {
-		return ExperimentProducerStatus{}, err
-	}
-	dataPath, err := filepath.EvalSymlinks(p.publisher.store.dataRoot)
-	if err != nil {
-		return ExperimentProducerStatus{}, err
-	}
-	inside, err := filepath.Rel(inputPath, dataPath)
-	if err != nil {
-		return ExperimentProducerStatus{}, err
-	}
-	if inside == "." || (inside != ".." && !strings.HasPrefix(inside, ".."+string(filepath.Separator))) {
-		return ExperimentProducerStatus{}, fmt.Errorf("Karte data directory must be outside the read-only Worker bundle")
-	}
-	binding, contents, err := loadWorkerBundle(bundleDir, metadataPath)
-	if err != nil {
-		return ExperimentProducerStatus{}, err
-	}
+	defer inputRoot.Close()
 	root, err := p.operationRoot()
 	if err != nil {
 		return ExperimentProducerStatus{}, err
 	}
 	defer root.Close()
+	inputInfo, err := inputRoot.Stat(".")
+	if err != nil {
+		return ExperimentProducerStatus{}, err
+	}
+	dataInfo, err := root.Stat(".")
+	if err != nil {
+		return ExperimentProducerStatus{}, err
+	}
+	if os.SameFile(inputInfo, dataInfo) {
+		return ExperimentProducerStatus{}, fmt.Errorf("Karte data root is the original Worker bundle")
+	}
+	inputPath, err := producerRootPath(inputRoot)
+	if err != nil {
+		return ExperimentProducerStatus{}, err
+	}
+	dataPath, err := producerRootPath(root)
+	if err != nil {
+		return ExperimentProducerStatus{}, err
+	}
+	// Separate Windows volumes cannot contain one another. Rel rejects that
+	// normal arrangement (for example CI's D: checkout and C: temporary root).
+	if strings.EqualFold(filepath.VolumeName(inputPath), filepath.VolumeName(dataPath)) {
+		inside, err := filepath.Rel(inputPath, dataPath)
+		if err != nil {
+			return ExperimentProducerStatus{}, err
+		}
+		if inside == "." || (inside != ".." && !strings.HasPrefix(inside, ".."+string(filepath.Separator))) {
+			return ExperimentProducerStatus{}, fmt.Errorf("Karte data directory must be outside the read-only Worker bundle")
+		}
+	}
+	binding, contents, err := loadWorkerBundleRoot(inputRoot, metadataPath)
+	if err != nil {
+		return ExperimentProducerStatus{}, err
+	}
 	id := binding.Record.CandidateID
 	// Bind all metadata, source bytes, record, and proposal before any evidence or
 	// pending write. The binding remains after receipts, preventing ID reuse.
@@ -391,6 +407,12 @@ func (p *ExperimentProducer) Status(id string) (ExperimentProducerStatus, error)
 }
 
 func (p *ExperimentProducer) Publish(id string) (ExperimentProducerStatus, error) {
+	return p.publish(id, nil)
+}
+
+// The private checkpoint permits deterministic testing of human acceptance
+// between observing pending and deciding whether to write. Public calls omit it.
+func (p *ExperimentProducer) publish(id string, afterStatus func()) (ExperimentProducerStatus, error) {
 	root, err := p.operationRoot()
 	if err != nil {
 		return ExperimentProducerStatus{}, err
@@ -400,12 +422,29 @@ func (p *ExperimentProducer) Publish(id string) (ExperimentProducerStatus, error
 	if err != nil {
 		return ExperimentProducerStatus{}, err
 	}
+	// Serialize first publication across producer instances/processes. Otherwise
+	// two callers that both observed "prepared" could queue the second copy
+	// after human acceptance already archived the first. Acceptance itself keeps
+	// its existing authority and transaction; no acceptance lock is introduced.
+	release, err := acquireProducerPublication(root, id)
+	if err != nil {
+		return ExperimentProducerStatus{}, err
+	}
+	defer release()
 	status, err := producerStatus(root, binding)
 	if err != nil {
 		return status, err
 	}
+	if afterStatus != nil {
+		afterStatus()
+	}
 	if status.Receipt != nil {
 		return status, nil
+	}
+	if status.Phase == "pending" {
+		// Never reinstall a pathname observed in pending. Karte can archive it
+		// between this observation and return, so re-read only, without writing.
+		return producerStatus(root, binding)
 	}
 	dir, err := producerDirectory(root, producerOutboxDir+"/pending", true)
 	if err != nil {
@@ -417,4 +456,44 @@ func (p *ExperimentProducer) Publish(id string) (ExperimentProducerStatus, error
 	}
 	// Re-read after publication; a concurrent human acceptance remains visible.
 	return producerStatus(root, binding)
+}
+
+func acquireProducerPublication(root *os.Root, id string) (func(), error) {
+	if !validEvidenceCandidate(id) {
+		return nil, fmt.Errorf("invalid publication identity")
+	}
+	dir, err := producerDirectory(root, producerBindingDir+"/.locks", true)
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+	name := id + ".lock"
+	file, err := dir.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+	if errors.Is(err, os.ErrExist) {
+		info, statErr := dir.Lstat(name)
+		if statErr != nil || !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("unsafe producer publication lock")
+		}
+		if err := exactEvidenceEntry(dir, name); err != nil {
+			return nil, err
+		}
+		file, err = dir.OpenFile(name, os.O_RDWR, 0600)
+		if err == nil {
+			opened, statErr := file.Stat()
+			if statErr != nil || !os.SameFile(info, opened) {
+				file.Close()
+				return nil, fmt.Errorf("publication lock changed while opening")
+			}
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := lockProducerPublication(file); err != nil {
+		file.Close()
+		return nil, err
+	}
+	// Keep the named lock inode permanently: unlinking a lock can give racing
+	// processes different lock objects. OS locks release automatically on exit.
+	return func() { unlockProducerPublication(file); file.Close() }, nil
 }

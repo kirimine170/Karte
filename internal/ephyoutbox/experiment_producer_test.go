@@ -1,14 +1,18 @@
 package ephyoutbox
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func producerFixture(t *testing.T) (string, string) {
@@ -620,6 +624,164 @@ func TestExperimentProducerRejectsLinksAndAliases(t *testing.T) {
 				if _, err := p.Status(status.CandidateID); err == nil {
 					t.Fatal("binding case alias accepted")
 				}
+			}
+		})
+	}
+}
+
+func TestExperimentProducerPublishDoesNotRecreatePendingAfterAcceptance(t *testing.T) {
+	p, data, _, _, prepared := newPreparedProducer(t)
+	if _, err := p.Publish(prepared.CandidateID); err != nil {
+		t.Fatal(err)
+	}
+	status, err := p.publish(prepared.CandidateID, func() { producerAcceptHarness(t, data, prepared.CandidateID) })
+	if err != nil {
+		t.Fatalf("acceptance during publication retry: %v", err)
+	}
+	if status.Phase != "report_accepted" || status.Adopted || status.Verification != "unverified" {
+		t.Fatalf("incorrect post-acceptance status: %+v", status)
+	}
+	pending := filepath.Join(data, filepath.FromSlash(producerOutboxDir), "pending", prepared.CandidateID+".json")
+	if _, err := os.Stat(pending); !os.IsNotExist(err) {
+		t.Fatal("publication retry recreated accepted pending proposal")
+	}
+	store, err := NewStore(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MoveProposal(prepared.CandidateID, "accepted"); err != nil {
+		t.Fatalf("normal acceptance retry is no longer recoverable: %v", err)
+	}
+}
+
+func TestExperimentProducerPublicationAcrossProcesses(t *testing.T) {
+	const rootEnv = "KARTE_SYNTHETIC_PRODUCER_TEST_ROOT"
+	if data := os.Getenv(rootEnv); data != "" {
+		p, err := NewExperimentProducer(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer p.Close()
+		fmt.Fprintln(os.Stdout, "PRODUCER_CHILD_READY")
+		status, err := p.Publish("synthetic-candidate-001")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status.Phase != "report_accepted" || status.Adopted || status.Verification != "unverified" {
+			t.Fatalf("queued a second proposal instead of observing acceptance: %+v", status)
+		}
+		return
+	}
+	p, data, _, _, prepared := newPreparedProducer(t)
+	root, err := p.operationRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	release, err := acquireProducerPublication(root, prepared.CandidateID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked := true
+	defer func() {
+		if locked {
+			release()
+		}
+	}()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestExperimentProducerPublicationAcrossProcesses$", "-test.v")
+	cmd.Env = append(os.Environ(), rootEnv+"="+data)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	ready := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			if scanner.Text() == "PRODUCER_CHILD_READY" {
+				ready <- struct{}{}
+			}
+		}
+		done <- cmd.Wait()
+	}()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill() // Only this test's owned child; safe after Wait.
+	})
+	select {
+	case <-ready:
+	case err := <-done:
+		t.Fatalf("child before readiness: %v %s", err, stderr.String())
+	case <-time.After(15 * time.Second):
+		t.Fatal("child did not reach publication")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("another process bypassed the publication lock: %v %s", err, stderr.String())
+	case <-time.After(150 * time.Millisecond):
+	}
+	// Simulate the first producer while it owns publication, then normal human
+	// acceptance before the waiting process gets its turn to inspect the outbox.
+	binding, err := p.readBinding(root, prepared.CandidateID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := producerDirectory(root, producerOutboxDir+"/pending", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = installProducerJSON(dir, prepared.CandidateID+".json", producerJSON(binding.Proposal))
+	dir.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	producerAcceptHarness(t, data, prepared.CandidateID)
+	release()
+	locked = false
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("waiting producer failed: %v %s", err, stderr.String())
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("waiting producer did not finish after release")
+	}
+	if _, err := os.Stat(filepath.Join(data, filepath.FromSlash(producerOutboxDir), "pending", prepared.CandidateID+".json")); !os.IsNotExist(err) {
+		t.Fatal("waiting producer recreated accepted pending")
+	}
+}
+
+func TestExperimentProducerRejectsSourceRootAliases(t *testing.T) {
+	for _, kind := range []string{"same-root", "descendant"} {
+		t.Run(kind, func(t *testing.T) {
+			bundle, metadata := producerFixture(t)
+			alias := filepath.Join(t.TempDir(), "source-parent-alias")
+			if err := os.Symlink(filepath.Dir(bundle), alias); err != nil {
+				t.Skipf("directory symlink unavailable: %v", err)
+			}
+			data := filepath.Join(alias, filepath.Base(bundle))
+			if kind == "descendant" {
+				data = filepath.Join(data, "derived-root")
+				if err := os.Mkdir(data, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := producerSnapshot(t, bundle)
+			p, err := NewExperimentProducer(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			if _, err := p.Prepare(bundle, metadata); err == nil {
+				t.Fatal("source volume/path alias allowed derived writes inside original evidence")
+			}
+			if !bytes.Equal(producerJSON(before), producerJSON(producerSnapshot(t, bundle))) {
+				t.Fatal("alias refusal changed original evidence")
 			}
 		})
 	}

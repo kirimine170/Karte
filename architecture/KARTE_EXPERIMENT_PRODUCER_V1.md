@@ -36,6 +36,10 @@ producer bindings, derived evidence copies, and pending proposals below
 `.mdsys/ephy`. Original Worker bundles and metadata are read-only. Existing
 authentication, registration, privacy policy, permissions, and canonical files
 are not changed. The root handle is retained for the producer's lifetime.
+Prepare checks the actual source/data root identities. On Windows it resolves
+the already-open handles to GUID volume paths (normalized DOS/UNC paths for
+remote shares), preserving identity through volume/path aliases before deciding
+whether roots on separate volumes are outside one another.
 
 ## Input contract
 
@@ -92,6 +96,13 @@ exclusive filesystem operation, and its temporary name is removed. No rename
 that can replace a destination is used. An identical concurrent publication is
 idempotent; different existing content, a case alias, link, directory, or an
 unsupported hard-link filesystem is refused without replacing the destination.
+Candidate publication is serialized across producer instances and processes by
+an OS file lock below `experiment-producer/.locks`. Named lock files remain in
+place; the OS releases a held lock when its process exits. Once pending is
+observed, retry only reads status and never reinstalls its pathname. This also
+prevents a waiting first-time publisher from queuing a second copy after human
+acceptance archives the first. Karte's acceptance authority and transaction are
+unchanged; the producer does not acquire an acceptance or canonical-write lock.
 Unix directory entries are fsynced; Windows flushes file handles and does not
 claim POSIX directory-fsync support.
 
@@ -125,5 +136,9 @@ canonical content, acceptance saves once, and producer receipt retry does not
 save again. Additional regressions cover metadata changes after acceptance,
 receipt/archive substitution, immutable evidence, bad manifest/hash/size/ID,
 concurrent publishers, and the command authority boundary.
+The accepted/pending race regression fixes the interleaving deterministically;
+another native test uses a separately owned process waiting on publication while
+synthetic acceptance finishes. Windows CI also verifies source and data roots
+on different volumes; same-volume data inside the source bundle remains refused.
 Backend CI validates the fixture against the pinned Worker JSON Schema using
 its existing jsonschema dependency; no new installation or permission is added.
