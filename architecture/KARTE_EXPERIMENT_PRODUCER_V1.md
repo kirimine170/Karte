@@ -167,3 +167,23 @@ Mount-table regressions cover a bind alias of `data/.mdsys`, aliased managed
 children, whole-filesystem aliases, hidden originals, subvolume roots, independent
 filesystems, and malformed information. The mount root and device semantics
 follow the [Linux mountinfo documentation](https://man7.org/linux/man-pages/man5/proc_pid_mountinfo.5.html).
+
+The write policy is checked anew by every `publish`, before binding layout,
+locks, or pending output is written, and before preparation writes evidence.
+Any mount below the actual data root's `.mdsys` tree is unsupported, including
+mounts on outbox, pending files, lock directories/files, or evidence children
+whose device differs from the data root. Producer directory creation checks
+the actual retained parent and newly opened child mount IDs before proceeding;
+the actual opened publication lock file and pending/binding directory must
+belong to the retained data mount. This does not rely on a past prepare check.
+Regressions demonstrate root-only validation permits another-device descendant
+mount, while write validation refuses it, and verify actual directory/file
+handle mismatch against the already-mounted `/proc` without creating a mount.
+
+The supported threat model keeps the host mount namespace stable during each
+command. Root handles protect producer-owned directory operations, but this
+adapter does not freeze or lock the namespace against a concurrent privileged
+administrator changing mounts during the existing evidence publisher's write.
+Such host configuration changes are outside v1's guarantee. Mounts introduced
+between commands and mounts already present at each producer write check are
+refused. No privileged reproduction or namespace/security mutation is required.

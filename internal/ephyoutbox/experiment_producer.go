@@ -51,6 +51,10 @@ func producerDirectory(root *os.Root, name string, create bool) (*os.Root, error
 	}
 	for _, part := range strings.Split(name, "/") {
 		if create {
+			if err := validateProducerWriteRoot(root, current); err != nil {
+				current.Close()
+				return nil, err
+			}
 			if err := current.Mkdir(part, 0700); err != nil && !errors.Is(err, os.ErrExist) {
 				current.Close()
 				return nil, err
@@ -66,6 +70,9 @@ func producerDirectory(root *os.Root, name string, create bool) (*os.Root, error
 			if statErr != nil || !os.SameFile(info, opened) {
 				err = fmt.Errorf("producer directory changed while opening: %s", part)
 			}
+		}
+		if err == nil && create {
+			err = validateProducerWriteRoot(root, next)
 		}
 		if err == nil && create {
 			err = syncEvidenceDirectory(current)
@@ -188,6 +195,9 @@ func (p *ExperimentProducer) Prepare(bundleDir, metadataPath string) (Experiment
 	if err := validateProducerMountAliases(inputRoot, root); err != nil {
 		return ExperimentProducerStatus{}, err
 	}
+	if err := validateProducerWriteTopology(root); err != nil {
+		return ExperimentProducerStatus{}, err
+	}
 	inputPath, err := producerRootPath(inputRoot)
 	if err != nil {
 		return ExperimentProducerStatus{}, err
@@ -245,9 +255,16 @@ func (p *ExperimentProducer) Prepare(bundleDir, metadataPath string) (Experiment
 	if err != nil {
 		return ExperimentProducerStatus{}, err
 	}
+	if err := validateProducerWriteRoot(root, dir); err != nil {
+		dir.Close()
+		return ExperimentProducerStatus{}, err
+	}
 	err = installProducerJSON(dir, id+".json", producerJSON(binding))
 	dir.Close()
 	if err != nil {
+		return ExperimentProducerStatus{}, err
+	}
+	if err := validateProducerWriteTopology(root); err != nil {
 		return ExperimentProducerStatus{}, err
 	}
 	if _, err := p.publisher.Publish(binding.Record, contents); err != nil {
@@ -426,6 +443,9 @@ func (p *ExperimentProducer) publish(id string, afterStatus func()) (ExperimentP
 		return ExperimentProducerStatus{}, err
 	}
 	defer root.Close()
+	if err := validateProducerWriteTopology(root); err != nil {
+		return ExperimentProducerStatus{}, err
+	}
 	binding, err := p.readBinding(root, id)
 	if err != nil {
 		return ExperimentProducerStatus{}, err
@@ -459,6 +479,9 @@ func (p *ExperimentProducer) publish(id string, afterStatus func()) (ExperimentP
 		return status, err
 	}
 	defer dir.Close()
+	if err := validateProducerWriteRoot(root, dir); err != nil {
+		return status, err
+	}
 	if err := installProducerJSON(dir, id+".json", producerJSON(binding.Proposal)); err != nil {
 		return status, err
 	}
@@ -495,6 +518,10 @@ func acquireProducerPublication(root *os.Root, id string) (func(), error) {
 		}
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err := validateProducerWriteFile(root, file); err != nil {
+		file.Close()
 		return nil, err
 	}
 	if err := lockProducerPublication(file); err != nil {

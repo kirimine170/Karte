@@ -7,6 +7,7 @@ import (
 	"golang.org/x/sys/unix"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -16,6 +17,7 @@ type producerMount struct {
 	id     uint64
 	device string
 	root   string
+	point  string
 }
 
 func producerProcFile(name string, limit int64) ([]byte, error) {
@@ -110,7 +112,7 @@ func parseProducerMounts(raw []byte) ([]producerMount, error) {
 		if !strings.HasPrefix(mountPoint, "/") {
 			return nil, fmt.Errorf("invalid producer mount point")
 		}
-		result = append(result, producerMount{id: id, device: fmt.Sprintf("%d:%d", major, minor), root: root})
+		result = append(result, producerMount{id: id, device: fmt.Sprintf("%d:%d", major, minor), root: root, point: mountPoint})
 	}
 	return result, nil
 }
@@ -138,50 +140,137 @@ func validateProducerMountSelection(mounts []producerMount, id uint64, device st
 	return nil
 }
 
-func validateProducerMountAliases(roots ...*os.Root) error {
+func producerFileMountIdentity(file *os.File) (uint64, string, error) {
+	info, err := file.Stat()
+	if err != nil {
+		return 0, "", err
+	}
+	fdInfo, err := producerProcFile(fmt.Sprintf("/proc/self/fdinfo/%d", file.Fd()), 16*1024)
+	if err != nil {
+		return 0, "", err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, "", fmt.Errorf("producer filesystem identity is unavailable")
+	}
+	var id uint64
+	for _, line := range strings.Split(string(fdInfo), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == "mnt_id:" {
+			if id != 0 {
+				return 0, "", fmt.Errorf("duplicate producer mount identity")
+			}
+			id, err = strconv.ParseUint(fields[1], 10, 64)
+			if err != nil || id == 0 {
+				return 0, "", fmt.Errorf("invalid producer mount identity")
+			}
+		}
+	}
+	if id == 0 {
+		return 0, "", fmt.Errorf("missing producer mount identity")
+	}
+	return id, fmt.Sprintf("%d:%d", unix.Major(uint64(stat.Dev)), unix.Minor(uint64(stat.Dev))), nil
+}
+
+func producerRootMountIdentity(root *os.Root) (uint64, string, error) {
+	file, err := root.Open(".")
+	if err != nil {
+		return 0, "", err
+	}
+	defer file.Close()
+	return producerFileMountIdentity(file)
+}
+
+func producerCurrentMounts() ([]producerMount, error) {
 	raw, err := producerProcFile("/proc/self/mountinfo", 1024*1024)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	mounts, err := parseProducerMounts(raw)
+	return parseProducerMounts(raw)
+}
+
+func validateProducerMountAliases(roots ...*os.Root) error {
+	mounts, err := producerCurrentMounts()
 	if err != nil {
 		return err
 	}
 	for _, root := range roots {
-		file, err := root.Open(".")
+		id, device, err := producerRootMountIdentity(root)
 		if err != nil {
 			return err
 		}
-		info, statErr := file.Stat()
-		fdInfo, readErr := producerProcFile(fmt.Sprintf("/proc/self/fdinfo/%d", file.Fd()), 16*1024)
-		file.Close()
-		if statErr != nil {
-			return statErr
-		}
-		if readErr != nil {
-			return readErr
-		}
-		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !ok {
-			return fmt.Errorf("producer root filesystem identity is unavailable")
-		}
-		var id uint64
-		for _, line := range strings.Split(string(fdInfo), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) == 2 && fields[0] == "mnt_id:" {
-				if id != 0 {
-					return fmt.Errorf("duplicate producer root mount identity")
-				}
-				id, err = strconv.ParseUint(fields[1], 10, 64)
-				if err != nil || id == 0 {
-					return fmt.Errorf("invalid producer root mount identity")
-				}
-			}
-		}
-		device := fmt.Sprintf("%d:%d", unix.Major(uint64(stat.Dev)), unix.Minor(uint64(stat.Dev)))
 		if err := validateProducerMountSelection(mounts, id, device); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateProducerWriteMountSelection(mounts []producerMount, id uint64, device, rootPath string) error {
+	if err := validateProducerMountSelection(mounts, id, device); err != nil {
+		return err
+	}
+	managed := filepath.Join(rootPath, ".mdsys")
+	for _, mount := range mounts {
+		inside, err := filepath.Rel(managed, mount.point)
+		if err != nil {
+			return err
+		}
+		if inside == "." || (inside != ".." && !strings.HasPrefix(inside, ".."+string(filepath.Separator))) {
+			return fmt.Errorf("producer managed tree contains a descendant mount; unsupported write target")
+		}
+	}
+	return nil
+}
+
+func validateProducerWriteTopology(root *os.Root) error {
+	mounts, err := producerCurrentMounts()
+	if err != nil {
+		return err
+	}
+	id, device, err := producerRootMountIdentity(root)
+	if err != nil {
+		return err
+	}
+	rootPath, err := producerRootPath(root)
+	if err != nil {
+		return err
+	}
+	return validateProducerWriteMountSelection(mounts, id, device, rootPath)
+}
+
+func validateProducerWriteRoot(root, target *os.Root) error {
+	if err := validateProducerWriteTopology(root); err != nil {
+		return err
+	}
+	id, device, err := producerRootMountIdentity(root)
+	if err != nil {
+		return err
+	}
+	targetID, targetDevice, err := producerRootMountIdentity(target)
+	if err != nil {
+		return err
+	}
+	if targetID != id || targetDevice != device {
+		return fmt.Errorf("producer write directory differs from retained data mount")
+	}
+	return nil
+}
+
+func validateProducerWriteFile(root *os.Root, file *os.File) error {
+	if err := validateProducerWriteTopology(root); err != nil {
+		return err
+	}
+	id, device, err := producerRootMountIdentity(root)
+	if err != nil {
+		return err
+	}
+	targetID, targetDevice, err := producerFileMountIdentity(file)
+	if err != nil {
+		return err
+	}
+	if targetID != id || targetDevice != device {
+		return fmt.Errorf("producer lock file differs from retained data mount")
 	}
 	return nil
 }
