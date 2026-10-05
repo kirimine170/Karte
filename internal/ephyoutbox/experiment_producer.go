@@ -196,12 +196,17 @@ func (p *ExperimentProducer) Prepare(bundleDir, metadataPath string) (Experiment
 	// Separate Windows volumes cannot contain one another. Rel rejects that
 	// normal arrangement (for example CI's D: checkout and C: temporary root).
 	if strings.EqualFold(filepath.VolumeName(inputPath), filepath.VolumeName(dataPath)) {
-		inside, err := filepath.Rel(inputPath, dataPath)
-		if err != nil {
-			return ExperimentProducerStatus{}, err
-		}
-		if inside == "." || (inside != ".." && !strings.HasPrefix(inside, ".."+string(filepath.Separator))) {
-			return ExperimentProducerStatus{}, fmt.Errorf("Karte data directory must be outside the read-only Worker bundle")
+		managedPath := filepath.Join(dataPath, ".mdsys", "ephy")
+		// The source may be inside an otherwise disjoint data root, but never
+		// contain managed writes (e.g. source=data/.mdsys) or occupy their tree.
+		for _, locations := range [][2]string{{inputPath, dataPath}, {inputPath, managedPath}, {managedPath, inputPath}} {
+			inside, err := filepath.Rel(locations[0], locations[1])
+			if err != nil {
+				return ExperimentProducerStatus{}, err
+			}
+			if inside == "." || (inside != ".." && !strings.HasPrefix(inside, ".."+string(filepath.Separator))) {
+				return ExperimentProducerStatus{}, fmt.Errorf("Worker bundle overlaps Karte data root or managed output")
+			}
 		}
 	}
 	binding, contents, err := loadWorkerBundleRoot(inputRoot, metadataPath)

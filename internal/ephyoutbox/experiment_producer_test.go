@@ -560,6 +560,133 @@ func TestExperimentProducerPreservesReadOnlyWorkerRoot(t *testing.T) {
 	}
 }
 
+func TestExperimentProducerRejectsWorkerBundleInManagedOutput(t *testing.T) {
+	for _, relative := range []string{
+		".mdsys", ".mdsys/ephy", ".mdsys/ephy/experiment-producer",
+		".mdsys/ephy/experiments", ".mdsys/ephy/outbox",
+		".mdsys/ephy/experiments/source-worker", ".mdsys/ephy/outbox/pending/source-worker",
+	} {
+		t.Run(relative, func(t *testing.T) {
+			data := t.TempDir()
+			source, _ := producerFixture(t)
+			bundle := filepath.Join(data, filepath.FromSlash(relative))
+			if err := os.MkdirAll(filepath.Dir(bundle), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(source, bundle); err != nil {
+				t.Fatal(err)
+			}
+			// Include empty directories as well as file hashes: a refused prepare
+			// must leave no new managed layout inside the read-only source.
+			snapshot := func() map[string]string {
+				result := producerSnapshot(t, data)
+				if err := filepath.WalkDir(data, func(name string, entry fs.DirEntry, err error) error {
+					if err != nil {
+						return err
+					}
+					if entry.IsDir() {
+						relative, err := filepath.Rel(data, name)
+						if err != nil {
+							return err
+						}
+						result[relative+string(filepath.Separator)] = "directory"
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				return result
+			}
+			before := snapshot()
+			p, err := NewExperimentProducer(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			if _, err := p.Prepare(bundle, filepath.Join(bundle, "metadata.json")); err == nil {
+				t.Error("Worker bundle overlapping managed output accepted")
+			}
+			if !bytes.Equal(producerJSON(before), producerJSON(snapshot())) {
+				t.Error("refused prepare modified source files or created managed directories")
+			}
+		})
+	}
+}
+
+func TestExperimentProducerRejectsManagedOutputAliases(t *testing.T) {
+	for _, kind := range []string{"data-root-alias", "source-parent-alias"} {
+		t.Run(kind, func(t *testing.T) {
+			data := t.TempDir()
+			source, _ := producerFixture(t)
+			bundle := filepath.Join(data, ".mdsys")
+			if err := os.Rename(source, bundle); err != nil {
+				t.Fatal(err)
+			}
+			alias := filepath.Join(t.TempDir(), "parent-alias")
+			parent := data
+			if kind == "data-root-alias" {
+				parent = filepath.Dir(data)
+			}
+			if err := os.Symlink(parent, alias); err != nil {
+				t.Skipf("directory symlink unavailable: %v", err)
+			}
+			dataInput, bundleInput := data, bundle
+			if kind == "data-root-alias" {
+				dataInput = filepath.Join(alias, filepath.Base(data))
+			} else {
+				bundleInput = filepath.Join(alias, ".mdsys")
+			}
+			before := producerSnapshot(t, bundle)
+			p, err := NewExperimentProducer(dataInput)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			if _, err := p.Prepare(bundleInput, filepath.Join(bundleInput, "metadata.json")); err == nil {
+				t.Error("source/output alias allowed managed writes inside original evidence")
+			}
+			if !bytes.Equal(producerJSON(before), producerJSON(producerSnapshot(t, bundle))) {
+				t.Error("alias refusal modified original evidence")
+			}
+			if _, err := os.Lstat(filepath.Join(bundle, "ephy")); !os.IsNotExist(err) {
+				t.Error("alias refusal created managed directories")
+			}
+		})
+	}
+}
+
+func TestExperimentProducerAllowsWorkerBundleOutsideManagedOutput(t *testing.T) {
+	for _, relative := range []string{".mdsys/worker-source", ".mdsys/ephy-other"} {
+		t.Run(relative, func(t *testing.T) {
+			data := t.TempDir()
+			source, _ := producerFixture(t)
+			bundle := filepath.Join(data, filepath.FromSlash(relative))
+			if err := os.MkdirAll(filepath.Dir(bundle), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(source, bundle); err != nil {
+				t.Fatal(err)
+			}
+			before := producerSnapshot(t, bundle)
+			p, err := NewExperimentProducer(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			prepared, err := p.Prepare(bundle, filepath.Join(bundle, "metadata.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := p.Publish(prepared.CandidateID); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(producerJSON(before), producerJSON(producerSnapshot(t, bundle))) {
+				t.Fatal("managed writes modified the disjoint source bundle")
+			}
+		})
+	}
+}
+
 func TestExperimentProducerRejectsLinksAndAliases(t *testing.T) {
 	for _, kind := range []string{"source-file", "source-directory", "pending-file", "pending-directory", "binding-alias"} {
 		t.Run(kind, func(t *testing.T) {

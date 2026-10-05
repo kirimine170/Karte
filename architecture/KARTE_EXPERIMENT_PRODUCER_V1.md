@@ -146,3 +146,11 @@ synthetic acceptance finishes. Windows CI also verifies source and data roots
 on different volumes; same-volume data inside the source bundle remains refused.
 Backend CI validates the fixture against the pinned Worker JSON Schema using
 its existing jsonschema dependency; no new installation or permission is added.
+
+Before any write, preparation also refuses overlap between the Worker bundle
+and the entire retained data root's `.mdsys/ephy` managed tree in either
+direction. Sources at `.mdsys`, `.mdsys/ephy`, and managed children would
+otherwise contain or occupy derived output even when the data root itself is
+outside the source. Regressions assert rejection without new files or empty
+directories in all these layouts. Disjoint sources at `.mdsys/worker-source`
+and `.mdsys/ephy-other` remain valid and unchanged after prepare/publish.
