@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -784,5 +785,38 @@ func TestExperimentProducerRejectsSourceRootAliases(t *testing.T) {
 				t.Fatal("alias refusal changed original evidence")
 			}
 		})
+	}
+}
+
+func TestExperimentProducerRejectsDataMovedIntoWorkerBundle(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows retained directory handle prevents the POSIX rename scenario")
+	}
+	bundle, metadata := producerFixture(t)
+	data := t.TempDir()
+	p, err := NewExperimentProducer(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	moved := filepath.Join(bundle, "moved-producer-data")
+	if err := os.Rename(data, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(data, 0700); err != nil {
+		t.Fatal(err)
+	}
+	before := producerSnapshot(t, bundle)
+	if _, err := p.Prepare(bundle, metadata); err == nil {
+		t.Fatal("retained data root moved inside Worker evidence was accepted through its replaced old pathname")
+	}
+	if !bytes.Equal(producerJSON(before), producerJSON(producerSnapshot(t, bundle))) {
+		t.Fatal("prepare wrote into original Worker evidence through the moved retained root")
+	}
+	for _, name := range []string{data, moved} {
+		entries, err := os.ReadDir(name)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("refused prepare changed root %s: %v", name, err)
+		}
 	}
 }
