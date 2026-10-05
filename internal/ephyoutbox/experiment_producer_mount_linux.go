@@ -7,7 +7,6 @@ import (
 	"golang.org/x/sys/unix"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -53,7 +52,10 @@ func producerMountPath(encoded string) (string, error) {
 		i += 3
 	}
 	name := result.String()
-	if !filepath.IsAbs(name) || filepath.Clean(name) != name {
+	// Some kernel pseudo filesystems supply a dentry name such as
+	// "mnt:[4026531840]" rather than an absolute root path. Preserve it:
+	// selected producer roots still require the exact full-fs root "/".
+	if name == "" || strings.ContainsRune(name, 0) {
 		return "", fmt.Errorf("invalid mount path")
 	}
 	return name, nil
@@ -101,8 +103,12 @@ func parseProducerMounts(raw []byte) ([]producerMount, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, err := producerMountPath(fields[4]); err != nil {
+		mountPoint, err := producerMountPath(fields[4])
+		if err != nil {
 			return nil, err
+		}
+		if !strings.HasPrefix(mountPoint, "/") {
+			return nil, fmt.Errorf("invalid producer mount point")
 		}
 		result = append(result, producerMount{id: id, device: fmt.Sprintf("%d:%d", major, minor), root: root})
 	}
