@@ -40,6 +40,10 @@ Prepare checks the actual source/data root identities. On Windows it resolves
 the already-open handles to GUID volume paths (normalized DOS/UNC paths for
 remote shares), preserving identity through volume/path aliases before deciding
 whether roots on separate volumes are outside one another.
+Linux uses the opened directory's `/proc/self/fd` path and macOS uses F_GETPATH.
+No platform reopens `Root.Name()` to decide source containment; this display
+name can be relative or stale after a rename. A data object moved into the
+Worker bundle is refused even if its old pathname now names another directory.
 
 ## Input contract
 

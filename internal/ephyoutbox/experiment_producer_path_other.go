@@ -1,16 +1,12 @@
-//go:build !windows
+//go:build !windows && !linux && !darwin
 
 package ephyoutbox
 
 import (
+	"fmt"
 	"os"
-	"path/filepath"
 )
 
 func producerRootPath(root *os.Root) (string, error) {
-	resolved, err := filepath.EvalSymlinks(root.Name())
-	if err != nil {
-		return "", err
-	}
-	return filepath.Abs(resolved)
+	return "", fmt.Errorf("producer root handle paths are unsupported on this platform")
 }
