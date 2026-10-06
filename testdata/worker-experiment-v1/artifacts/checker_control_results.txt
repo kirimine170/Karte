@@ -1,0 +1,1 @@
+Synthetic fixture only: checker_control_results

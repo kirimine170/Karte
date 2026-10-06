@@ -1,0 +1,333 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ephy.local/schemas/evidence-manifest-v1.json",
+  "title": "ephy-worker independent audit evidence manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "audit_id",
+    "job_id",
+    "created_at",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "ephy.evidence-manifest.v1"
+    },
+    "audit_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "job_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 22,
+      "maxItems": 22,
+      "uniqueItems": true,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/systemDevelopmentPolicy"
+        },
+        {
+          "$ref": "#/$defs/taskSpec"
+        },
+        {
+          "$ref": "#/$defs/requiredSkill"
+        },
+        {
+          "$ref": "#/$defs/evaluationContract"
+        },
+        {
+          "$ref": "#/$defs/environmentContract"
+        },
+        {
+          "$ref": "#/$defs/auditContract"
+        },
+        {
+          "$ref": "#/$defs/auditPrompt"
+        },
+        {
+          "$ref": "#/$defs/auditInputSchema"
+        },
+        {
+          "$ref": "#/$defs/evidenceManifestSchema"
+        },
+        {
+          "$ref": "#/$defs/auditResultSchema"
+        },
+        {
+          "$ref": "#/$defs/preflightResult"
+        },
+        {
+          "$ref": "#/$defs/leadPlan"
+        },
+        {
+          "$ref": "#/$defs/workflowEvents"
+        },
+        {
+          "$ref": "#/$defs/modelProvenance"
+        },
+        {
+          "$ref": "#/$defs/candidatePatch"
+        },
+        {
+          "$ref": "#/$defs/candidateChangedFiles"
+        },
+        {
+          "$ref": "#/$defs/candidateSnapshotManifest"
+        },
+        {
+          "$ref": "#/$defs/verificationPlan"
+        },
+        {
+          "$ref": "#/$defs/verificationResults"
+        },
+        {
+          "$ref": "#/$defs/checkerSource"
+        },
+        {
+          "$ref": "#/$defs/checkerControlResults"
+        },
+        {
+          "$ref": "#/$defs/commandTranscripts"
+        }
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "bundleRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\\\)[^\\u0000]+$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "path",
+        "size_bytes",
+        "media_type",
+        "producer",
+        "sha256"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string"
+        },
+        "path": {
+          "$ref": "#/$defs/bundleRelativePath"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "producer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "systemDevelopmentPolicy": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "system_development_policy"
+        }
+      }
+    },
+    "taskSpec": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "task_spec"
+        }
+      }
+    },
+    "requiredSkill": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "required_skill"
+        }
+      }
+    },
+    "evaluationContract": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "evaluation_contract"
+        }
+      }
+    },
+    "environmentContract": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "environment_contract"
+        }
+      }
+    },
+    "auditContract": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "audit_contract"
+        }
+      }
+    },
+    "auditPrompt": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "audit_prompt"
+        }
+      }
+    },
+    "auditInputSchema": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "audit_input_schema"
+        }
+      }
+    },
+    "evidenceManifestSchema": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "evidence_manifest_schema"
+        }
+      }
+    },
+    "auditResultSchema": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "audit_result_schema"
+        }
+      }
+    },
+    "preflightResult": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "preflight_result"
+        }
+      }
+    },
+    "leadPlan": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "lead_plan"
+        }
+      }
+    },
+    "workflowEvents": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "workflow_events"
+        }
+      }
+    },
+    "modelProvenance": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "model_provenance"
+        }
+      }
+    },
+    "candidatePatch": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "candidate_patch"
+        }
+      }
+    },
+    "candidateChangedFiles": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "candidate_changed_files"
+        }
+      }
+    },
+    "candidateSnapshotManifest": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "candidate_snapshot_manifest"
+        }
+      }
+    },
+    "verificationPlan": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "verification_plan"
+        }
+      }
+    },
+    "verificationResults": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "verification_results"
+        }
+      }
+    },
+    "checkerSource": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "checker_source"
+        }
+      }
+    },
+    "checkerControlResults": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "checker_control_results"
+        }
+      }
+    },
+    "commandTranscripts": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "artifact_id": {
+          "const": "command_transcripts"
+        }
+      }
+    }
+  }
+}

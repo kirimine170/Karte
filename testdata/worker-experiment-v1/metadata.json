@@ -1,0 +1,21 @@
+{
+  "adapter_version": "karte.worker-experiment.v1",
+  "synthetic_only": true,
+  "candidate_id": "synthetic-candidate-001",
+  "experiment_id": "synthetic-audit-001",
+  "run_id": "synthetic-job-001",
+  "attempt_id": "attempt-001",
+  "target_commit": "unacquired",
+  "environment": "synthetic-local-fixture",
+  "model": "unacquired",
+  "checker": "synthetic-test-harness",
+  "worker_result": "external_review_pending",
+  "observations": [
+    "All artifact bytes are synthetic; no model or user data was used."
+  ],
+  "interpretation": "This fixture checks transport integrity only.",
+  "halt_reason": "Synthetic control completed; no live execution or adoption is authorized.",
+  "project": "ephy",
+  "title": "Synthetic Worker experiment report",
+  "reported_at": "2026-10-05T00:00:00Z"
+}

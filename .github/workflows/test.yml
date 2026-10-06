@@ -81,6 +81,7 @@ jobs:
           python -m pip install 'jsonschema[format]>=4.23,<5.0'
           python scripts/verify_runtime_record_fixtures.py
           python scripts/smoke_runtime_records_v2.py
+          python scripts/verify_worker_experiment_fixture.py
 
       - name: Test Karte Renderer dependency
         run: go test github.com/kirimine170/KarteRenderer/...
