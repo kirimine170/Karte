@@ -3,7 +3,7 @@ import { useUIStore, useDocStore, useASRStore, useOverlayStore, useCustomCssStor
 import type { WailsAppAPI } from '../types/wails-api';
 import { eventLogger } from '../utils/event-logger';
 import { applyCustomCssToHtml } from '../utils/custom-css';
-import { prepareMarkdownForPreview } from '../utils/preview-content';
+import { renderMarkdownPreview } from '../utils/preview-renderer';
 import { writePreviewFrame } from '../utils/preview-frame';
 import { convertTimestampsToLinks, updateAudioPlayerFromContent } from '../utils/preview-audio';
 import { GlobalWorkerOptions, getDocument, type PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs';
@@ -509,13 +509,13 @@ export class EditorLayout extends BaseComponent {
     }
 
     private async updatePreview(content: string): Promise<void> {
-        const currentPath = useDocStore.getState().currentPath.toLowerCase();
-        if (currentPath.endsWith('.pdf') || currentPath.endsWith('.board.md')) {
+        const currentPath = useDocStore.getState().currentPath;
+        const normalizedPath = currentPath.toLowerCase();
+        if (normalizedPath.endsWith('.pdf') || normalizedPath.endsWith('.board.md')) {
             return;
         }
         try {
-            const prepared = await prepareMarkdownForPreview(content, this.api);
-            const html = await this.api.PreviewMarkdown(prepared);
+            const { prepared, html } = await renderMarkdownPreview(content, this.api, currentPath);
             const finalHtml = this.buildPreviewHtml(prepared, html);
             useDocStore.getState().setPreviewHtml(finalHtml);
             this.updatePreviewFrame(finalHtml);

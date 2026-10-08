@@ -100,6 +100,54 @@ describe('EditorLayout', () => {
         ]);
     });
 
+    it('keeps document-relative report images resolved after editing', async () => {
+        const currentPath = 'content/Reports/Quarterly.md';
+        const content = '# Updated results\n\n![Analysis state](assets/state.png)';
+        const resolvedImage = '/image/content/Reports/assets/state.png';
+        const api = {
+            ...mockApi,
+            PreviewMarkdownForPath: vi.fn().mockResolvedValue(`<img src="${resolvedImage}" alt="Analysis state">`),
+        };
+        useDocStore.setState({ currentPath });
+        const editorLayout = new EditorLayout(api);
+        editorLayout.init();
+
+        try {
+            const editor = document.getElementById('editor') as HTMLTextAreaElement;
+            editor.value = content;
+            editor.dispatchEvent(new Event('input', { bubbles: true }));
+
+            await vi.waitFor(() => {
+                expect(api.PreviewMarkdownForPath).toHaveBeenCalledWith(currentPath, content);
+                expect(useDocStore.getState().previewHtml).toContain(`src="${resolvedImage}"`);
+            });
+            expect(mockApi.PreviewMarkdown).not.toHaveBeenCalled();
+            expect(useDocStore.getState().markdownContent).toBe(content);
+            expect(useDocStore.getState().hasUnsavedChanges).toBe(true);
+        } finally {
+            editorLayout.destroy();
+        }
+    });
+
+    it.each(['content/Reports/Quarterly.md', ''])('previews edits with the legacy API for path %j', async (currentPath) => {
+        useDocStore.setState({ currentPath });
+        const editorLayout = new EditorLayout(mockApi);
+        editorLayout.init();
+
+        try {
+            const editor = document.getElementById('editor') as HTMLTextAreaElement;
+            editor.value = '# Updated report';
+            editor.dispatchEvent(new Event('input', { bubbles: true }));
+
+            await vi.waitFor(() => {
+                expect(mockApi.PreviewMarkdown).toHaveBeenCalledWith('# Updated report');
+                expect(useDocStore.getState().previewHtml).toContain('<p>Preview</p>');
+            });
+        } finally {
+            editorLayout.destroy();
+        }
+    });
+
     it('should log recording start/stop events', async () => {
         const editorLayout = new EditorLayout(mockApi);
         editorLayout.init();
