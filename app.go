@@ -3624,7 +3624,7 @@ func (a *App) build(root string) error {
 		if readErr != nil {
 			return readErr
 		}
-		if canonical.IsRecordPath(filepath.Join("content", p), raw, managed) {
+		if canonical.IsRecordPath(filepath.Join("content", p), raw, managed) || canonical.IsWorklogPath(filepath.Join("content", p), raw) {
 			return nil
 		}
 		dst := filepath.Join(tmp, p[:len(p)-3]+".html")

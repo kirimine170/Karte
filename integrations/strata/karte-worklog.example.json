@@ -1,0 +1,8 @@
+{
+  "mcp_servers": {
+    "karte_worklog": {
+      "command": "C:/path/to/Karte/build/bin/karte-worklog.exe",
+      "args": ["--root", "C:/path/to/ephy-worklog-data", "serve"]
+    }
+  }
+}

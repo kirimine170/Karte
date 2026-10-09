@@ -85,7 +85,7 @@ func (v *VCS) ensureGitignore() error {
 			return err
 		}
 		text := string(data)
-		rules := []string{"content/**/ephy-v2-*.md", ".mdsys/ephy/outbox/v2/", ".mdsys/ephy/records/v2/", ".mdsys/context/v2/", ".mdsys/write.lock"}
+		rules := []string{"content/**/ephy-v2-*.md", "content/**/worklog-*.md", ".mdsys/worklog/", ".mdsys/ephy/outbox/v2/", ".mdsys/ephy/records/v2/", ".mdsys/context/v2/", ".mdsys/write.lock"}
 		lines := map[string]bool{}
 		for _, line := range strings.Split(text, "\n") {
 			lines[line] = true
@@ -324,17 +324,17 @@ func (v *VCS) CheckAutomaticCommit(relativePath string) error {
 			if strings.HasPrefix(slash, ".mdsys/ephy/records/v2/") || strings.HasPrefix(slash, ".mdsys/ephy/outbox/v2/") || strings.HasPrefix(slash, ".mdsys/context/v2/") {
 				return true
 			}
-			if canonical.IsRecordPath(path, nil, paths) {
+			if canonical.IsRecordPath(path, nil, paths) || canonical.IsWorklogPath(path, nil) {
 				return true
 			}
 			if !strings.EqualFold(filepath.Ext(path), ".md") {
 				return false
 			}
 			data, _ := w.ReadLimit(path, 1<<20)
-			return canonical.IsRecordPath(path, data, paths)
+			return canonical.IsRecordPath(path, data, paths) || canonical.IsWorklogPath(path, data)
 		}
 		if protected(relativePath) {
-			return fmt.Errorf("v2 storage-only record cannot be committed automatically")
+			return fmt.Errorf("private runtime record cannot be committed automatically")
 		}
 		status, err := worktree.Status()
 		if err != nil {
@@ -342,7 +342,7 @@ func (v *VCS) CheckAutomaticCommit(relativePath string) error {
 		}
 		for path, state := range status {
 			if state.Staging != git.Unmodified && state.Staging != git.Untracked && protected(path) {
-				return fmt.Errorf("staged v2 storage-only data blocks automatic commit")
+				return fmt.Errorf("staged private runtime data blocks automatic commit")
 			}
 		}
 		return nil

@@ -96,3 +96,13 @@ jobs:
 
       - name: Run backend tests
         run: go test $(go list ./cmd/... ./internal/... | grep -v internal/asr | grep -v internal/audio)
+
+      - name: Set up Node for Pi worklog adapter
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Test Pi worklog adapter with real Karte CLI
+        run: |
+          go build -o build/bin/karte-worklog ./cmd/karte-worklog
+          KARTE_TEST_BIN="$PWD/build/bin/karte-worklog" node --test integrations/pi/worklog.test.mjs

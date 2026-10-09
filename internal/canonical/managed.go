@@ -36,3 +36,11 @@ func ManagedPaths(w *Writer) (map[string]bool, error) {
 func IsRecordPath(path string, raw []byte, paths map[string]bool) bool {
 	return paths[filepath.ToSlash(path)] || strings.HasPrefix(filepath.Base(path), "ephy-v2-") || bytes.Contains(raw, []byte("runtime_record:")) || bytes.Contains(raw, []byte("karte-v2:item"))
 }
+
+// Worklogs stay readable by the local editor and context search, but automatic
+// Git commits and site exports must not publish them.
+func IsWorklogPath(path string, raw []byte) bool {
+	slash := filepath.ToSlash(path)
+	base := filepath.Base(path)
+	return strings.HasPrefix(slash, ".mdsys/worklog/") || strings.HasPrefix(base, "worklog-") || bytes.Contains(raw, []byte("worklog_record:"))
+}

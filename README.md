@@ -225,6 +225,10 @@ Karte v1.0.0の公開可否は，[v1.0 release criteria](RELEASE_CRITERIA_V1.md)
 - 機能の追加: `app.go`にWailsバインディングメソッドを追加
 - UIの変更: `frontend/index.html`と`frontend/src/main.ts`を編集
 
+## Ephyの作業記録・日報
+
+`cmd/karte-worklog`に，作業単位の追記記録，日報生成，検索・読取，書込用MCPを用意しています．Piの実行イベントを自動記録する拡張と，StrataのMCP設定例は`integrations/`にあります．保存先と記録権限を明示して使用してください．導入方法・出所の扱い・再送と復旧は[作業記録と日報 v1](architecture/KARTE_WORKLOG_V1.md)を参照してください．
+
 ## ライセンス
 
 Copyright © 2024, kirimine170

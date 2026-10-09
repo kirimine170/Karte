@@ -140,3 +140,28 @@ func TestAutomaticCommitRejectsV2StorageOnlyFilesAndPreservesStaging(t *testing.
 		t.Fatal("removed user staging")
 	}
 }
+
+func TestAutomaticCommitRejectsWorklogDataAndStagedView(t *testing.T) {
+	vcs, root, relative, _ := newConflictTestRepository(t, "original\n")
+	for _, path := range []string{".mdsys/worklog/v1/config.json", "content/worklog-task.md", "content/renamed-task.md"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, path)), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, path), []byte("---\nworklog_record: true\n---\nprivate failure\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := vcs.CheckAutomaticCommit(path); err == nil {
+			t.Fatalf("automatic publication allowed: %s", path)
+		}
+	}
+	worktree, err := vcs.Repository().Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := worktree.Add("content/renamed-task.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := vcs.CheckAutomaticCommit(relative); err == nil {
+		t.Fatal("staged worklog swept into ordinary commit")
+	}
+}
