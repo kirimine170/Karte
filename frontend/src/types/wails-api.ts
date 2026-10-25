@@ -201,6 +201,8 @@ export interface EphyReceipt {
 
 // Wails App API
 export interface WailsAppAPI {
+    SaveInstagramDraft?(draftJSON: string): Promise<string>;
+    SaveInstagramImage?(filename: string, jpegBase64: string): Promise<string>;
     GetFileList(): Promise<FileItem[]>;
     LoadFile(path: string): Promise<string>;
     LoadBoard(path: string): Promise<BoardDocument>;

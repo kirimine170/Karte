@@ -1,6 +1,7 @@
 import { BaseComponent } from './component-base';
 import { useUIStore } from '../stores/index';
 import { eventLogger } from '../utils/event-logger';
+import type { ActiveTab } from '../types/ui-state';
 
 export class MainTabs extends BaseComponent {
     private unsubscribe: (() => void)[] = [];
@@ -41,7 +42,7 @@ export class MainTabs extends BaseComponent {
                 this.unsubscribe.push(
                     this.addEventListener(button, 'click', () => {
                         eventLogger.log('MainTabs', 'tab-switch', { tab: tabName });
-                        uiStore.setActiveTab(tabName as 'editor' | 'graph' | 'board');
+                        uiStore.setActiveTab(tabName as ActiveTab);
                     })
                 );
             }
@@ -62,7 +63,9 @@ export class MainTabs extends BaseComponent {
         this.switchTab(uiStore.activeTab);
     }
 
-    private switchTab(activeTab: 'editor' | 'graph' | 'board'): void {
+    private switchTab(activeTab: ActiveTab): void {
+        document.getElementById('contentArea')?.classList.toggle('postlab-mode', activeTab === 'postlab');
+        document.getElementById('mainContainer')?.classList.toggle('postlab-mode', activeTab === 'postlab');
         // タブボタンの更新
         this.tabButtons.forEach((button) => {
             const tabName = button.dataset.tab;

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#7561a8">
+  <meta name="description" content="画像のトリミングとキャプションを，さまざまな画面幅で比較するローカル投稿シミュレータ．">
+  <title>Post lab — Instagram投稿シミュレータ</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='13' fill='%237561a8'/%3E%3Crect x='11' y='11' width='26' height='26' rx='8' fill='none' stroke='white' stroke-width='2.5'/%3E%3Ccircle cx='24' cy='24' r='7' fill='none' stroke='white' stroke-width='2.5'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="../postlab-renderer/preview.css">
+</head>
+<body>
+
+
+  <header class="app-header">
+    <a class="brand" href="./" aria-label="Post lab ホーム"><span class="brand-icon"><svg><use href="#i-camera"/></svg></span><span>Post lab<span class="brand-dot">.</span></span></a>
+    <span class="header-divider"></span><span class="app-description">Instagram 投稿シミュレータ</span>
+    <div class="header-actions"><span class="local-badge"><span></span> KARTE POST LAB</span><button id="import-button" class="button subtle">下書きを開く</button><button id="save-draft" class="button"><svg><use href="#i-download"/></svg>下書きJSON</button></div>
+  </header>
+
+  <div class="app-layout">
+    <aside class="editor" aria-label="投稿エディタ">
+      <div class="editor-heading"><div><span class="eyebrow">COMPOSE</span><h1>投稿をつくる</h1></div><button id="reset-button" class="text-button">サンプルに戻す</button></div>
+      <div class="editor-scroll">
+        <div class="field"><label for="mode">投稿経路<span class="label-note">暫定ルール</span></label><select id="mode"><option value="app">Instagram アプリ</option><option value="api">外部連携 API</option></select></div>
+        <details class="account-details"><summary><span class="avatar small">k</span><span id="account-summary">karte_studio</span><span class="muted">アカウント設定</span></summary><div class="account-fields"><label for="username">ユーザーネーム</label><input id="username" maxlength="30" autocomplete="off" spellcheck="false"><label for="location">場所</label><input id="location" maxlength="100" autocomplete="off"></div></details>
+
+        <section class="editor-section">
+          <div class="section-label"><h2><span class="step">01</span>画像</h2><span id="image-count" class="muted">1 / 20</span></div>
+          <button id="drop-zone" class="drop-zone"><span class="upload-icon"><svg><use href="#i-upload"/></svg></span><strong>画像をドロップ，または選択</strong><span>JPEG · PNG · WebP ／ 複数選択できます</span></button>
+          <input id="file-input" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden>
+          <div id="image-list" class="image-list" aria-label="投稿画像"></div>
+          <div id="image-details" class="image-details"></div>
+          <div class="image-actions"><button id="move-left" class="text-button" aria-label="選択画像を前へ移動">← 前へ</button><button id="move-right" class="text-button" aria-label="選択画像を後ろへ移動">次へ →</button><button id="remove-image" class="text-button danger">削除</button></div>
+          <label class="small-label" for="aspect">投稿の比率</label>
+          <select id="aspect"><option value="auto">元画像に合わせる</option><option value="0.75">3:4　縦長</option><option value="0.8">4:5　縦長</option><option value="1">1:1　正方形</option><option value="1.91">1.91:1　横長</option></select>
+          <p class="helper" id="aspect-note">すべての画像に同じ投稿比率を適用します．</p>
+          <button id="open-crop" class="button full-width"><svg><use href="#i-crop"/></svg>トリミングを調整<span class="button-arrow">↗</span></button>
+        </section>
+
+        <section class="editor-section caption-section">
+          <div class="section-label"><h2><span class="step">02</span><label for="caption">キャプション</label></h2><span id="char-count" class="mono">0 / 2,200</span></div>
+          <textarea id="caption" rows="7" spellcheck="false" placeholder="投稿のキャプションを入力…"></textarea>
+          <div class="caption-meta"><span id="hashtag-count"># 0</span><span id="mention-count">@ 0</span><span id="grapheme-count">見た目 0文字</span></div>
+          <div class="meter"><span id="caption-meter"></span></div>
+        </section>
+
+        <section class="validation-section" aria-label="投稿チェック"><div class="section-label"><h2><span class="step">03</span>投稿チェック</h2><span id="validation-status" class="check-label"></span></div><ul id="validation-list"></ul><button id="open-guide" class="text-button">制約と再現範囲について ↗</button></section>
+      </div>
+      <div class="editor-footer"><span class="saved-dot"></span><span id="save-status">設定はこのブラウザに保存されます</span></div>
+    </aside>
+
+    <main class="workspace">
+      <div class="workspace-top"><div><span class="eyebrow">PREVIEW WORKSPACE</span><h2>投稿前に，見え方を確かめる<span class="purple-dot">．</span></h2><p>画面幅と文字サイズを変えて，同じ投稿を並べて比較．</p></div><button id="export-image" class="button primary"><svg><use href="#i-download"/></svg>選択画像をJPEG保存</button></div>
+      <div class="view-toolbar"><nav class="view-tabs" aria-label="プレビュー表示"><button class="view-tab active" data-view="feed" aria-pressed="true"><svg><use href="#i-phone"/></svg>フィード</button><button class="view-tab" data-view="grid" aria-pressed="false"><svg><use href="#i-grid"/></svg>プロフィール</button><button class="view-tab" data-view="crop" aria-pressed="false"><svg><use href="#i-crop"/></svg>トリミング</button><button class="view-tab" data-view="guide" aria-pressed="false"><svg><use href="#i-info"/></svg>仕様と制約</button></nav><details class="preview-settings"><summary><svg><use href="#i-sliders"/></svg>表示条件</summary><div class="settings-popover"><label for="text-scale">文字サイズ <output id="text-scale-value">100%</output></label><input id="text-scale" type="range" min="85" max="150" step="5" value="100"><label for="collapsed-lines">キャプションの初期表示</label><select id="collapsed-lines"><option value="1">1行で省略</option><option value="2" selected>2行で省略</option><option value="3">3行で省略</option></select><label for="grid-ratio">プロフィールの枠</label><select id="grid-ratio"><option value="0.75">3:4（縦長の想定）</option><option value="1">1:1（正方形の想定）</option></select><p class="helper">省略行数・文字サイズ・一覧の比率はシミュレーション条件です．実機固有の設定を取得するものではありません．</p></div></details></div>
+
+      <section id="comparison-view" class="comparison-view">
+        <div class="comparison-controls"><div id="device-choices" class="device-choices"></div><label class="zoom-control" for="preview-zoom">表示倍率<select id="preview-zoom"><option value="0.6">60%</option><option value="0.72" selected>72%</option><option value="0.85">85%</option><option value="1">100%</option></select></label></div>
+        <div id="custom-settings" class="custom-settings" hidden><label for="custom-width">幅 <input id="custom-width" type="number" min="280" max="800" value="360"> px</label><label for="custom-height">高さ <input id="custom-height" type="number" min="480" max="1200" value="780"> px</label><span>端末の論理画面サイズ（CSS px）</span></div>
+        <div class="comparison-context"><span class="live-dot"></span><span id="comparison-label">FEED PREVIEW</span><span id="ratio-summary"></span><span class="comparison-hint">端末内をスクロールできます</span></div>
+        <div id="device-stage" class="device-stage"></div>
+        <div class="workspace-note"><svg><use href="#i-info"/></svg><p>端末名は画面条件のプリセットです．OSのフォントやアプリのバージョンによる差は実機でも確認してください．<br>画像は同じ比率のまま表示されます．端末ごとに変わるのは表示サイズと画面に収まる範囲です．</p></div>
+      </section>
+
+      <section id="crop-view" class="crop-view" hidden>
+        <div class="panel-intro"><h3>切り取る範囲を決める</h3><p>画像をドラッグ，またはスライダーで調整．枠の中が保存される範囲です．</p></div>
+        <div class="crop-layout"><div class="crop-preview-area"><div id="crop-frame" class="crop-frame" tabindex="0" role="group" aria-label="トリミング画像．矢印キーで位置を調整できます"><canvas id="crop-canvas" role="img" aria-label="トリミング後の画像"></canvas><div class="crop-grid"><i></i><i></i><i></i><i></i></div><span class="crop-frame-label">POST CROP</span></div><div id="crop-metrics" class="crop-metrics"></div></div><div class="crop-sidebar"><h4>画像の位置</h4><label for="crop-x">左右 <output id="crop-x-value">50%</output></label><input id="crop-x" type="range" min="0" max="100" value="50"><label for="crop-y">上下 <output id="crop-y-value">50%</output></label><input id="crop-y" type="range" min="0" max="100" value="50"><label for="crop-zoom">拡大率 <output id="crop-zoom-value">1.00×</output></label><input id="crop-zoom" type="range" min="100" max="300" step="1" value="100"><button id="reset-crop" class="button full-width">中央にリセット</button><div class="crop-grid-preview"><span class="eyebrow">PROFILE CROP</span><canvas id="grid-crop-canvas" role="img" aria-label="プロフィールでの追加トリミング"></canvas><p class="helper">投稿の切り出し後に，一覧の枠へ中央で再トリミングします．一覧だけの位置調整は未対応です．</p></div></div></div>
+      </section>
+
+      <section id="guide-view" class="guide-view" hidden>
+        <div class="panel-intro"><span class="eyebrow">REFERENCE & ASSUMPTIONS</span><h3>制約と，シミュレーションの前提</h3><p>画像のフィード投稿・カルーセルを対象にしています．Stories・Reels・広告は対象外です．</p></div>
+        <div class="reference-notice"><svg><use href="#i-info"/></svg><p><strong>以下は暫定ルールセットです．</strong><br>2026年10月25日に公式資料へのアクセスを試みましたが，制限により本文の最新値を確認できませんでした．投稿可能であることを保証する判定ではありません．アカウント・投稿経路ごとの実際の制約を確認してください．</p></div>
+        <div class="table-wrap"><table><thead><tr><th>確認項目</th><th>Instagram アプリの想定</th><th>外部連携 API の想定</th></tr></thead><tbody><tr><th>投稿画像の比率</th><td>3:4 〜 1.91:1</td><td>4:5 〜 1.91:1</td></tr><tr><th>カルーセル</th><td>最大20枚</td><td>最大10枚</td></tr><tr><th>キャプション</th><td>2,200文字を目安に表示</td><td>2,200文字</td></tr><tr><th>元画像の形式・容量</th><td>端末の対応による</td><td>JPEG・8MiBを想定して注意表示</td></tr><tr><th>出力画像</th><td colspan="2">幅1080pxのJPEG ／ 設定した投稿比率で保存</td></tr><tr><th>ハッシュタグ</th><td colspan="2">5個超で要確認の注意表示 ／ 最新の上限は未検証</td></tr></tbody></table></div>
+        <div class="guide-cards"><article><h4>文字数よりも，実際の折り返し</h4><p>キャプションは各プレビューの論理幅で組版します．初期表示行数は1〜3行で変更でき，省略位置を計測します．固定の「125文字で省略」というルールは使用しません．「続きを読む」は端末ごとに開閉できます．</p><p>文字数は改行をLFに統一したUnicodeコードポイント数です．絵文字の結合による見た目の文字数も併記します．Meta側の厳密なカウント方法との一致は未検証です．</p></article><article><h4>端末差として再現するもの</h4><p>画面幅，高さ，文字サイズ，キャプションの折り返し，初期画面の表示範囲を比較します．表示倍率は比較用の縮尺で，折り返し計算を変えません．AndroidではRobotoがローカルにあれば優先します．</p><p>実際のOSフォント・フォント描画，色管理，HDR，Instagramの再圧縮，アカウント別UI，APIの受理結果は再現しません．</p></article><article><h4>トリミングの計算</h4><p>全画像に共通の投稿比率を適用します．元画像に合わせる場合は先頭画像で比率を決め，選択経路の範囲内に収めます．投稿の切り出しとプロフィール一覧の切り出しを順に計算します．</p><p>プロフィール枠は3:4または1:1の想定です．カルーセルは単一キャプション・共通比率のモデルで，混在比率や画像ごとのキャプションには対応していません．</p></article><article><h4>ローカルで扱う下書き</h4><p>画像の編集と変換はブラウザ内で行います．画像を外部サーバーへ送信しません．テキストと設定はこのブラウザに自動保存され，画像は再読み込み後に追加し直します．</p><p>下書きJSONは設定・元ファイル名・切り出し座標を含みます．画像本体は含みません．元画像を再選択するとファイル名が一致する画像の位置を復元します．同名ファイルは順番で照合します．</p></article></div>
+        <div class="sources"><h4>参照先</h4><a href="https://help.instagram.com/1631821640426723" target="_blank" rel="noreferrer">Instagram Help · 写真の解像度 ↗</a><a href="https://help.instagram.com/269314186824048" target="_blank" rel="noreferrer">Instagram Help · 複数の写真や動画の投稿 ↗</a><a href="https://developers.facebook.com/docs/instagram-platform/content-publishing/" target="_blank" rel="noreferrer">Meta for Developers · Content Publishing ↗</a><a href="https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media/" target="_blank" rel="noreferrer">Meta for Developers · IG User Media ↗</a><p class="helper">上記は仕様を再確認するための公式参照先です．この試作品の値を最新の公式確認済み仕様として扱わないでください．</p></div>
+      </section>
+      <footer class="workspace-footer"><span><strong>Post lab</strong> / A little confidence before you post.</span><span>MADE FOR KARTE <span class="footer-mark">✳</span></span></footer>
+    </main>
+  </div>
+  <input id="draft-input" type="file" accept="application/json,.json" hidden>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

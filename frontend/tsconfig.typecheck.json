@@ -1,6 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "include": [
+    "src/components/post-lab.ts",
     "src/logic.ts",
     "src/__tests__/logic.test.ts",
     "src/api/wails-api.ts",
