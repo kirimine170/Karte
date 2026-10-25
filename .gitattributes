@@ -3,3 +3,6 @@ schemas/**/*.json text eol=lf
 
 # Synthetic Worker manifest hashes bind exact fixture bytes on every OS.
 testdata/worker-experiment-v1/** text eol=lf
+
+# Generated assets must match the pinned renderer module byte for byte．
+frontend/public/postlab-renderer/** text eol=lf

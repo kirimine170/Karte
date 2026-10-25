@@ -78,6 +78,8 @@ github.com/kirimine170/Karte_renderer v0.0.0-20260812100243-30e5dfbab03f h1:cDh8
 github.com/kirimine170/Karte_renderer v0.0.0-20260812100243-30e5dfbab03f/go.mod h1:aLBQ8kzhmrunl2svgagHhIWuVK1uzF4Wr5rzNchS4uQ=
 github.com/kirimine170/Karte_renderer v0.0.0-20261025114855-5ae5475d4055 h1://QDw6jOMrNM8c5TIiXHFtAZYV+KJp72itzADjOdd2I=
 github.com/kirimine170/Karte_renderer v0.0.0-20261025114855-5ae5475d4055/go.mod h1:+ntAwaP5i7q/WlS7qNrRWOmZSkiNZeQ6ZniR183SH/I=
+github.com/kirimine170/Karte_renderer v0.0.0-20261025131001-6b3f4ae6e8d9 h1:4tQRU8oTcUOGxWWkHY9hDvBww6nlqzwfvShDWdiwm8Q=
+github.com/kirimine170/Karte_renderer v0.0.0-20261025131001-6b3f4ae6e8d9/go.mod h1:+ntAwaP5i7q/WlS7qNrRWOmZSkiNZeQ6ZniR183SH/I=
 github.com/klauspost/cpuid/v2 v2.3.0 h1:S4CRMLnYUhGeDFDqkGriYKdfoFlDnMtqTiI/sFzhA9Y=
 github.com/klauspost/cpuid/v2 v2.3.0/go.mod h1:hqwkgyIinND0mEev00jJYCxPNVRVXFQeu1XKlok6oO0=
 github.com/kr/pretty v0.1.0/go.mod h1:dAy3ld7l9f0ibDNOQOHHMYYIIbhfbHSm3C4ZsoJORNo=
