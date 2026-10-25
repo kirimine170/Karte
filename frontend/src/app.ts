@@ -10,6 +10,7 @@ import { OverlayHost } from './components/overlay-host';
 import { ImageGallery } from './components/image-gallery';
 import { CsvGallery } from './components/csv-gallery';
 import { EphyReview } from './components/ephy-review';
+import { PostLab } from './components/post-lab';
 import { getWailsAppAPI, getWailsRuntimeAPI } from './api/wails-api';
 import { useUIStore, useDocStore, useASRStore, useExportStore, useModalStore, useCustomCssStore, useBoardStore } from './stores/index';
 import { getASRStatusPollingDecision, markASRInitializationStopped } from './utils/asr-status';
@@ -35,6 +36,7 @@ export class App {
         imageGallery: ImageGallery | null;
         csvGallery: CsvGallery | null;
         ephyReview: EphyReview | null;
+        postLab: PostLab | null;
     } = {
             topbar: null,
             sidebar: null,
@@ -47,6 +49,7 @@ export class App {
             imageGallery: null,
             csvGallery: null,
             ephyReview: null,
+            postLab: null,
         };
 
     async init(): Promise<void> {
@@ -129,6 +132,9 @@ export class App {
 
         this.components.ephyReview = new EphyReview(this.api);
         this.components.ephyReview.init();
+
+        this.components.postLab = new PostLab(this.api);
+        this.components.postLab.init();
 
         await this.loadCustomCss();
 

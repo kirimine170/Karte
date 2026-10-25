@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1350" viewBox="0 0 1080 1350">
+<defs>
+  <linearGradient id="bg" x2=".8" y2="1"><stop stop-color="#e8e5d8"/><stop offset="1" stop-color="#d4d7bf"/></linearGradient>
+  <linearGradient id="vase" x2="1" y2=".3"><stop stop-color="#8f9b78"/><stop offset=".5" stop-color="#bac2a6"/><stop offset="1" stop-color="#748567"/></linearGradient>
+  <linearGradient id="light" x2="1" y2="1"><stop stop-color="#faf6e8" stop-opacity=".85"/><stop offset="1" stop-color="#faf6e8" stop-opacity="0"/></linearGradient>
+  <filter id="shadow"><feGaussianBlur stdDeviation="16"/></filter>
+</defs>
+<rect width="1080" height="1350" fill="url(#bg)"/>
+<path d="M-100 0H470L1050 1350H480Z" fill="url(#light)"/>
+<path d="M820 0H865L1080 500V620Z" fill="#fff" opacity=".25"/>
+<text x="70" y="96" fill="#4c5848" font-family="Arial,sans-serif" font-size="25" letter-spacing="6">KARTE STUDIO</text>
+<text x="1010" y="96" fill="#4c5848" text-anchor="end" font-family="Arial,sans-serif" font-size="23">FIELD NOTES / 01</text>
+<text x="76" y="265" fill="#344636" font-family="Georgia,serif" font-size="122" letter-spacing="-5">A little slower.</text>
+<text x="82" y="332" fill="#4c5848" font-family="sans-serif" font-size="30" letter-spacing="5">小さな発見を，日々のなかに．</text>
+<ellipse cx="625" cy="1120" rx="238" ry="34" fill="#53614b" opacity=".18" filter="url(#shadow)"/>
+<path d="M480 850 Q462 830 473 805H700Q710 835 694 851L736 1090Q730 1148 588 1152Q445 1148 445 1090Z" fill="url(#vase)"/>
+<ellipse cx="587" cy="811" rx="114" ry="18" fill="#5f7056"/><ellipse cx="587" cy="809" rx="93" ry="9" fill="#354d38"/>
+<g fill="none" stroke="#566c44" stroke-width="7" stroke-linecap="round"><path d="M585 847Q545 600 387 452"/><path d="M610 829Q657 590 763 417"/><path d="M575 831Q543 581 586 450"/><path d="M620 811Q725 667 844 641"/></g>
+<g fill="#718660"><ellipse cx="424" cy="517" rx="38" ry="85" transform="rotate(-51 424 517)"/><ellipse cx="504" cy="594" rx="35" ry="78" transform="rotate(27 504 594)"/><ellipse cx="399" cy="453" rx="30" ry="68" transform="rotate(-38 399 453)"/><ellipse cx="537" cy="700" rx="38" ry="82" transform="rotate(-55 537 700)"/><ellipse cx="731" cy="483" rx="40" ry="85" transform="rotate(31 731 483)"/><ellipse cx="683" cy="590" rx="35" ry="79" transform="rotate(-30 683 590)"/><ellipse cx="764" cy="418" rx="28" ry="65" transform="rotate(31 764 418)"/><ellipse cx="582" cy="504" rx="29" ry="68" transform="rotate(14 582 504)"/><ellipse cx="567" cy="614" rx="32" ry="73" transform="rotate(-22 567 614)"/><ellipse cx="773" cy="663" rx="30" ry="70" transform="rotate(58 773 663)"/><ellipse cx="840" cy="642" rx="25" ry="57" transform="rotate(66 840 642)"/></g>
+<g fill="#82966e"><ellipse cx="458" cy="560" rx="25" ry="59" transform="rotate(-51 458 560)"/><ellipse cx="704" cy="544" rx="24" ry="58" transform="rotate(31 704 544)"/><ellipse cx="720" cy="701" rx="24" ry="54" transform="rotate(50 720 701)"/></g>
+<path d="M76 1220H1004" stroke="#7f8a71" stroke-width="1"/>
+<text x="78" y="1274" fill="#52614e" font-family="Arial,sans-serif" font-size="25" letter-spacing="3">MAKE ROOM FOR THE EVERYDAY.</text>
+<text x="1003" y="1274" fill="#52614e" font-family="Arial,sans-serif" text-anchor="end" font-size="24">2026</text>
+</svg>
