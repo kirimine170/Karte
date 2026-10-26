@@ -1672,3 +1672,15 @@ main {
 .reference-guide { border:1px solid #e1d7ef; background:#f8f5fc; padding:15px; border-radius:6px; margin:20px 0; }
 .reference-guide b { font-size:12px; color:#7862a6; }
 .reference-guide p { font-size:11px; line-height:1.9; margin-top:8px; color:#8b8495; }
+/* PDF cards use their width for content, with a full-page option． */
+.card.card-pdf .card-header { height:29px; padding:7px 10px 3px; }
+.card.card-pdf h3 { height:24px; line-height:24px; margin:2px 10px 8px; font-size:15px; white-space:nowrap; text-overflow:ellipsis; overflow:hidden; }
+.card.card-pdf .pdf-paper { margin:0 8px; height:calc(100% - 99px); background:#fff; border-color:#e5deee; }
+.card.card-pdf.pdf-has-references .pdf-paper { height:calc(100% - 146px); }
+.card.card-pdf .pdf-thumb { position:absolute; object-fit:fill; max-width:none; }
+.card.card-pdf .card-footer { height:28px; padding:7px 10px; }
+.card.card-pdf .reference-chips { left:9px; right:9px; bottom:34px; max-height:42px; }
+.card.card-pdf .reference-chip { white-space:normal; font-size:11px; line-height:1.5; padding:4px 6px; margin:0; }
+.pdf-preview-toggle { color:#7862a6; background:#eee9f5; border:1px solid #e1d7ef; border-radius:4px; padding:3px 6px; font-size:9px; letter-spacing:0; line-height:1; }
+.pdf-preview-toggle:hover { background:#e4d8f5; }
+.card.card-pdf .paper-fallback { padding:18px 10px; font-family:inherit; font-size:11px; color:#a49cae; }

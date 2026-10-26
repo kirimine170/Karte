@@ -1,4 +1,4 @@
-import { RELATIONS, KINDS, clamp, classifyFile, connectionPoints, fitViewport, validateBoard, makeEdge, markdownHTML, textQuote, resolveTextQuote } from './model.mjs';
+import { RELATIONS, KINDS, clamp, classifyFile, connectionPoints, fitViewport, validateBoard, makeEdge, markdownHTML, textQuote, resolveTextQuote, pdfPreviewLayout, projectPdfRect } from './model.mjs';
 import { createSample } from './sample.mjs';
 
 const $ = (q, root = document) => root.querySelector(q);
@@ -79,10 +79,14 @@ function paintTextRoot(root,refs,activeKey) {
 function paintPdfThumbnail(c) {
   const paper=cardLayer.querySelector(`[data-id="${CSS.escape(c.id)}"] .pdf-paper`);if(!paper)return;
   $('.highlight-layer',paper)?.remove();const page=Number(paper.dataset.page),size=thumbnailSizes.get(`${c.id}:${page}`);if(!size)return;
-  const w=paper.clientWidth,h=paper.clientHeight,scale=Math.min(w/size.w,h/size.h),pw=size.w*scale,ph=size.h*scale;
+  const refs=cardReferences(c).filter(r=>r.anchor.page===page),active=refs.find(r=>selected?.type==='edge'&&selected.id===r.edge.id)||refs[0];
+  const anchor=linkFrom===c.id&&linkAnchor?.page===page?linkAnchor:active?.anchor;
+  const focus=anchor?{x:(Math.min(...anchor.rects.map(r=>r.x))+Math.max(...anchor.rects.map(r=>r.x+r.w)))/2,y:(Math.min(...anchor.rects.map(r=>r.y))+Math.max(...anchor.rects.map(r=>r.y+r.h)))/2}:undefined;
+  const w=paper.clientWidth,h=paper.clientHeight,layout=pdfPreviewLayout(w,h,size.w,size.h,c.pdfPreview||'detail',focus),img=$('.pdf-thumb',paper);
+  if(img)img.style.cssText=`left:${layout.x}px;top:${layout.y}px;width:${layout.w}px;height:${layout.h}px;`;
   const layer=document.createElement('div');layer.className='highlight-layer';layer.setAttribute('aria-hidden','true');
-  for(const r of cardReferences(c).filter(r=>r.anchor.page===page))for(const rect of r.anchor.rects)addRectHighlight(layer,{x:((w-pw)/2+rect.x*pw)/w,y:((h-ph)/2+rect.y*ph)/h,w:rect.w*pw/w,h:rect.h*ph/h},r.key);
-  if(linkFrom===c.id&&linkAnchor?.page===page)for(const rect of linkAnchor.rects)addRectHighlight(layer,{x:((w-pw)/2+rect.x*pw)/w,y:((h-ph)/2+rect.y*ph)/h,w:rect.w*pw/w,h:rect.h*ph/h},'pending','focused-reference');
+  for(const r of refs)for(const rect of r.anchor.rects){const projected=projectPdfRect(rect,layout,w,h);if(projected)addRectHighlight(layer,projected,r.key);}
+  if(linkFrom===c.id&&linkAnchor?.page===page)for(const rect of linkAnchor.rects){const projected=projectPdfRect(rect,layout,w,h);if(projected)addRectHighlight(layer,projected,'pending','focused-reference');}
   paper.append(layer);
 }
 function paintBoardHighlights() {
@@ -161,14 +165,14 @@ function referenceChips(c) {
 function waveform(count = 43) { return Array.from({length:count}, (_,i) => `<i style="height:${8 + Math.abs(Math.sin(i * 2.7) * Math.cos(i * .37)) * 29}px"></i>`).join(''); }
 function cardContent(c) {
   if (c.kind === 'image') return `<div class="card-image ${c.id === 'plan' ? 'plan' : ''}"><img src="${esc(sourceURL(c))}" alt="${esc(c.title)}" draggable="false"></div><h3>${esc(c.title)}</h3><p class="card-description">${esc(c.body)}</p>`;
-  if (c.kind === 'pdf') {const page=displayPdfPage(c),thumb=thumbnails.get(`${c.id}:${page}`);return `<div class="pdf-paper" data-page="${page}">${thumb ? `<img class="pdf-thumb" src="${thumb}" alt="PDF ${page}ページのプレビュー">` : '<div class="paper-fallback"><small>FIELD RESEARCH / REPORT 03</small>Building<br>survey<i></i></div>'}<span class="page-stamp">${page} / ${c.pages || '…'}</span></div><h3>${esc(c.title)}</h3>${referenceChips(c)||`<p class="card-description">${esc(c.body)}</p>`}`;}
+  if (c.kind === 'pdf') {const page=displayPdfPage(c),thumb=thumbnails.get(`${c.id}:${page}`);return `<h3 title="${esc(c.filename||c.title)}">${esc(c.title)}</h3><div class="pdf-paper" data-page="${page}">${thumb ? `<img class="pdf-thumb" src="${thumb}" alt="PDF ${page}ページのプレビュー">` : '<div class="paper-fallback">PDFを読み込み中…</div>'}<span class="page-stamp">${page} / ${c.pages || '…'}</span></div>${referenceChips(c)}`;}
   if (c.kind === 'markdown') return `<div class="card-md-content" data-annotatable="body" data-source-card="${esc(c.id)}">${markdownHTML(c.body)}</div>${referenceChips(c)}`;
   if (c.kind === 'audio') return `<h3>${esc(c.title)}</h3><div class="audio-line"><button class="play-sample" data-action="play" data-id="${esc(c.id)}" aria-label="${esc(c.title)}を再生">▶</button><div class="waveform" aria-label="装飾用の波形">${waveform(33)}</div><small>${formatTime(c.duration || 0)}</small></div><p class="audio-caption">${esc(c.body.split('\n')[0])}</p>`;
   return `<h3>${esc(c.title)}</h3><p class="card-description" data-annotatable="body" data-source-card="${esc(c.id)}">${esc(c.body)}</p>${referenceChips(c)}`;
 }
 function renderCards() {
   const matches = board.cards.filter(matchesFilter), ids = new Set(matches.map(c => c.id));
-  cardLayer.innerHTML = board.cards.map((c,i) => `<article tabindex="0" role="button" aria-label="${esc(KINDS[c.kind] + '：' + c.title)}" aria-pressed="${selected?.type === 'card' && selected.id === c.id}" class="card card-${c.kind}${selected?.type === 'card' && selected.id === c.id ? ' selected' : ''}${linkFrom === c.id ? ' link-source' : ''}${!ids.has(c.id) ? ' dimmed' : ''}" data-id="${esc(c.id)}" style="left:${c.x}px;top:${c.y}px;width:${c.w}px;height:${c.h}px"><div class="card-header"><span class="card-kind"><b>${icons[c.kind]}</b> ${esc(c.kind === 'note' ? c.badge || 'THOUGHT' : KINDS[c.kind])}</span><span class="card-serial">${String(i+1).padStart(2,'0')}</span></div>${cardContent(c)}<div class="card-footer"><span>${esc(c.anchor || c.date || (c.kind === 'note' ? '自分の解釈 / 仮説' : c.filename || 'メモ'))}</span><span class="badge">${esc(c.badge || '資料')}</span></div></article>`).join('');
+  cardLayer.innerHTML = board.cards.map((c,i) => `<article tabindex="0" role="button" aria-label="${esc(KINDS[c.kind] + '：' + c.title)}" aria-pressed="${selected?.type === 'card' && selected.id === c.id}" class="card card-${c.kind}${c.kind==='pdf'&&cardReferences(c).length?' pdf-has-references':''}${selected?.type === 'card' && selected.id === c.id ? ' selected' : ''}${linkFrom === c.id ? ' link-source' : ''}${!ids.has(c.id) ? ' dimmed' : ''}" data-id="${esc(c.id)}" style="left:${c.x}px;top:${c.y}px;width:${c.w}px;height:${c.h}px"><div class="card-header"><span class="card-kind"><b>${icons[c.kind]}</b> ${esc(c.kind === 'note' ? c.badge || 'THOUGHT' : KINDS[c.kind])}</span>${c.kind==='pdf'?`<button class="pdf-preview-toggle" data-action="pdf-preview-mode" data-id="${esc(c.id)}" aria-label="${c.pdfPreview==='page'?'PDFの引用箇所を拡大表示':'PDFのページ全体を表示'}">${c.pdfPreview==='page'?'拡大 ↗':'全体 ↙'}</button>`:`<span class="card-serial">${String(i+1).padStart(2,'0')}</span>`}</div>${cardContent(c)}<div class="card-footer"><span>${esc(c.anchor || c.date || (c.kind === 'note' ? '自分の解釈 / 仮説' : c.filename || 'メモ'))}</span><span class="badge">${esc(c.badge || '資料')}</span></div></article>`).join('');
   board.cards.filter(c => c.kind === 'pdf').forEach(c => void ensureThumbnail(c));
   paintBoardHighlights();
 }
@@ -218,6 +222,7 @@ function select(type, id) {
   $$('.card',cardLayer).forEach(el => { const active=type==='card'&&el.dataset.id===id;el.classList.toggle('selected',active);el.setAttribute('aria-pressed',String(active)); });
   $$('.material-item').forEach(el=>el.classList.toggle('active',type==='card'&&el.dataset.material===id));
   if(type==='edge'&&board.cards.some(c=>c.kind==='pdf'&&Number(cardLayer.querySelector(`[data-id="${CSS.escape(c.id)}"] .pdf-paper`)?.dataset.page)!==displayPdfPage(c)))renderCards();
+  else board.cards.filter(c=>c.kind==='pdf').forEach(paintPdfThumbnail);
   renderEdges(); renderInspector();
 }
 function setTool(next) {
@@ -301,6 +306,7 @@ viewport.addEventListener('pointerup',endDrag);viewport.addEventListener('pointe
 window.addEventListener('pointerup',endDrag);
 viewport.addEventListener('wheel', event=>{event.preventDefault();const r=viewport.getBoundingClientRect();zoom(Math.exp(-event.deltaY*.0015),event.clientX-r.left,event.clientY-r.top);},{passive:false});
 viewport.addEventListener('click',event=>{
+  const preview=event.target.closest('[data-action=pdf-preview-mode]');if(preview){const c=board.cards.find(c=>c.id===preview.dataset.id);checkpoint();c.pdfPreview=c.pdfPreview==='page'?'detail':'page';renderCards();renderEdges();scheduleSave();return;}
   const ref=event.target.closest('[data-open-reference]');if(ref){openReference(ref.dataset.openReference);return;}
   const edge=event.target.closest('[data-edge]');if(edge) select('edge',edge.dataset.edge);
   const play=event.target.closest('[data-action=play]');if(play) playCard(play.dataset.id);
@@ -374,7 +380,7 @@ async function ensureThumbnail(c){
   if(thumbnails.has(key)||!sourceURL(c))return;
   thumbnails.set(key,'');
   try{
-    const doc=await pdfDocument(c),page=await doc.getPage(pageNum),vp=page.getViewport({scale:.5});const canvas=document.createElement('canvas');canvas.width=vp.width;canvas.height=vp.height;
+    const doc=await pdfDocument(c),page=await doc.getPage(pageNum),vp=page.getViewport({scale:1.25});const canvas=document.createElement('canvas');canvas.width=vp.width;canvas.height=vp.height;
     await page.render({canvasContext:canvas.getContext('2d'),viewport:vp}).promise;thumbnails.set(key,canvas.toDataURL('image/jpeg',.8));thumbnailSizes.set(key,{w:vp.width,h:vp.height});
     const paper=cardLayer.querySelector(`[data-id="${CSS.escape(c.id)}"] .pdf-paper`);
     if(paper&&Number(paper.dataset.page)===pageNum){paper.innerHTML=`<img class="pdf-thumb" src="${thumbnails.get(key)}" alt="PDF ${pageNum}ページのプレビュー"><span class="page-stamp">${pageNum} / ${doc.numPages}</span>`;paintPdfThumbnail(c);renderEdges();}

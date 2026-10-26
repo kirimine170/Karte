@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateBoard, makeEdge, connectionPoints, fitViewport, markdownHTML, classifyFile, textQuote, resolveTextQuote } from '../model.mjs';
+import { validateBoard, makeEdge, connectionPoints, fitViewport, markdownHTML, classifyFile, textQuote, resolveTextQuote, pdfPreviewLayout, projectPdfRect } from '../model.mjs';
 import { createSample } from '../sample.mjs';
 
 test('portable board round trip preserves source anchors and judgments', () => {
@@ -65,4 +65,19 @@ test('invalid source anchors cannot be loaded as valid research references',()=>
     const board=createSample(),anchor=structuredClone(valid);mutate(anchor);board.edges[0].fromAnchor=anchor;assert.throws(()=>validateBoard(board));
   }
   const board=createSample();board.edges[1].fromAnchor=valid;assert.throws(()=>validateBoard(board));
+});
+test('enlarged PDF preview fills the card width and keeps the cited passage visible',()=>{
+  const layout=pdfPreviewLayout(234,190,595,842,'detail',{x:.4,y:.7});
+  assert.equal(layout.w,234);assert.equal(layout.x,0);assert.ok(layout.h>190);
+  const highlight=projectPdfRect({x:.1,y:.69,w:.6,h:.02},layout,234,190);
+  assert.ok(highlight);assert.ok(Math.abs(highlight.y+highlight.h/2-.5)<.001);
+  assert.equal(projectPdfRect({x:.1,y:0,w:.6,h:.01},layout,234,190),null);
+  assert.equal(pdfPreviewLayout(234,190,595,842).y,0);
+});
+test('full-page preview preserves the complete page and maps highlights inside it',()=>{
+  const layout=pdfPreviewLayout(234,190,595,842,'page');
+  assert.ok(layout.w<234);assert.equal(layout.h,190);assert.ok(layout.x>0);
+  const whole=projectPdfRect({x:0,y:0,w:1,h:1},layout,234,190);
+  assert.ok(Math.abs(whole.x-layout.x/234)<.0001);assert.equal(whole.y,0);assert.equal(whole.h,1);
+  const board=createSample();board.cards[0].pdfPreview='page';assert.equal(validateBoard(JSON.parse(JSON.stringify(board))).cards[0].pdfPreview,'page');
 });

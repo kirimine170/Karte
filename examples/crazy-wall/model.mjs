@@ -6,6 +6,16 @@ export const RELATIONS = {
 };
 export const KINDS = { pdf: 'PDF', markdown: 'MARKDOWN', image: 'IMAGE', audio: 'AUDIO', note: 'THOUGHT', excerpt: 'EXCERPT' };
 export const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+export function pdfPreviewLayout(width,height,pageWidth,pageHeight,mode='detail',focus) {
+  const scale=(mode==='page'?Math.min:Math.max)(width/pageWidth,height/pageHeight),w=pageWidth*scale,h=pageHeight*scale;
+  if(mode==='page')return {x:(width-w)/2,y:(height-h)/2,w,h};
+  return {x:clamp(width/2-(focus?.x??.5)*w,Math.min(0,width-w),0),y:focus?clamp(height/2-focus.y*h,Math.min(0,height-h),0):0,w,h};
+}
+export function projectPdfRect(rect,layout,width,height) {
+  const x=Math.max(0,layout.x+rect.x*layout.w),y=Math.max(0,layout.y+rect.y*layout.h);
+  const right=Math.min(width,layout.x+(rect.x+rect.w)*layout.w),bottom=Math.min(height,layout.y+(rect.y+rect.h)*layout.h);
+  return right>x&&bottom>y?{x:x/width,y:y/height,w:(right-x)/width,h:(bottom-y)/height}:null;
+}
 export function classifyFile(name) {
   const ext = name.split('.').pop().toLowerCase();
   if (ext === 'pdf') return 'pdf';
@@ -35,6 +45,7 @@ export function validateBoard(data) {
   for (const c of data.cards) {
     if (!c || typeof c.id !== 'string' || ids.has(c.id) || !Object.hasOwn(KINDS, c.kind) || typeof c.title !== 'string' || typeof c.body !== 'string' || !['x','y','w','h'].every(k => Number.isFinite(c[k])) || c.w < 100 || c.w > 1200 || c.h < 80 || c.h > 1800 || Math.abs(c.x) > 30000 || Math.abs(c.y) > 30000) throw new Error('カードの形式が正しくありません．');
     if (c.asset && !/^\/assets\/[a-z\d._-]+$/i.test(c.asset)) throw new Error('不正な資料パスです．');
+    if(c.pdfPreview!==undefined&&!['page','detail'].includes(c.pdfPreview))throw new Error('PDFの表示形式が正しくありません．');
     if (c.attachment && (!/^data:(image\/(png|jpeg|webp|gif|svg\+xml)|application\/pdf|audio\/[a-z\d.+-]+);base64,/i.test(c.attachment) || c.attachment.length > 30 * 1024 * 1024)) throw new Error('資料データの形式が正しくありません．');
     ids.add(c.id);
   }
