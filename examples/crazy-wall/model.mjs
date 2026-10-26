@@ -1,7 +1,7 @@
 export const RELATIONS = {
   supports: { label: '支持する', short: '支持', color: '#507e6a' },
   contradicts: { label: '矛盾する', short: '矛盾', color: '#b35447' },
-  related_to: { label: '関連する', short: '関連', color: '#7d8496' },
+  related_to: { label: '関連する', short: '関連', color: '#7862a6' },
   questions: { label: '要確認', short: '要確認', color: '#b78b3b' },
 };
 export const KINDS = { pdf: 'PDF', markdown: 'MARKDOWN', image: 'IMAGE', audio: 'AUDIO', note: 'THOUGHT', excerpt: 'EXCERPT' };
@@ -41,14 +41,47 @@ export function validateBoard(data) {
   const edgeIds = new Set();
   for (const e of data.edges) {
     if (!e || typeof e.id !== 'string' || edgeIds.has(e.id) || !ids.has(e.from) || !ids.has(e.to) || e.from === e.to || !Object.hasOwn(RELATIONS, e.relation) || typeof e.reason !== 'string' || !['pending','reviewed'].includes(e.status)) throw new Error('関係の形式が正しくありません．');
+    for (const [side,id] of [['fromAnchor',e.from],['toAnchor',e.to]]) {
+      if (e[side] !== undefined && !validAnchor(e[side], data.cards.find(c=>c.id===id))) throw new Error('引用箇所の形式が正しくありません．');
+    }
     edgeIds.add(e.id);
   }
   return data;
 }
-export function makeEdge(from, to, edges, id) {
+export function makeEdge(from, to, edges, id, fromAnchor, toAnchor) {
   if (!from || !to || from === to) return null;
-  if (edges.some(e => e.from === from && e.to === to)) return null;
-  return { id, from, to, relation: 'related_to', reason: '', status: 'pending' };
+  if (edges.some(e => e.from === from && e.to === to && anchorIdentity(e.fromAnchor)===anchorIdentity(fromAnchor) && anchorIdentity(e.toAnchor)===anchorIdentity(toAnchor))) return null;
+  return { id, from, to, relation: 'related_to', reason: '', status: 'pending', ...(fromAnchor?{fromAnchor}:{}), ...(toAnchor?{toAnchor}:{}) };
+}
+export function anchorIdentity(a) {
+  if (!a) return '';
+  return JSON.stringify([a.type,a.page,a.start,a.end,a.exact,a.type==='pdf-region'?a.rects:undefined]);
+}
+export function textQuote(text, start, end) {
+  return {type:'text',start,end,exact:text.slice(start,end),prefix:text.slice(Math.max(0,start-40),start),suffix:text.slice(end,end+40)};
+}
+export function resolveTextQuote(text,a) {
+  if (!a?.exact) return null;
+  const matches=[];
+  for (let start=text.indexOf(a.exact);start!==-1;start=text.indexOf(a.exact,start+1)) {
+    const end=start+a.exact.length;
+    const score=Number(Boolean(a.prefix)&&text.slice(Math.max(0,start-a.prefix.length),start)===a.prefix)+Number(Boolean(a.suffix)&&text.slice(end,end+a.suffix.length)===a.suffix);
+    matches.push({start,end,score});
+    if(matches.length>5000)return null;
+  }
+  if(matches.length===1)return {start:matches[0].start,end:matches[0].end};
+  const maxScore=matches.reduce((max,m)=>Math.max(max,m.score),0),best=matches.filter(m=>m.score===maxScore);
+  return best.length===1&&best[0].score>0?{start:best[0].start,end:best[0].end}:null;
+}
+export function validAnchor(a,card) {
+  if (!a||!card||!['text','pdf-text','pdf-region'].includes(a.type)||typeof a.exact!=='string'||!a.exact.trim()||a.exact.length>5000) return false;
+  if(a.type==='text'&&!['markdown','note','excerpt'].includes(card.kind))return false;
+  if(a.type!=='pdf-region'&&(!Number.isInteger(a.start)||!Number.isInteger(a.end)||a.start<0||a.end<=a.start||a.end-a.start!==a.exact.length||typeof a.prefix!=='string'||typeof a.suffix!=='string'||a.prefix.length>40||a.suffix.length>40))return false;
+  if(a.type.startsWith('pdf-')) {
+    if(card.kind!=='pdf'||!Number.isInteger(a.page)||a.page<1||a.page>(card.pages||10000)||!Array.isArray(a.rects)||!a.rects.length||a.rects.length>150)return false;
+    return a.rects.every(r=>['x','y','w','h'].every(k=>Number.isFinite(r[k]))&&r.x>=0&&r.y>=0&&r.w>0&&r.h>0&&r.x+r.w<=1.001&&r.y+r.h<=1.001);
+  }
+  return true;
 }
 export function markdownHTML(text) {
   // Escape before rendering．Raw HTML and executable URLs are never interpreted．
