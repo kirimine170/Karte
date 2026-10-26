@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ja">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karte — Research Wall</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="/" aria-label="Research Wall ホーム"><span class="brand-mark">k<span>·</span></span><span>Karte<span class="brand-sub">RESEARCH WALL</span></span></a>
+    <div class="board-title"><span>ワークスペース <b>/</b> リサーチボード</span><input id="board-title" aria-label="ボード名" value="旧港倉庫の再生計画"></div>
+    <div class="header-actions"><span id="save-state" role="status">● ローカルに保存済み</span><button class="icon-button" id="help-button" aria-label="操作ガイド">?</button><button class="button" id="open-board">開く</button><button class="button" id="export-board">↓ ボードを書き出す</button><button class="button dark" id="fullscreen" aria-label="全画面表示">⛶</button></div>
+  </header>
+  <main>
+    <aside class="library" id="library">
+      <div class="library-heading"><h2>資料ライブラリ <span id="material-count"></span></h2><button class="icon-button" id="collapse-library" aria-label="ライブラリを閉じる">‹</button></div>
+      <button class="button import-button" id="import-files"><span>＋</span> 資料を追加</button>
+      <p class="library-hint">PDF・Markdown・画像・音声</p>
+      <label class="search"><span>⌕</span><input id="search" placeholder="資料を検索…" aria-label="資料を検索"><kbd>/</kbd></label>
+      <nav class="filters" aria-label="資料の種類"><button data-filter="all" aria-pressed="true">すべて</button><button data-filter="pdf" aria-pressed="false">PDF</button><button data-filter="markdown" aria-pressed="false">MD</button><button data-filter="image" aria-pressed="false">画像</button><button data-filter="audio" aria-pressed="false">音声</button></nav>
+      <div id="material-list" class="material-list"></div>
+      <div class="library-bottom"><div class="local-badge"><i></i> この端末だけのワークスペース</div><p>資料をダブルクリックして詳しく見る．<br>サンプルは架空の調査資料です．</p><button id="reset-sample" class="text-button">サンプルを復元 ↗</button></div>
+    </aside>
+    <section class="workspace" id="workspace" aria-label="リサーチボード">
+      <div class="canvas-top"><button class="button library-reopen" id="expand-library" hidden>▤ 資料</button><div class="board-caption"><span class="live-dot"></span> FIELD NOTES <span class="caption-rule"></span> 01 <span class="poc-badge">PoC</span></div><div class="top-right"><button class="button" id="relations-button">関係一覧 <span id="relation-count"></span></button></div></div>
+      <div class="tool-palette" role="toolbar" aria-label="ボード操作">
+        <button data-tool="select" aria-pressed="true" title="選択 V"><span>↖</span> 選択 <kbd>V</kbd></button><button data-tool="pan" aria-pressed="false" title="移動 H"><span>✥</span> 移動 <kbd>H</kbd></button><i></i><button data-tool="connect" aria-pressed="false" title="つなぐ C"><span>⌁</span> つなぐ <kbd>C</kbd></button><button id="add-note" title="メモを追加 N"><span>▣</span> メモ <kbd>N</kbd></button>
+      </div>
+      <div id="viewport" tabindex="0" aria-label="資料を配置するキャンバス．矢印キーで選択カードを移動できます"><div id="world"><div id="groups"></div><svg id="edges" aria-label="資料間の関係"></svg><div id="cards"></div></div><div id="drop-overlay"><span>＋</span><h2>ここに資料を置く</h2><p>PDF / Markdown / 画像 / 音声</p></div></div>
+      <div class="canvas-bottom"><div class="legend"><span><i class="support"></i>支持</span><span><i class="contradict"></i>矛盾</span><span><i class="related"></i>関連</span><span><i class="question"></i>要確認</span></div><span id="mode-hint">ドラッグで配置 · 空白をドラッグで移動 · ダブルクリックで資料を開く</span></div>
+      <div class="zoom-controls"><button id="undo" title="元に戻す ⌘Z" aria-label="元に戻す">↶</button><span></span><button id="zoom-out" aria-label="縮小">−</button><output id="zoom-level">75%</output><button id="zoom-in" aria-label="拡大">＋</button><span></span><button id="fit" aria-label="全体を表示" title="全体を表示 F">⌗</button></div>
+      <aside id="inspector" class="inspector" hidden aria-label="選択項目の詳細"></aside>
+    </section>
+  </main>
+  <dialog id="viewer" class="viewer"><div class="viewer-header"><div><span id="viewer-kind"></span><h2 id="viewer-title"></h2></div><button class="icon-button" id="close-viewer" aria-label="資料を閉じる">×</button></div><div id="viewer-body"></div><div id="viewer-footer"></div></dialog>
+  <dialog id="help-dialog" class="help-dialog"><span class="eyebrow">A LITTLE ROOM FOR CONNECTIONS</span><h2>集めて，つないで，考える．</h2><p>資料そのものと，そこから生まれる解釈を分けて整理するボードです．線を選ぶと，関係の種類・判断・理由を記録できます．</p><div class="help-grid"><div><b>01 / 集める</b><p>ファイルをドロップ．PDFはページ，音声は時刻を指定して抜粋を作れます．</p></div><div><b>02 / つなぐ</b><p>「つなぐ」で2枚を順に選択．矢印は始点から終点への関係を表します．</p></div><div><b>03 / 評価する</b><p>線を選び，支持・矛盾などと判断理由を保存．評価は手動です．</p></div></div><p class="shortcut-line"><kbd>V</kbd> 選択 <kbd>H</kbd> 移動 <kbd>C</kbd> 接続 <kbd>N</kbd> メモ <kbd>F</kbd> 全体 <kbd>⌘Z</kbd> 元に戻す <kbd>Esc</kbd> 解除</p><p class="fineprint">ファイルはこのブラウザのIndexedDBに保存されます．書き出したJSONには資料本体が含まれます．Karte本体への保存・同期，OCR，自動文字起こし，AIによる関係の推定は未接続です．</p><button class="button dark" id="close-help">ボードに戻る ↗</button></dialog>
+  <input hidden type="file" multiple id="file-input" accept=".pdf,.md,.markdown,.txt,.png,.jpg,.jpeg,.webp,.gif,.svg,.wav,.mp3,.m4a,.ogg,.flac,.aac">
+  <input hidden type="file" id="board-input" accept=".json,application/json">
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script type="module" src="/app.mjs"></script>
+</body></html>

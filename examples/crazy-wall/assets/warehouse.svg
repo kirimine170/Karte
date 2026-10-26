@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="620" viewBox="0 0 900 620">
+<defs><linearGradient id="sky" x2="0" y2="1"><stop stop-color="#c8d2d0"/><stop offset="1" stop-color="#ece7d9"/></linearGradient><linearGradient id="wall" x2="1" y2=".5"><stop stop-color="#cfc5b2"/><stop offset="1" stop-color="#a89e8c"/></linearGradient><pattern id="bricks" width="70" height="30" patternUnits="userSpaceOnUse"><path d="M0 30H70M35 0V30M0 0V15" stroke="#6f655b" opacity=".12"/></pattern></defs>
+<path fill="url(#sky)" d="M0 0H900V620H0z"/><circle cx="750" cy="90" r="45" fill="#efe5bd" opacity=".7"/>
+<path d="M0 510L900 440V620H0" fill="#a8a99c"/><path d="M0 575L900 490" stroke="#ded7c5" stroke-width="4"/>
+<path d="M120 205L570 120L805 245V500L310 555L120 480Z" fill="url(#wall)"/>
+<path d="M120 205L570 120L805 245L355 315Z" fill="#716e62"/><path d="M120 205L355 315V550L120 480Z" fill="#a59884"/>
+<path d="M355 315L805 245V500L355 550Z" fill="#c9bda7"/><path d="M355 315L805 245V500L355 550Z" fill="url(#bricks)"/>
+<path d="M110 205L567 112L815 243L805 257L570 131L120 218Z" fill="#656d68"/>
+<g fill="#4d5d5c" stroke="#7c8175" stroke-width="5"><path d="M408 348L475 338V409L408 419Z"/><path d="M525 330L592 320V391L525 401Z"/><path d="M644 312L711 302V373L644 383Z"/><path d="M159 270L206 292V359L159 338Z"/><path d="M252 315L299 337V403L252 383Z"/></g>
+<path d="M558 441L620 433V519L558 526Z" fill="#68726b"/><path d="M541 523L635 510L660 532L564 548Z" fill="#929487"/><path d="M528 540L648 524L672 548L548 565Z" fill="#b0ad9c"/>
+<path d="M580 430V514M568 465L610 460" stroke="#b4b19e" stroke-width="3"/><path d="M545 438L545 520M632 426L632 508M545 438L632 426" stroke="#6b746b" stroke-width="4"/>
+<g fill="#637a61"><ellipse cx="740" cy="466" rx="32" ry="14"/><ellipse cx="776" cy="458" rx="30" ry="18"/><ellipse cx="80" cy="476" rx="47" ry="17"/></g>
+<g stroke="#b35a43" fill="none" stroke-width="3"><ellipse cx="588" cy="485" rx="92" ry="82" transform="rotate(-10 588 485)"/><path d="M687 440L760 392"/></g><text x="731" y="375" fill="#964e3e" font-family="sans-serif" font-size="20" transform="rotate(-5 731 375)">north entry?</text>
+<text x="40" y="55" font-family="monospace" font-size="14" fill="#4a5550" letter-spacing="3">FIELD SKETCH / NORTH ELEVATION</text><text x="40" y="592" font-family="monospace" font-size="14" fill="#4a5550">FICTIONAL STUDY · 2026.10.12</text></svg>
