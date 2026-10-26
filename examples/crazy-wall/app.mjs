@@ -1,6 +1,7 @@
-import { RELATIONS, KINDS, clamp, classifyFile, connectionPoints, fitViewport, validateBoard, makeEdge, markdownHTML, textQuote, resolveTextQuote, pdfPreviewLayout, projectPdfRect } from './model.mjs';
+import { RELATIONS, KINDS, clamp, classifyFile, connectionPoints, fitViewport, validateBoard, makeEdge, markdownHTML, textQuote, resolveTextQuote, pdfPreviewLayout, projectPdfRect, resourcePatch, anchorIsCurrent } from './model.mjs';
 import { createSample } from './sample.mjs';
 
+const host = window.karteResearchHost;
 const $ = (q, root = document) => root.querySelector(q);
 const $$ = (q, root = document) => [...root.querySelectorAll(q)];
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -19,10 +20,10 @@ function toast(message, error = false) {
   clearTimeout(toastTimer); const t = $('#toast'); t.textContent = message; t.hidden = false; t.classList.toggle('error', error);
   toastTimer = setTimeout(() => t.hidden = true, error ? 6500 : 3300);
 }
-function snapshot() { return { ...board, cards: board.cards.map(c => ({...c})), edges: board.edges.map(e => ({...e})) }; }
+function snapshot() { return { ...board, ...(host?{viewport:{...view}}:{}), cards: board.cards.map(c => ({...c})), edges: board.edges.map(e => ({...e})) }; }
 function checkpoint() { history.push(snapshot()); if (history.length > 25) history.shift(); $('#undo').disabled = false; }
 function undo() { if (!history.length) return toast('戻せる操作はありません．'); board = history.pop(); selected = null; linkFrom = null;cancelReference(); render(); scheduleSave(); }
-const db = await new Promise((resolve, reject) => {
+const db = host ? null : await new Promise((resolve, reject) => {
   const request = indexedDB.open('karte-research-wall-poc', 1);
   request.onupgradeneeded = () => request.result.createObjectStore('board');
   request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
@@ -32,10 +33,18 @@ async function readSaved() {
   return new Promise(resolve => { const r = db.transaction('board').objectStore('board').get('current'); r.onsuccess = () => resolve(r.result); r.onerror = () => resolve(null); });
 }
 function scheduleSave() {
-  dirty = true; saveVersion++; $('#save-state').textContent = '○ 保存中…';
-  clearTimeout(saveTimer); saveTimer = setTimeout(persist, 250);
+  dirty = true; host?.notify('dirty',true); saveVersion++; $('#save-state').textContent = '○ 保存中…';
+  clearTimeout(saveTimer); saveTimer = setTimeout(persist, host?700:250);
 }
 function persist() {
+  if(host){
+    const value=snapshot(),version=saveVersion;
+    lastSave=lastSave.catch(()=>{}).then(async()=>{
+      try {const result=await host.call('save',value);if(!board.managedPath)board.managedPath=result.path;
+        if(version===saveVersion){dirty=false;host.notify('dirty',false);$('#save-state').textContent='● Karteに保存済み';}
+      }catch(error){$('#save-state').textContent='○ 保存エラー・クリックで再試行';toast(`Karteに保存できません．${error.message}`,true);throw error;}
+    });lastSave.catch(()=>{});return lastSave;
+  }
   if (!db) { $('#save-state').textContent = '○ 保存不可'; toast('ブラウザの保存領域を利用できません．JSONを書き出して保存してください．', true); return; }
   const value = snapshot(), version = saveVersion;
   lastSave = lastSave.catch(() => {}).then(() => new Promise((resolve, reject) => {
@@ -46,11 +55,12 @@ function persist() {
   }));
   lastSave.catch(() => {});
 }
-const saved = await readSaved();
+const saved = host ? await host.call('load').catch(error=>{toast(error.message,true);return null;}) : await readSaved();
+if(host&&!saved)board={schema:'karte-research-wall/1',title:'読み込みエラー',cards:[],edges:[]};
 if (saved) { try { board = validateBoard(saved); } catch { toast('保存データを読めないため，サンプルを表示しました．', true); } }
 window.addEventListener('beforeunload', event => { if (dirty) { persist(); event.preventDefault(); event.returnValue = ''; } });
 
-function sourceURL(c) { return c.attachment || c.asset || ''; }
+function sourceURL(c) { return c.attachment || c.resourceURL || c.asset || ''; }
 function textNodes(root) {
   const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:n=>n.parentElement.closest('.highlight-layer')?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT});
   const nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);return nodes;
@@ -71,7 +81,7 @@ function addRectHighlight(layer,rect,key,extra='') {
 function paintTextRoot(root,refs,activeKey) {
   $('.highlight-layer',root)?.remove();const text=rootText(root),box=root.getBoundingClientRect(),layer=document.createElement('div');layer.className='highlight-layer';layer.setAttribute('aria-hidden','true');
   for(const r of refs){
-    const resolved=resolveTextQuote(text,r.anchor);if(!resolved)continue;
+    if(r.stale)continue;const resolved=resolveTextQuote(text,r.anchor);if(!resolved)continue;
     const range=textRange(root,resolved.start,resolved.end);if(!range)continue;
     for(const rect of clippedRects(range,box))addRectHighlight(layer,rect,r.key,r.key===activeKey?'focused-reference':'');
   }root.append(layer);
@@ -79,7 +89,7 @@ function paintTextRoot(root,refs,activeKey) {
 function paintPdfThumbnail(c) {
   const paper=cardLayer.querySelector(`[data-id="${CSS.escape(c.id)}"] .pdf-paper`);if(!paper)return;
   $('.highlight-layer',paper)?.remove();const page=Number(paper.dataset.page),size=thumbnailSizes.get(`${c.id}:${page}`);if(!size)return;
-  const refs=cardReferences(c).filter(r=>r.anchor.page===page),active=refs.find(r=>selected?.type==='edge'&&selected.id===r.edge.id)||refs[0];
+  const refs=cardReferences(c).filter(r=>r.anchor.page===page&&!r.stale),active=refs.find(r=>selected?.type==='edge'&&selected.id===r.edge.id)||refs[0];
   const anchor=linkFrom===c.id&&linkAnchor?.page===page?linkAnchor:active?.anchor;
   const focus=anchor?{x:(Math.min(...anchor.rects.map(r=>r.x))+Math.max(...anchor.rects.map(r=>r.x+r.w)))/2,y:(Math.min(...anchor.rects.map(r=>r.y))+Math.max(...anchor.rects.map(r=>r.y+r.h)))/2}:undefined;
   const w=paper.clientWidth,h=paper.clientHeight,layout=pdfPreviewLayout(w,h,size.w,size.h,c.pdfPreview||'detail',focus),img=$('.pdf-thumb',paper);
@@ -95,7 +105,7 @@ function paintBoardHighlights() {
     const root=cardLayer.querySelector(`[data-id="${CSS.escape(c.id)}"] [data-annotatable]`);if(!root)continue;
     const refs=cardReferences(c);if(linkFrom===c.id&&linkAnchor)refs.push({anchor:linkAnchor,key:'pending'});
     paintTextRoot(root,refs,selected?.type==='edge'?`${selected.id}:from`:null);
-    for(const ref of refs){const chip=cardLayer.querySelector(`.reference-chip[data-reference-key="${CSS.escape(ref.key)}"]`);if(chip){const unresolved=!resolveTextQuote(rootText(root),ref.anchor);chip.classList.toggle('unresolved',unresolved);if(unresolved)chip.title='本文が変更され，引用箇所を特定できません．引用を再確認してください．';}}
+    for(const ref of refs){const chip=cardLayer.querySelector(`.reference-chip[data-reference-key="${CSS.escape(ref.key)}"]`);if(chip){const unresolved=ref.stale||!resolveTextQuote(rootText(root),ref.anchor);chip.classList.toggle('unresolved',unresolved);if(unresolved)chip.title='本文が変更され，引用箇所を特定できません．引用を再確認してください．';}}
   }
 }
 function referenceWorldPoint(key) {
@@ -122,7 +132,7 @@ function captureTextSelection() {
   let anchor=textQuote(text,begin,end);
   if(root.dataset.annotatable==='pdf'){
     const box=root.closest('.pdf-page').getBoundingClientRect(),rects=clippedRects(range,box);if(!rects.length)return;
-    anchor={...anchor,type:'pdf-text',page:viewerPage,rects};
+    anchor={...anchor,type:'pdf-text',page:viewerPage,rects,...(c.revision?{revision:c.revision}:{})};
   }
   showQuoteSelection({cardId:c.id,anchor},range.getBoundingClientRect());
 }
@@ -141,26 +151,26 @@ document.addEventListener('keyup',event=>{if(event.shiftKey)captureTextSelection
 document.addEventListener('scroll',()=>$('#reference-selection').hidden=true,true);
 function openReference(key) {
   const split=key.lastIndexOf(':'),edge=board.edges.find(e=>e.id===key.slice(0,split)),side=key.slice(split+1);if(!edge)return;
-  const anchor=edge[`${side}Anchor`];if(anchor)void openViewer(edge[side],{...anchor,referenceKey:key});
+  const anchor=edge[`${side}Anchor`];if(anchor){const c=board.cards.find(c=>c.id===edge[side]);if(c&&!anchorIsCurrent(anchor,c))toast('原資料が変更されています．保存した引用の位置を再確認してください．',true);void openViewer(edge[side],{...anchor,referenceKey:key});}
 }
 function paintViewerHighlights(c,focus) {
   const refs=cardReferences(c),page=$('.pdf-page');
   if(page){
     $('.highlight-layer',page)?.remove();const layer=document.createElement('div');layer.className='highlight-layer';layer.setAttribute('aria-hidden','true');
-    for(const r of refs.filter(r=>r.anchor.page===viewerPage))for(const rect of r.anchor.rects)addRectHighlight(layer,rect,r.key,r.key===focus?.referenceKey?'focused-reference':'');page.append(layer);
+    for(const r of refs.filter(r=>r.anchor.page===viewerPage&&!r.stale))for(const rect of r.anchor.rects)addRectHighlight(layer,rect,r.key,r.key===focus?.referenceKey?'focused-reference':'');page.append(layer);
   }else{const root=$('#viewer-body [data-annotatable]');if(root)paintTextRoot(root,refs,focus?.referenceKey);}
   const target=focus?.referenceKey&&$('#viewer-body').querySelector(`.reference-highlight[data-reference-key="${CSS.escape(focus.referenceKey)}"]`);target?.scrollIntoView({block:'center'});
 }
 function cardReferences(c) {
-  return board.edges.flatMap(e=>[['from',e.from,e.fromAnchor],['to',e.to,e.toAnchor]].filter(([,id,a])=>id===c.id&&a).map(([side,,anchor])=>({edge:e,anchor,key:`${e.id}:${side}`})));
+  return board.edges.flatMap(e=>[['from',e.from,e.fromAnchor],['to',e.to,e.toAnchor]].filter(([,id,a])=>id===c.id&&a).map(([side,,anchor])=>({edge:e,anchor,key:`${e.id}:${side}`,stale:!anchorIsCurrent(anchor,c)})));
 }
 function displayPdfPage(c) {
-  const refs=cardReferences(c);
+  const refs=cardReferences(c).filter(r=>!r.stale);
   return refs.find(r=>selected?.type==='edge'&&selected.id===r.edge.id)?.anchor.page||refs[0]?.anchor.page||c.page||1;
 }
 function referenceChips(c) {
   const refs=cardReferences(c);
-  return refs.length?`<div class="reference-chips">${refs.map(r=>`<button class="reference-chip" data-reference-key="${esc(r.key)}" data-open-reference="${esc(r.key)}" title="引用箇所を開く：${esc(r.anchor.exact)}">${r.anchor.page?`p.${r.anchor.page} · `:''}「${esc(r.anchor.exact.slice(0,48))}」↗</button>`).join('')}</div>`:'';
+  return refs.length?`<div class="reference-chips">${refs.map(r=>`<button class="reference-chip${r.stale?' unresolved':''}" data-reference-key="${esc(r.key)}" data-open-reference="${esc(r.key)}" title="${r.stale?'原資料が変更されました．引用を再確認してください．':'引用箇所を開く：'+esc(r.anchor.exact)}">${r.anchor.page?`p.${r.anchor.page} · `:''}「${esc(r.anchor.exact.slice(0,48))}」↗</button>`).join('')}</div>`:'';
 }
 function waveform(count = 43) { return Array.from({length:count}, (_,i) => `<i style="height:${8 + Math.abs(Math.sin(i * 2.7) * Math.cos(i * .37)) * 29}px"></i>`).join(''); }
 function cardContent(c) {
@@ -172,7 +182,7 @@ function cardContent(c) {
 }
 function renderCards() {
   const matches = board.cards.filter(matchesFilter), ids = new Set(matches.map(c => c.id));
-  cardLayer.innerHTML = board.cards.map((c,i) => `<article tabindex="0" role="button" aria-label="${esc(KINDS[c.kind] + '：' + c.title)}" aria-pressed="${selected?.type === 'card' && selected.id === c.id}" class="card card-${c.kind}${c.kind==='pdf'&&cardReferences(c).length?' pdf-has-references':''}${selected?.type === 'card' && selected.id === c.id ? ' selected' : ''}${linkFrom === c.id ? ' link-source' : ''}${!ids.has(c.id) ? ' dimmed' : ''}" data-id="${esc(c.id)}" style="left:${c.x}px;top:${c.y}px;width:${c.w}px;height:${c.h}px"><div class="card-header"><span class="card-kind"><b>${icons[c.kind]}</b> ${esc(c.kind === 'note' ? c.badge || 'THOUGHT' : KINDS[c.kind])}</span>${c.kind==='pdf'?`<button class="pdf-preview-toggle" data-action="pdf-preview-mode" data-id="${esc(c.id)}" aria-label="${c.pdfPreview==='page'?'PDFの引用箇所を拡大表示':'PDFのページ全体を表示'}">${c.pdfPreview==='page'?'拡大 ↗':'全体 ↙'}</button>`:`<span class="card-serial">${String(i+1).padStart(2,'0')}</span>`}</div>${cardContent(c)}<div class="card-footer"><span>${esc(c.anchor || c.date || (c.kind === 'note' ? '自分の解釈 / 仮説' : c.filename || 'メモ'))}</span><span class="badge">${esc(c.badge || '資料')}</span></div></article>`).join('');
+  cardLayer.innerHTML = board.cards.map((c,i) => `<article tabindex="0" role="button" aria-label="${esc(KINDS[c.kind] + '：' + c.title)}" aria-pressed="${selected?.type === 'card' && selected.id === c.id}" class="card card-${c.kind}${c.kind==='pdf'&&cardReferences(c).length?' pdf-has-references':''}${selected?.type === 'card' && selected.id === c.id ? ' selected' : ''}${linkFrom === c.id ? ' link-source' : ''}${!ids.has(c.id) ? ' dimmed' : ''}" data-id="${esc(c.id)}" style="left:${c.x}px;top:${c.y}px;width:${c.w}px;height:${c.h}px"><div class="card-header"><span class="card-kind"><b>${icons[c.kind]}</b> ${esc(c.kind === 'note' ? c.badge || 'THOUGHT' : KINDS[c.kind])}</span>${c.sourceError?'<span class="missing-source" title="原資料を確認してください">要確認</span>':c.kind==='pdf'?`<button class="pdf-preview-toggle" data-action="pdf-preview-mode" data-id="${esc(c.id)}" aria-label="${c.pdfPreview==='page'?'PDFの引用箇所を拡大表示':'PDFのページ全体を表示'}">${c.pdfPreview==='page'?'拡大 ↗':'全体 ↙'}</button>`:`<span class="card-serial">${String(i+1).padStart(2,'0')}</span>`}</div>${cardContent(c)}<div class="card-footer"><span>${esc(c.anchor || c.date || (c.kind === 'note' ? '自分の解釈 / 仮説' : c.filename || 'メモ'))}</span><span class="badge">${esc(c.badge || '資料')}</span></div></article>`).join('');
   board.cards.filter(c => c.kind === 'pdf').forEach(c => void ensureThumbnail(c));
   paintBoardHighlights();
 }
@@ -209,7 +219,7 @@ function applyViewport() {
 function fit() { view = fitViewport(board.cards, viewport.clientWidth, viewport.clientHeight); applyViewport(); }
 function zoom(factor, x = viewport.clientWidth / 2, y = viewport.clientHeight / 2) {
   const next = clamp(view.zoom*factor,.2,1.8), ratio = next/view.zoom;
-  view.x = x - (x-view.x)*ratio; view.y = y-(y-view.y)*ratio; view.zoom = next; applyViewport();
+  view.x = x - (x-view.x)*ratio; view.y = y-(y-view.y)*ratio; view.zoom = next; applyViewport();if(host&&board.managedPath)scheduleSave();
 }
 function render() {
   $('#board-title').value = board.title; $('#undo').disabled = history.length === 0;
@@ -269,7 +279,7 @@ function renderInspector(mode) {
   } else {
     const c = board.cards.find(c=>c.id===selected.id); if (!c) { el.hidden=true; return; }
     const edges = board.edges.filter(e=>e.from===c.id||e.to===c.id);
-    el.innerHTML = `<div class="inspector-heading"><span class="eyebrow">${KINDS[c.kind]}</span><button class="icon-button" data-inspector="close" aria-label="詳細を閉じる">×</button></div><label for="card-title">タイトル</label><input id="card-title" value="${esc(c.title)}">${['note','excerpt'].includes(c.kind)?`<label for="card-body">${c.kind==='note'?'解釈・仮説':'抜粋・コメント'}</label><textarea id="card-body" rows="7">${esc(c.body)}</textarea>`:`<p class="fineprint">${esc(c.filename||'')}<br>${esc(c.kind==='pdf'?`${c.pages||'?'}ページ`:c.date||'取り込み済み')}<br>原資料の内容はボード上では変更しません．</p>`}${c.anchor?`<p class="fineprint">参照箇所：${esc(c.anchor)}</p>`:''}<button class="button dark" data-inspector="open">${['note','excerpt'].includes(c.kind)?'内容を開く':'原資料を開く'} ↗</button><button class="button" data-inspector="connect">⌁ このカードからつなぐ</button><label>つながっている資料 <span class="tiny-count">${edges.length}</span></label>${edges.map(e=>`<button class="related-item" data-inspector="edge" data-id="${esc(e.id)}">${esc(cardTitle(e.from===c.id?e.to:e.from))}<span>${e.from===c.id?'→':'←'} ${RELATIONS[e.relation].short} · ${e.status==='reviewed'?'確認済み':'未確認'}</span></button>`).join('')||'<p class="fineprint">まだ関係がありません．</p>'}<button class="danger-button" data-inspector="delete">このカードをボードから外す</button>`;
+    el.innerHTML = `<div class="inspector-heading"><span class="eyebrow">${KINDS[c.kind]}</span><button class="icon-button" data-inspector="close" aria-label="詳細を閉じる">×</button></div><label for="card-title">タイトル</label><input id="card-title" value="${esc(c.title)}">${['note','excerpt'].includes(c.kind)?`<label for="card-body">${c.kind==='note'?'解釈・仮説':'抜粋・コメント'}</label><textarea id="card-body" rows="7">${esc(c.body)}</textarea>`:`<p class="fineprint">${esc(c.filename||'')}<br>${esc(c.kind==='pdf'?`${c.pages||'?'}ページ`:c.date||'取り込み済み')}<br>原資料の内容はボード上では変更しません．</p>`}${c.anchor?`<p class="fineprint">参照箇所：${esc(c.anchor)}</p>`:''}<button class="button dark" data-inspector="open">${['note','excerpt'].includes(c.kind)?'内容を開く':'原資料を開く'} ↗</button>${host&&c.source?`<button class="button" data-inspector="edit">${c.kind==='pdf'?'KarteのPDF表示で開く':c.kind==='image'?'画像のメタデータを編集':c.kind==='audio'?'文字起こし・メモを編集':'Karteで本文を編集'} ↗</button><p class="fineprint managed-source">${esc(c.source)}${c.sourceError?`<br><strong>${esc(c.sourceError)}</strong>`:''}</p>`:''}<button class="button" data-inspector="connect">⌁ このカードからつなぐ</button><label>つながっている資料 <span class="tiny-count">${edges.length}</span></label>${edges.map(e=>`<button class="related-item" data-inspector="edge" data-id="${esc(e.id)}">${esc(cardTitle(e.from===c.id?e.to:e.from))}<span>${e.from===c.id?'→':'←'} ${RELATIONS[e.relation].short} · ${e.status==='reviewed'?'確認済み':'未確認'}</span></button>`).join('')||'<p class="fineprint">まだ関係がありません．</p>'}<button class="danger-button" data-inspector="delete">このカードをボードから外す</button>`;
   }
   el.hidden=false;
 }
@@ -301,7 +311,7 @@ viewport.addEventListener('pointermove', event => {
     const el=cardLayer.querySelector(`[data-id="${CSS.escape(c.id)}"]`);el.style.left=`${c.x}px`;el.style.top=`${c.y}px`;renderEdges();
   }
 });
-function endDrag() { if (!drag) return; if(drag.type==='card'&&drag.moved) scheduleSave(); if(drag.type==='pan'&&!drag.moved&&tool!=='connect') select(null,null);drag=null;viewport.classList.remove('panning'); }
+function endDrag() { if (!drag) return; if((drag.type==='card'||host&&drag.type==='pan')&&drag.moved) scheduleSave(); if(drag.type==='pan'&&!drag.moved&&tool!=='connect') select(null,null);drag=null;viewport.classList.remove('panning'); }
 viewport.addEventListener('pointerup',endDrag);viewport.addEventListener('pointercancel',endDrag);
 window.addEventListener('pointerup',endDrag);
 viewport.addEventListener('wheel', event=>{event.preventDefault();const r=viewport.getBoundingClientRect();zoom(Math.exp(-event.deltaY*.0015),event.clientX-r.left,event.clientY-r.top);},{passive:false});
@@ -320,7 +330,8 @@ $$('[data-filter]').forEach(b=>b.addEventListener('click',()=>{filter=b.dataset.
 $('#search').addEventListener('input',e=>{query=e.target.value;renderLibrary();renderCards();});
 $('#add-note').onclick=addNote;$('#undo').onclick=undo;$('#fit').onclick=fit;$('#zoom-in').onclick=()=>zoom(1.15);$('#zoom-out').onclick=()=>zoom(1/1.15);
 $('#relations-button').onclick=()=>renderInspector('relations');
-$('#board-title').addEventListener('change',event=>{checkpoint();board.title=event.target.value.trim()||'無題のボード';scheduleSave();});
+$('#board-title').addEventListener('focus',()=>checkpoint());
+$('#board-title').addEventListener('input',event=>{board.title=event.target.value.trim()||'無題のボード';scheduleSave();});
 $('#collapse-library').onclick=()=>{$('#library').hidden=true;$('#expand-library').hidden=false;fit();};
 $('#expand-library').onclick=()=>{$('#library').hidden=false;$('#expand-library').hidden=true;fit();};
 $('#fullscreen').onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}catch{toast('この環境では全画面表示を利用できません．',true);}};
@@ -332,6 +343,7 @@ $('#inspector').addEventListener('click',event=>{
   if(action==='edge'){select('edge',b.dataset.id);return;}
   if(action==='open-reference'){openReference(b.dataset.key);return;}
   if(action==='delete'){deleteSelection();return;}
+  if(action==='edit'){void editManaged(selected.id);return;}
   if(action==='open'){void openViewer(selected.id);return;}
   if(action==='connect'){const id=selected.id;setTool('connect');linkFrom=id;renderCards();$('#mode-hint').textContent='接続先のカードを選択してください · Escで解除';return;}
   if(action==='reverse'){
@@ -353,6 +365,7 @@ $('#inspector').addEventListener('input',event=>{
   }scheduleSave();
 });
 document.addEventListener('keydown',event=>{
+  if(host&&(event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='s'){event.preventDefault();void flushSave().then(()=>toast('Karteに保存しました．')).catch(()=>{});return;}
   const editing=event.target.closest('input,textarea,select,[contenteditable]');
   if(editing||$('dialog[open]'))return;
   if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='z'){event.preventDefault();undo();return;}
@@ -370,18 +383,18 @@ document.addEventListener('keydown',event=>{
 });
 document.addEventListener('keyup',event=>{if(event.code==='Space')spaceHeld=false;keyboardMove=false;});window.addEventListener('blur',()=>{spaceHeld=false;endDrag();});
 
-async function pdfLibrary(){const pdf=await import('/vendor/pdfjs/build/pdf.mjs');pdf.GlobalWorkerOptions.workerSrc='/vendor/pdfjs/build/pdf.worker.mjs';return pdf;}
+async function pdfLibrary(){if(host)return host.pdf;const standalonePdfURL='/vendor/pdfjs/build/pdf.mjs';const pdf=await import(/* @vite-ignore */ standalonePdfURL);pdf.GlobalWorkerOptions.workerSrc='/vendor/pdfjs/build/pdf.worker.mjs';return pdf;}
 async function pdfDocument(c){
-  if(!pdfDocs.has(c.id))pdfDocs.set(c.id,(async()=>{const pdf=await pdfLibrary();return pdf.getDocument({url:sourceURL(c),isEvalSupported:false,wasmUrl:'/vendor/pdfjs/wasm/',standardFontDataUrl:'/vendor/pdfjs/standard_fonts/',cMapUrl:'/vendor/pdfjs/cmaps/',cMapPacked:true}).promise;})());
+  if(!pdfDocs.has(c.id))pdfDocs.set(c.id,(async()=>{const pdf=await pdfLibrary();return pdf.getDocument({url:sourceURL(c),isEvalSupported:false,wasmUrl:'/vendor/pdfjs/wasm/',standardFontDataUrl:'/vendor/pdfjs/standard_fonts/',cMapUrl:'/vendor/pdfjs/cmaps/',cMapPacked:true,...host?.pdfOptions}).promise;})());
   try{return await pdfDocs.get(c.id);}catch(error){pdfDocs.delete(c.id);throw error;}
 }
 async function ensureThumbnail(c){
   const pageNum=displayPdfPage(c),key=`${c.id}:${pageNum}`;
   if(thumbnails.has(key)||!sourceURL(c))return;
-  thumbnails.set(key,'');
+  const originalSource=sourceURL(c),originalRevision=c.revision;thumbnails.set(key,'');
   try{
-    const doc=await pdfDocument(c),page=await doc.getPage(pageNum),vp=page.getViewport({scale:1.25});const canvas=document.createElement('canvas');canvas.width=vp.width;canvas.height=vp.height;
-    await page.render({canvasContext:canvas.getContext('2d'),viewport:vp}).promise;thumbnails.set(key,canvas.toDataURL('image/jpeg',.8));thumbnailSizes.set(key,{w:vp.width,h:vp.height});
+    const doc=await pdfDocument(c);if(c.pages!==doc.numPages){c.pages=doc.numPages;renderLibrary();}const page=await doc.getPage(pageNum),vp=page.getViewport({scale:1.25});const canvas=document.createElement('canvas');canvas.width=vp.width;canvas.height=vp.height;
+    await page.render({canvasContext:canvas.getContext('2d'),viewport:vp}).promise;if(!board.cards.includes(c)||sourceURL(c)!==originalSource||c.revision!==originalRevision)return;thumbnails.set(key,canvas.toDataURL('image/jpeg',.8));thumbnailSizes.set(key,{w:vp.width,h:vp.height});
     const paper=cardLayer.querySelector(`[data-id="${CSS.escape(c.id)}"] .pdf-paper`);
     if(paper&&Number(paper.dataset.page)===pageNum){paper.innerHTML=`<img class="pdf-thumb" src="${thumbnails.get(key)}" alt="PDF ${pageNum}ページのプレビュー"><span class="page-stamp">${pageNum} / ${doc.numPages}</span>`;paintPdfThumbnail(c);renderEdges();}
   }catch{thumbnails.delete(key);}
@@ -435,7 +448,7 @@ async function renderPdfViewer(c,session){
   $('#pdf-text-mode').onclick=()=>{pdfRegionMode=false;updateMode();};$('#pdf-region-mode').onclick=()=>{pdfRegionMode=true;window.getSelection()?.removeAllRanges();updateMode();};updateMode();
   region.addEventListener('pointerdown',event=>{if(event.button!==0)return;event.preventDefault();window.getSelection()?.removeAllRanges();$('#reference-selection').hidden=true;const b=stage.getBoundingClientRect();regionDrag={x:clamp((event.clientX-b.left)/b.width,0,1),y:clamp((event.clientY-b.top)/b.height,0,1)};region.setPointerCapture(event.pointerId);region.innerHTML='<div class="region-draft"></div>';});
   region.addEventListener('pointermove',event=>{if(!regionDrag)return;const b=stage.getBoundingClientRect(),x=clamp((event.clientX-b.left)/b.width,0,1),y=clamp((event.clientY-b.top)/b.height,0,1);const r={x:Math.min(x,regionDrag.x),y:Math.min(y,regionDrag.y),w:Math.abs(x-regionDrag.x),h:Math.abs(y-regionDrag.y)};regionDrag.rect=r;$('.region-draft',region).style.cssText=`left:${r.x*100}%;top:${r.y*100}%;width:${r.w*100}%;height:${r.h*100}%;`;});
-  region.addEventListener('pointerup',()=>{const r=regionDrag?.rect;regionDrag=null;if(!r||r.w<.005||r.h<.005){region.innerHTML='';return;}const b=stage.getBoundingClientRect();showQuoteSelection({cardId:c.id,anchor:{type:'pdf-region',page:viewerPage,exact:'図・画像の選択範囲',rects:[r]}},{left:b.left+r.x*b.width,top:b.top+r.y*b.height,width:r.w*b.width,bottom:b.top+(r.y+r.h)*b.height});});
+  region.addEventListener('pointerup',()=>{const r=regionDrag?.rect;regionDrag=null;if(!r||r.w<.005||r.h<.005){region.innerHTML='';return;}const b=stage.getBoundingClientRect();showQuoteSelection({cardId:c.id,anchor:{type:'pdf-region',page:viewerPage,exact:'図・画像の選択範囲',rects:[r],...(c.revision?{revision:c.revision}:{})}},{left:b.left+r.x*b.width,top:b.top+r.y*b.height,width:r.w*b.width,bottom:b.top+(r.y+r.h)*b.height});});
   region.addEventListener('pointercancel',()=>{regionDrag=null;region.innerHTML='';});paintViewerHighlights(c,viewerFocus);
 }
 function viewerError(e){if(e.name!=='RenderingCancelledException'){toast('PDFを表示できませんでした．',true);}}
@@ -469,14 +482,16 @@ async function importFiles(files,point){
   for(const {file,kind}of candidates){
     try{
       const c={id:uid('material'),kind,title:file.name.replace(/\.[^.]+$/,''),filename:file.name,body:'',x:clamp(p.x+added*45,-30000,30000),y:clamp(p.y+added*45,-30000,30000),w:kind==='audio'?310:280,h:kind==='audio'?220:330,date:new Date().toLocaleDateString('ja-JP'),badge:'未確認'};
-      if(kind==='markdown'){if(file.size>1024*1024)throw new Error('Markdownは1MBまでです．');c.body=await file.text();}
+      if(host){
+        const resource=await hostImport(file);Object.assign(c,resourcePatch(resource));c.badge='管理資料';
+      }else if(kind==='markdown'){if(file.size>1024*1024)throw new Error('Markdownは1MBまでです．');c.body=await file.text();}
       else{c.attachment=normalizeDataURL(await readDataURL(file),kind,file.name);}
       if(kind==='pdf'){
         const doc=await pdfDocument(c);c.pages=doc.numPages;c.page=1;const page=await doc.getPage(1),text=await page.getTextContent();c.body=text.items.map(t=>t.str).join(' ').slice(0,200);
       }
       if(kind==='audio'){
         c.body='再生位置を指定して，根拠となる箇所をカードに残せます．';
-        c.duration=await new Promise(resolve=>{const a=new Audio(c.attachment);const timer=setTimeout(()=>{a.removeAttribute('src');resolve(0);},3000);a.onloadedmetadata=()=>{clearTimeout(timer);resolve(Number.isFinite(a.duration)?a.duration:0);};a.onerror=()=>{clearTimeout(timer);resolve(0);};});
+        c.duration=await new Promise(resolve=>{const a=new Audio(sourceURL(c));const timer=setTimeout(()=>{a.removeAttribute('src');resolve(0);},3000);a.onloadedmetadata=()=>{clearTimeout(timer);resolve(Number.isFinite(a.duration)?a.duration:0);};a.onerror=()=>{clearTimeout(timer);resolve(0);};});
       }
       board.cards.push(c);added++;
     }catch(error){toast(`${file.name}を取り込めませんでした．${error.message}`,true);}
@@ -494,17 +509,108 @@ window.addEventListener('dragover',event=>event.preventDefault());window.addEven
 $('#export-board').onclick=async()=>{
   const button=$('#export-board');button.disabled=true;button.textContent='書き出し中…';
   try{
-    const exported=snapshot();for(const c of exported.cards){if(c.asset&&!c.attachment&&c.kind!=='markdown'){const response=await fetch(c.asset);if(!response.ok)throw new Error('資料を読み込めません．');c.attachment=await readDataURL(await response.blob());delete c.asset;}}
+    const exported=snapshot();for(const c of exported.cards){if(host&&c.source){const r=await host.call('resource',c.source);if(c.kind==='markdown')c.body=r.body;if(c.kind==='image')c.metadata=r.body;if(c.kind==='audio')c.transcript=resourcePatch(r).body;}if(sourceURL(c)&&!c.attachment&&c.kind!=='markdown'){const response=await fetch(sourceURL(c));if(!response.ok)throw new Error('資料を読み込めません．');c.attachment=await readDataURL(await response.blob());delete c.asset;}if(host){delete c.source;delete c.resourceURL;delete c.editPath;delete c.revision;delete c.sourceError;}}delete exported.managedPath;
+    const filename=`${board.title.replace(/[\\/:*?"<>|]/g,'_')}.wall.json`;
+    if(host){const path=await host.call('export',{filename,content:JSON.stringify(exported,null,2)});if(path)toast('資料本体を含むJSONを書き出しました．');return;}
     const blob=new Blob([JSON.stringify(exported,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`${board.title.replace(/[\\/:*?"<>|]/g,'_')}.wall.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('資料本体を含めて書き出しました．JSONを開くと復元できます．');
   }catch(error){toast(error.message,true);}finally{button.disabled=false;button.textContent='↓ ボードを書き出す';}
 };
 $('#open-board').onclick=()=>$('#board-input').click();
 $('#board-input').onchange=async event=>{
   const file=event.target.files[0];if(!file)return;
-  try{if(file.size>115*1024*1024)throw new Error('JSONは115MBまで読み込めます．');const data=validateBoard(JSON.parse(await file.text()));checkpoint();stopMedia();board=data;selected=null;linkFrom=null;thumbnails.clear();pdfDocs.clear();render();scheduleSave();fit();toast('ボードを復元しました．前のボードは⌘Zで戻せます．');}
+  try{if(file.size>115*1024*1024)throw new Error('JSONは115MBまで読み込めます．');let data=validateBoard(JSON.parse(await file.text()));if(host){await flushSave();data=await materializeBoard(data);const created=await host.call('new-board',data.title);data.managedPath=created.managedPath;history=[];}else checkpoint();stopMedia();board=data;selected=null;linkFrom=null;thumbnails.clear();pdfDocs.clear();render();scheduleSave();fit();toast(host?'資料をKarteに取り込み，新しいボードとして保存しました．':'ボードを復元しました．前のボードは⌘Zで戻せます．');}
   catch(error){toast(`ボードを開けません．${error.message}`,true);}finally{event.target.value='';}
 };
 $('#reset-sample').onclick=()=>{checkpoint();stopMedia();board=createSample();selected=null;setTool('select');thumbnails.clear();pdfDocs.clear();render();scheduleSave();fit();toast('サンプルを復元しました．⌘Zで前の状態に戻せます．');};
 let resizeTimer;new ResizeObserver(()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>applyViewport(),70);}).observe(viewport);
 if(window.innerWidth<800){$('#library').hidden=true;$('#expand-library').hidden=false;}
-render();fit();setTool('select');if(!saved)scheduleSave();
+if(host)setupNative();
+render();if(host&&board.viewport&&board.viewport.zoom>0){view={...board.viewport};applyViewport();}else fit();setTool('select');if(!saved&&!host)scheduleSave();
+
+async function flushSave(){
+  clearTimeout(saveTimer);if(dirty)persist();await lastSave;
+}
+async function editManaged(id){
+  const c=board.cards.find(c=>c.id===id);if(!host||!c?.source)return;
+  try{await flushSave();$('#viewer').close();await host.call('edit',c.source);}
+  catch(error){toast(error.message,true);}
+}
+async function hostImport(file,notes={}){
+  let filename=file.name,data;
+  // Karte's image pipeline stores raster originals and WebP previews．
+  if(file.name.toLowerCase().endsWith('.svg')){
+    const url=URL.createObjectURL(file);try{
+      const img=new Image();img.src=url;await img.decode();
+      const canvas=document.createElement('canvas');canvas.width=Math.min(4096,img.naturalWidth||1200);canvas.height=Math.round(canvas.width*(img.naturalHeight||800)/(img.naturalWidth||1200));
+      canvas.getContext('2d').drawImage(img,0,0,canvas.width,canvas.height);data=canvas.toDataURL('image/png').split(',')[1];filename=filename.replace(/\.svg$/i,'.png');
+    }finally{URL.revokeObjectURL(url);}
+  }else{data=(await readDataURL(file)).split(',')[1];if(/\.(markdown|txt)$/i.test(filename))filename=filename.replace(/\.(markdown|txt)$/i,'.md');}
+  return host.call('import',{filename,data,...notes});
+}
+async function materializeBoard(data){
+  const copy=structuredClone(data);delete copy.managedPath;delete copy.viewport;
+  for(const c of copy.cards){
+    if(['note','excerpt'].includes(c.kind))continue;
+    let file;
+    if(c.kind==='markdown')file=new File([c.body],c.filename||`${c.title}.md`,{type:'text/markdown'});
+    else{
+      const src=c.attachment||c.asset;
+      if(!src)throw new Error('資料本体を含むJSONを読み込んでください．');
+      const response=await fetch(src);if(!response.ok)throw new Error('資料を読み込めません．');
+      const blob=await response.blob();file=new File([blob],c.filename||`${c.title}.${c.kind==='pdf'?'pdf':c.kind==='audio'?'wav':'png'}`,{type:blob.type});
+    }
+    const resource=await hostImport(file,{...(typeof c.metadata==='string'?{metadata:c.metadata}:{}),...(typeof c.transcript==='string'?{transcript:c.transcript}:{})});Object.assign(c,resourcePatch(resource));delete c.attachment;delete c.asset;delete c.metadata;delete c.transcript;
+  }
+  for(const e of copy.edges)for(const side of ['from','to']){const a=e[`${side}Anchor`],c=copy.cards.find(c=>c.id===e[side]);if(a?.type?.startsWith('pdf-')&&c?.revision)a.revision=c.revision;}
+  return copy;
+}
+function replaceNativeBoard(data){
+  stopMedia();$('#viewer').close();board=validateBoard(data);selected=null;history=[];linkFrom=null;cancelReference();thumbnails.clear();thumbnailSizes.clear();pdfDocs.clear();audioPlayers.clear();dirty=false;host.notify('dirty',false);render();
+  if(board.viewport?.zoom>0){view={...board.viewport};applyViewport();}else fit();$('#save-state').textContent=board.managedPath?'● Karteに保存済み':'○ 資料を追加するとKarteに保存';
+}
+async function nativePicker(mode){
+  try{
+    await flushSave();const items=await host.call(mode==='boards'?'boards':'resources');
+    const dialog=$('#native-picker');dialog.innerHTML=`<div class="inspector-heading"><h2>${mode==='boards'?'ボードを開く':'Karteの管理資料を追加'}</h2><button class="icon-button" id="close-native-picker" aria-label="資料選択を閉じる">×</button></div><input id="native-search" class="native-search" aria-label="管理資料を検索" placeholder="ファイル名・保存先で検索…"><div class="native-resource-list"></div>`;
+    const draw=()=>{const q=$('#native-search').value.toLocaleLowerCase();$('.native-resource-list',dialog).innerHTML=items.filter(r=>`${r.title} ${r.path}`.toLocaleLowerCase().includes(q)).map(r=>`<button class="native-resource" data-path="${esc(r.path)}"><span>${esc(mode==='boards'?'BOARD':KINDS[r.kind]||r.kind)}</span><strong>${esc(r.title||r.path)}</strong><small>${esc(r.path)}</small></button>`).join('')||'<p class="fineprint">該当する資料がありません．ファイルをドロップして取り込めます．</p>';};
+    draw();$('#native-search').oninput=draw;$('#close-native-picker').onclick=()=>dialog.close();
+    $('.native-resource-list',dialog).onclick=async event=>{const button=event.target.closest('[data-path]');if(!button)return;button.disabled=true;
+      try{if(mode==='boards'){replaceNativeBoard(await host.call('open-board',button.dataset.path));}
+      else{const r=await host.call('resource',button.dataset.path);checkpoint();const p={x:(viewport.clientWidth/2-view.x)/view.zoom,y:(viewport.clientHeight/2-view.y)/view.zoom};
+        const c={id:uid('material'),...resourcePatch(r),title:r.title,filename:r.path.split('/').pop(),x:p.x,y:p.y,w:r.kind==='audio'?310:280,h:r.kind==='audio'?230:330,badge:'管理資料'};
+        board.cards.push(c);render();select('card',c.id);scheduleSave();}
+      dialog.close();}catch(error){button.disabled=false;toast(error.message,true);}
+    };dialog.showModal();
+  }catch(error){toast(error.message,true);}
+}
+function setupNative(){
+  $('#fit').onclick=()=>{fit();if(board.managedPath)scheduleSave();};
+  document.body.classList.add('native-wall');
+  // WebKit's native picker can disable JSON when extension and MIME filters are mixed．
+  // The same explicit size，extension and schema validation still runs after selection．
+  $('#board-input').removeAttribute('accept');$('#file-input').removeAttribute('accept');
+  $('.brand').removeAttribute('href');$('.local-badge').textContent='● Karteの管理ワークスペース';$('.library-bottom p').textContent='管理資料を参照し，ボードと原資料をそれぞれ保存します．';
+  $('.poc-badge').textContent='Karte';$('.brand-sub').textContent='RESEARCH WALL';
+  $('.fineprint',$('#help-dialog')).textContent='ボードはKarteの.board.mdとして保存します．PDF・画像・音声の本体と，引用・判断理由は分けて管理します．Markdownと音声メモは通常の編集画面，画像はメタデータ編集へ開けます．PDF本体の編集とOCRは含みません．';
+  const picker=document.createElement('dialog');picker.id='native-picker';picker.className='native-picker';document.body.append(picker);
+  const button=document.createElement('button');button.className='button import-button';button.id='managed-resources';button.textContent='▤ 管理資料から選ぶ';button.onclick=()=>void nativePicker('resources');$('#import-files').before(button);
+  const jsonOpen=$('#open-board').cloneNode(true);jsonOpen.id='import-json';jsonOpen.textContent='JSON読込';jsonOpen.onclick=()=>$('#board-input').click();$('#open-board').after(jsonOpen);
+  $('#open-board').onclick=()=>void nativePicker('boards');$('#open-board').textContent='ボードを開く';$('#reset-sample').textContent='＋ 新しいボード';$('#reset-sample').onclick=async()=>{try{await flushSave();replaceNativeBoard(await host.call('new-board','リサーチボード'));}catch(error){toast(error.message,true);}};
+  $('#save-state').textContent=board.managedPath?'● Karteに保存済み':'○ 資料を追加するとKarteに保存';$('#save-state').style.cursor='pointer';$('#save-state').onclick=()=>{if(dirty)void flushSave().catch(()=>{});};
+  const edit=document.createElement('button');edit.className='button';edit.id='viewer-native-edit';edit.textContent='Karteで編集 ↗';edit.onclick=()=>void editManaged(viewerCardId);$('#close-viewer').before(edit);
+  new MutationObserver(()=>{const c=board.cards.find(c=>c.id===viewerCardId);edit.hidden=!c?.source;edit.textContent=c?.kind==='pdf'?'KarteのPDF表示 ↗':'Karteで編集 ↗';}).observe($('#viewer'),{attributes:true,attributeFilter:['open']});
+  host.on(async(operation,value)=>{
+    if(operation==='board'){try{await flushSave();replaceNativeBoard(value);}catch(error){toast(`切替前のボードを保存できません．${error.message}`,true);}}
+    if(operation==='resources'){
+      let changed=false;
+      for(const c of board.cards){if(!c.source)continue;const fresh=value.find(x=>x.id===c.id&&x.source===c.source);if(!fresh)continue;
+        if(c.revision!==fresh.revision||c.body!==fresh.body||c.sourceError!==fresh.sourceError||c.editPath!==fresh.editPath){
+          const patch={body:fresh.body,resourceURL:fresh.resourceURL,revision:fresh.revision,editPath:fresh.editPath,sourceError:fresh.sourceError};Object.assign(c,patch);changed=true;
+          for(const [key]of thumbnails)if(key.startsWith(`${c.id}:`))thumbnails.delete(key);pdfDocs.delete(c.id);audioPlayers.get(c.id)?.pause();audioPlayers.delete(c.id);
+        }
+      }
+      if(changed){renderCards();renderEdges();if(!$('#inspector').contains(document.activeElement))renderInspector();renderLibrary();}
+    }
+    if(operation==='flush'){try{await flushSave();host.notify('flushed');}catch(error){window.parent.postMessage({channel:'karte.research-wall.v1',operation:'flushed',error:error.message},location.origin);}}
+  });
+}

@@ -81,3 +81,16 @@ test('full-page preview preserves the complete page and maps highlights inside i
   assert.ok(Math.abs(whole.x-layout.x/234)<.0001);assert.equal(whole.y,0);assert.equal(whole.h,1);
   const board=createSample();board.cards[0].pdfPreview='page';assert.equal(validateBoard(JSON.parse(JSON.stringify(board))).cards[0].pdfPreview,'page');
 });
+
+test('native projection preserves legacy metadata，unknown relationships and reference anchors',async()=>{
+  const {fromKarteBoard,toKarteBoard}=await import('../model.mjs');
+  const native={path:'content/test.board.md',title:'調査',docId:'board:1',tags:['research'],notes:'残すノート',cards:[{id:'a',type:'resource',source:'content/a.md',title:'資料',body:'古い本文',meta:{custom:'keep'}},{id:'b',type:'claim',title:'判断',body:'仮説',reviewed:true}],edges:[{id:'e',from:'a',to:'b',relation:'references',label:'existing',description:'根拠',meta:{custom:42}}],layout:{cards:{a:{x:10,y:20,width:280,height:330},b:{x:350,y:20,width:270,height:230}},viewport:{x:0,y:0,zoom:.8}}};
+  const wall=fromKarteBoard(native,[{path:'content/a.md',kind:'markdown',body:'---\ntitle: A\n---\n現地スケッチを参照．',url:'',revision:'v2'}]);
+  assert.equal(wall.cards[0].body,'現地スケッチを参照．');assert.equal(wall.edges[0].relation,'related_to');
+  wall.edges[0].fromAnchor=textQuote(wall.cards[0].body,0,6);wall.edges[0].status='reviewed';
+  const saved=toKarteBoard(wall,native);
+  assert.equal(saved.docId,'board:1');assert.equal(saved.notes,'残すノート');assert.equal(saved.cards[0].meta.custom,'keep');assert.equal(saved.cards[1].type,'claim');assert.equal(saved.edges[0].relation,'references');assert.equal(saved.edges[0].meta.custom,42);
+  const reloaded=fromKarteBoard(JSON.parse(JSON.stringify(saved)));
+  assert.deepEqual(reloaded.edges[0].fromAnchor,wall.edges[0].fromAnchor);assert.equal(reloaded.edges[0].status,'reviewed');
+  assert.ok(!JSON.stringify(saved).includes('resourceURL'));assert.ok(!JSON.stringify(saved).includes('revision'));
+});

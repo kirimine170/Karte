@@ -26,7 +26,7 @@ export function extractAudioPath(content: string): string | null {
     if (!match) {
         return null;
     }
-    const yamlContent = match[1];
+    const yamlContent = match[1] || '';
     const simpleRegex = /^audio_path:\s*(.+?)\s*$/m;
     const simpleMatch = yamlContent.match(simpleRegex);
     if (simpleMatch && simpleMatch[1]) {

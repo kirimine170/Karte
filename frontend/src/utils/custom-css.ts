@@ -73,7 +73,7 @@ export function injectCustomCSS(html: string, customCss: string, theme: Theme): 
     } else if (html.includes('<head>')) {
         html = html.replace('<head>', `<head><style id="karte-custom-css">${cssToInject}</style>`);
     } else if (html.includes('<html')) {
-        html = html.replace(/<html([^>]*)>/i, (match, attrs) => {
+        html = html.replace(/<html([^>]*)>/i, (_match, attrs) => {
             const normalized = attrs.replace(/\s*data-theme="[^"]*"/i, '');
             return `<html${normalized} data-theme="${theme}"><head><style id="karte-custom-css">${cssToInject}</style></head>`;
         });
@@ -96,7 +96,7 @@ export function injectCustomCSS(html: string, customCss: string, theme: Theme): 
     }
 
     if (html.includes('<html')) {
-        html = html.replace(/<html([^>]*)>/i, (match, attrs) => {
+        html = html.replace(/<html([^>]*)>/i, (_match, attrs) => {
             const normalized = attrs.replace(/\s*data-theme="[^"]*"/i, '');
             return `<html${normalized} data-theme="${theme}">`;
         });

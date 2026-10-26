@@ -1684,3 +1684,25 @@ main {
 .pdf-preview-toggle { color:#7862a6; background:#eee9f5; border:1px solid #e1d7ef; border-radius:4px; padding:3px 6px; font-size:9px; letter-spacing:0; line-height:1; }
 .pdf-preview-toggle:hover { background:#e4d8f5; }
 .card.card-pdf .paper-fallback { padding:18px 10px; font-family:inherit; font-size:11px; color:#a49cae; }
+
+.native-wall .app-header { gap: 16px; }
+.native-wall .brand { cursor: default; }
+.native-wall .header-actions { gap: 6px; }
+.native-wall .brand-sub { font-size: 9px; }
+.native-wall .board-title { min-width: 120px; }
+.native-wall .board-title input { width: 100%; }
+.native-wall #fullscreen { display: none; }
+.native-wall .library-bottom p { line-height: 1.7; }
+.native-wall #managed-resources { margin-bottom: 8px; }
+.native-wall .managed-source { overflow-wrap: anywhere; }
+.missing-source { color: #b35447; font-size: 11px; }
+.native-picker { width: min(680px,90vw); max-height: 82vh; padding: 26px; border: 1px solid #d8cfe8; border-radius: 20px; box-shadow: 0 24px 80px #36244835; color: #352b42; }
+.native-picker::backdrop { background: #251a3c66; backdrop-filter: blur(5px); }
+.native-picker h2 { margin: 0; font-size: 19px; }
+.native-search { width: 100%; padding: 12px; border: 1px solid #ddd4e9; border-radius: 10px; margin: 16px 0; }
+.native-resource-list { display: grid; gap: 8px; max-height: 55vh; overflow-y: auto; }
+.native-resource { display: grid; gap: 5px; text-align: left; background: #faf8ff; border: 1px solid #e4dbed; border-radius: 10px; padding: 14px; cursor: pointer; color: inherit; }
+.native-resource:hover { background: #f0e9fc; border-color: #a18ac1; }
+.native-resource > span { font-size: 10px; color: #7862a6; letter-spacing: .1em; }
+.native-resource small { overflow-wrap: anywhere; color: #81758e; }
+@media(max-width:1100px) { .native-wall .brand { display:none; } .native-wall .app-header { padding-inline:16px; } .native-wall #save-state { max-width:105px; white-space:normal; } }

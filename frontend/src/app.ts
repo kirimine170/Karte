@@ -4,7 +4,7 @@ import { Sidebar } from './components/sidebar';
 import { MainTabs } from './components/main-tabs';
 import { EditorLayout } from './components/editor-layout';
 import { GraphView } from './components/graph-view';
-import { BoardView } from './components/board-view';
+import { ResearchWall } from './components/research-wall';
 import { ModalHost } from './components/modal-host';
 import { OverlayHost } from './components/overlay-host';
 import { ImageGallery } from './components/image-gallery';
@@ -30,7 +30,7 @@ export class App {
         mainTabs: MainTabs | null;
         editorLayout: EditorLayout | null;
         graphView: GraphView | null;
-        boardView: BoardView | null;
+        boardView: ResearchWall | null;
         modalHost: ModalHost | null;
         overlayHost: OverlayHost | null;
         imageGallery: ImageGallery | null;
@@ -115,7 +115,7 @@ export class App {
         this.components.graphView = new GraphView(this.api);
         this.components.graphView.init();
 
-        this.components.boardView = new BoardView(this.api);
+        this.components.boardView = new ResearchWall(this.api, this.runtime!);
         this.components.boardView.init();
 
         this.components.modalHost = new ModalHost(this.api);
@@ -266,7 +266,7 @@ export class App {
             }
             useExportStore.getState().setTranscriptionProgress(false);
             useUIStore.getState().setStatusMessage('文字起こしが完了しました', 3000);
-            if (payload?.transcriptPath) {
+            if (payload?.transcriptPath && useUIStore.getState().activeTab !== 'board') {
                 this.refreshFileList().catch((error) => {
                     console.error('Failed to refresh file list after transcription:', error);
                 });
@@ -382,7 +382,11 @@ export class App {
             return;
         }
 
-        this.runtime.EventsOn('check-unsaved-before-close', () => {
+        this.runtime.EventsOn('check-unsaved-before-close', async () => {
+            if (this.components.boardView?.hasUnsavedChanges() && !await this.components.boardView.flush()) {
+                useUIStore.getState().setStatusMessage('ボードを保存できませんでした．ボードで保存エラーを確認してください．', 5000);
+                return;
+            }
             const docStore = useDocStore.getState();
             if (!docStore.hasUnsavedChanges) {
                 this.api?.AllowClose();
@@ -428,6 +432,8 @@ export class App {
             useUIStore.getState().setStatusMessage('ファイルが選択されていません', 2000);
             return false;
         }
+
+        if (docStore.currentPath.toLowerCase().endsWith('.board.md')) return await this.components.boardView?.flush() ?? false;
 
         if (docStore.currentPath.toLowerCase().endsWith('.pdf')) {
             useUIStore.getState().setStatusMessage('PDF閲覧中は保存できません', 2000);
