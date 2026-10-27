@@ -10,6 +10,24 @@ import (
 	"testing"
 )
 
+func TestMergeEnvOverridesWindowsPathCaseInsensitively(t *testing.T) {
+	merged := mergeEnv([]string{"Path=original", "OTHER=preserved"}, map[string]string{"PATH": "runtime-dlls;compiler"})
+	var paths []string
+	for _, item := range merged {
+		name, value, _ := strings.Cut(item, "=")
+		if strings.EqualFold(name, "PATH") {
+			paths = append(paths, value)
+		}
+	}
+	if runtime.GOOS == "windows" {
+		if len(paths) != 1 || paths[0] != "runtime-dlls;compiler" {
+			t.Fatalf("Windows PATH override lost or duplicated: %v", merged)
+		}
+	} else if len(paths) != 2 {
+		t.Fatalf("case-sensitive environment keys were merged: %v", merged)
+	}
+}
+
 func TestBuildKarteMCPBinaryUsesTargetPlatform(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {

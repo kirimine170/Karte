@@ -7,7 +7,38 @@ import (
 	"errors"
 	"image/color"
 	"testing"
+
+	"golang.org/x/sys/windows"
 )
+
+func TestCopyClipboardDIBCopiesNativeMemory(t *testing.T) {
+	want := []byte("Windows clipboard bytes")
+	handle, _, err := kernel32.NewProc("GlobalAlloc").Call(2, uintptr(len(want)))
+	if handle == 0 {
+		t.Fatalf("GlobalAlloc: %v", err)
+	}
+	defer kernel32.NewProc("GlobalFree").Call(handle)
+	pointer, _, err := procGlobalLock.Call(handle)
+	if pointer == 0 {
+		t.Fatalf("GlobalLock: %v", err)
+	}
+	defer procGlobalUnlock.Call(handle)
+	if err := windows.WriteProcessMemory(windows.CurrentProcess(), pointer, &want[0], uintptr(len(want)), nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := copyClipboardDIB(pointer, uintptr(len(want)))
+	if err != nil || string(got) != string(want) {
+		t.Fatalf("native DIB copy = %q, %v; want %q", got, err, want)
+	}
+}
+
+func TestCopyClipboardDIBRejectsInvalidSize(t *testing.T) {
+	for _, size := range []uintptr{0, maxClipboardDIBBytes + 1} {
+		if _, err := copyClipboardDIB(0, size); err == nil {
+			t.Fatalf("invalid clipboard size %d was accepted", size)
+		}
+	}
+}
 
 func TestWaitForClipboardDIBReportsCancellation(t *testing.T) {
 	_, err := waitForClipboardDIB(0, 0)

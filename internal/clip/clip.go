@@ -1001,6 +1001,12 @@ func moveFileExclusive(source, destination string) error {
 		_ = os.Remove(destination)
 		return err
 	}
+	// Windows does not allow deleting an open source file. Finish reading and
+	// close its handle before removing it after the exclusive copy succeeds.
+	if err := sourceFile.Close(); err != nil {
+		_ = os.Remove(destination)
+		return err
+	}
 	if err := os.Remove(source); err != nil {
 		_ = os.Remove(destination)
 		return err

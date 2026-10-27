@@ -22,7 +22,7 @@ Karteは、Wailsフレームワークを使用して開発されたクロスプ�
 ### 前提条件
 
 - Go 1.25.0（`go.mod`を正本とする）
-- Node.js 22.13.0（`.node-version`を正本とする）
+- Node.js 22.22.2（`.node-version`を正本とする）
 - Wails CLI v2
 
 ### Wails CLIのインストール

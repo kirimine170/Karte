@@ -7,6 +7,7 @@ require (
 	github.com/chai2010/webp v1.4.0
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/go-shiori/go-readability v0.0.0-20251205110129-5db1dc9836f0
+	github.com/google/uuid v1.6.0
 	github.com/gordonklaus/portaudio v0.0.0-20250206071425-98a94950218b
 	github.com/k2-fsa/sherpa-onnx-go-macos v1.13.4
 	github.com/k2-fsa/sherpa-onnx-go-windows v1.13.4
@@ -40,7 +41,6 @@ require (
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
 	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
@@ -73,6 +73,6 @@ require (
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 )
 
-replace github.com/kirimine170/KarteRenderer => github.com/kirimine170/Karte_renderer v0.0.0-20261025131001-6b3f4ae6e8d9
+replace github.com/kirimine170/KarteRenderer => github.com/kirimine170/Karte_renderer v0.0.0-20261027002215-3aa42085865b
 
 // replace github.com/wailsapp/wails/v2 v2.10.2 => /Users/kirimine170/Desktop/Kiri_Lab/Karte

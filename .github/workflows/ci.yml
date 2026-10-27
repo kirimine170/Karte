@@ -175,10 +175,11 @@ jobs:
           go test github.com/kirimine170/KarteRenderer/...
           go test . -run 'Test(KarteRendererDependencyContractFixtures|ExportHTMLToPDFWithRendererUsesTemporaryHTMLInput)$'
 
-      - name: Run Windows regression tests
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: go test . ./internal/audio ./internal/runtimepath ./internal/screenshot ./internal/webpchunk ./internal/canonical ./internal/ephyrecordsv2
+      - name: Run full native platform regression tests
+        run: go test -count=1 ./...
+
+      - name: Run native platform vet checks
+        run: go vet ./...
 
       - name: Prepare font file for Windows build
         if: runner.os == 'Windows'
