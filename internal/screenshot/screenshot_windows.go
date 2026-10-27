@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
-	"unsafe"
 
 	"karte/internal/webputil"
 
@@ -129,12 +128,23 @@ func readClipboardDIB() ([]byte, error) {
 		return nil, fmt.Errorf("lock clipboard DIB: %v", lockErr)
 	}
 	defer procGlobalUnlock.Call(handle)
+	return copyClipboardDIB(pointer, size)
+}
 
-	if size > maxClipboardDIBBytes || size > uintptr(^uint(0)>>1) {
+func copyClipboardDIB(pointer, size uintptr) ([]byte, error) {
+	if size == 0 || size > maxClipboardDIBBytes || size > uintptr(^uint(0)>>1) {
 		return nil, fmt.Errorf("clipboard DIB is too large: %d bytes", size)
 	}
 	data := make([]byte, int(size))
-	copy(data, unsafe.Slice((*byte)(unsafe.Pointer(pointer)), int(size)))
+	// GlobalLock returns an address owned by Windows, not a Go pointer. Copy
+	// through the native API so uintptr never needs an unsafe.Pointer conversion.
+	var copied uintptr
+	if err := windows.ReadProcessMemory(windows.CurrentProcess(), pointer, &data[0], size, &copied); err != nil {
+		return nil, fmt.Errorf("read clipboard DIB memory: %w", err)
+	}
+	if copied != size {
+		return nil, fmt.Errorf("read clipboard DIB memory: copied %d of %d bytes", copied, size)
+	}
 	return data, nil
 }
 

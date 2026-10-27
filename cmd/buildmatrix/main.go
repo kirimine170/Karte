@@ -745,14 +745,20 @@ func mergeEnv(base []string, extra map[string]string) []string {
 		return base
 	}
 	envMap := make(map[string]string, len(base)+len(extra))
+	key := func(name string) string {
+		if runtime.GOOS == "windows" {
+			return strings.ToUpper(name)
+		}
+		return name
+	}
 	for _, kv := range base {
 		parts := strings.SplitN(kv, "=", 2)
 		if len(parts) == 2 {
-			envMap[parts[0]] = parts[1]
+			envMap[key(parts[0])] = parts[1]
 		}
 	}
 	for k, v := range extra {
-		envMap[k] = v
+		envMap[key(k)] = v
 	}
 	merged := make([]string, 0, len(envMap))
 	for k, v := range envMap {
