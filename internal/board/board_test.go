@@ -170,3 +170,40 @@ title: Broken
 		t.Fatalf("expected ErrMissingEdges, got %v", err)
 	}
 }
+
+func TestResearchReferencesRoundTrip(t *testing.T) {
+	doc := &Document{Title: "研究ボード", Cards: []Card{{ID: "report", Type: "resource", Source: "content/paper.pdf", Meta: map[string]any{"researchWall": map[string]any{"kind": "pdf", "page": 2}}}, {ID: "note", Type: "claim", Body: "現地スケッチ"}}, Edges: []Edge{{ID: "reference", From: "report", To: "note", Relation: "supports", Description: "図を照合", Meta: map[string]any{"researchWall": map[string]any{"status": "reviewed", "fromAnchor": map[string]any{"type": "pdf-region", "page": 2, "exact": "図1", "rects": []any{map[string]any{"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.1}}}}}}}}
+	text, err := Serialize(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse("content/research.board.md", text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text2, err := Serialize(parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"fromAnchor:", "pdf-region", "reviewed", "図を照合", "content/paper.pdf"} {
+		if !strings.Contains(text2, want) {
+			t.Fatalf("lost reference %q: %s", want, text2)
+		}
+	}
+}
+
+func TestArbitraryMarkdownBodySurvivesBoardSections(t *testing.T) {
+	body := "# 資料\n\n## Edges\n\n### card:fake\n\n---\n\n```yaml\nrelation: supports\n```\n\n本文\n"
+	doc := &Document{Title: "Markdown", Cards: []Card{{ID: "one", Type: "resource", Body: body}, {ID: "two", Type: "claim", Body: "二枚目"}}, Edges: []Edge{{ID: "e", From: "one", To: "two", Relation: "supports"}}}
+	serialized, err := Serialize(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse("content/md.board.md", serialized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Cards) != 2 || parsed.Cards[0].Body != body || len(parsed.Edges) != 1 {
+		t.Fatalf("Markdown changed board structure: %#v", parsed)
+	}
+}

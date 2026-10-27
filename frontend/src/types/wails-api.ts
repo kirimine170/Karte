@@ -85,6 +85,7 @@ export interface BoardCard {
 }
 
 export interface BoardEdgeRecord {
+    meta?: Record<string, any>;
     id: string;
     from: string;
     to: string;
@@ -200,10 +201,26 @@ export interface EphyReceipt {
 }
 
 // Wails App API
+export interface ResearchResource {
+    path: string;
+    kind: 'markdown' | 'pdf' | 'image' | 'audio';
+    title: string;
+    body: string;
+    url: string;
+    revision: string;
+    editPath: string;
+}
+
 export interface WailsAppAPI {
     SaveInstagramDraft?(draftJSON: string): Promise<string>;
     SaveInstagramImage?(filename: string, jpegBase64: string): Promise<string>;
     GetFileList(): Promise<FileItem[]>;
+    ListResearchResources(): Promise<ResearchResource[]>;
+    LoadResearchResource(path: string): Promise<ResearchResource>;
+    ImportResearchResource(filename: string, encoded: string, restoreAudioNotes: boolean): Promise<ResearchResource>;
+    EditResearchResource(path: string): Promise<string>;
+    CreateResearchBoard(title: string): Promise<BoardDocument>;
+    SaveResearchBoardExport(filename: string, content: string): Promise<string>;
     LoadFile(path: string): Promise<string>;
     LoadBoard(path: string): Promise<BoardDocument>;
     SaveBoard(path: string, board: BoardDocument): Promise<BoardDocument>;

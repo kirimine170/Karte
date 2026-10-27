@@ -64,8 +64,8 @@ export class MainTabs extends BaseComponent {
     }
 
     private switchTab(activeTab: ActiveTab): void {
-        document.getElementById('contentArea')?.classList.toggle('postlab-mode', activeTab === 'postlab');
-        document.getElementById('mainContainer')?.classList.toggle('postlab-mode', activeTab === 'postlab');
+        document.getElementById('contentArea')?.classList.toggle('postlab-mode', activeTab === 'postlab' || activeTab === 'board');
+        document.getElementById('mainContainer')?.classList.toggle('postlab-mode', activeTab === 'postlab' || activeTab === 'board');
         // タブボタンの更新
         this.tabButtons.forEach((button) => {
             const tabName = button.dataset.tab;

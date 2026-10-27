@@ -9,7 +9,7 @@ function parseImportArgs(line: string): Record<string, string> {
     const args: Record<string, string> = {};
     const matches = line.matchAll(importArgsRegex);
     for (const match of matches) {
-        args[match[1]] = match[2];
+        if (match[1] && match[2] !== undefined) args[match[1]] = match[2];
     }
     return args;
 }
@@ -85,7 +85,7 @@ export async function prepareMarkdownForPreview(content: string, api: WailsAppAP
     for (const line of lines) {
         const importMatch = line.match(importCsvLineRegex);
         if (importMatch) {
-            const args = parseImportArgs(importMatch[1]);
+            const args = parseImportArgs(importMatch[1] || '');
             if (args.type === 'csv' && args.path) {
                 const table = await resolveCsvImportToHtml(args.path, api);
                 pushHtmlBlock(output, table);

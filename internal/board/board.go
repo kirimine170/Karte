@@ -57,12 +57,13 @@ type Card struct {
 }
 
 type Edge struct {
-	ID          string `json:"id"`
-	From        string `json:"from"`
-	To          string `json:"to"`
-	Relation    string `json:"relation"`
-	Label       string `json:"label,omitempty"`
-	Description string `json:"description,omitempty"`
+	ID          string         `json:"id"`
+	From        string         `json:"from"`
+	To          string         `json:"to"`
+	Relation    string         `json:"relation"`
+	Label       string         `json:"label,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Meta        map[string]any `json:"meta,omitempty"`
 }
 
 type Layout struct {
@@ -94,12 +95,13 @@ type boardFrontMatter struct {
 }
 
 type edgeYAML struct {
-	ID          string `yaml:"id"`
-	From        string `yaml:"from"`
-	To          string `yaml:"to"`
-	Relation    string `yaml:"relation"`
-	Label       string `yaml:"label,omitempty"`
-	Description string `yaml:"description,omitempty"`
+	ID          string         `yaml:"id"`
+	From        string         `yaml:"from"`
+	To          string         `yaml:"to"`
+	Relation    string         `yaml:"relation"`
+	Label       string         `yaml:"label,omitempty"`
+	Description string         `yaml:"description,omitempty"`
+	Meta        map[string]any `yaml:"meta,omitempty"`
 }
 
 type layoutYAML struct {
@@ -212,11 +214,16 @@ func Serialize(doc *Document) (string, error) {
 		b.WriteString(fmt.Sprintf("### %s\n\n", card.ID))
 		b.WriteString("```yaml\n")
 		b.WriteString(serializeCardYAML(card))
-		b.WriteString("```\n\n")
-		if strings.TrimSpace(card.Body) != "" {
-			b.WriteString(strings.TrimSpace(card.Body))
-			b.WriteString("\n\n")
+		// Keep arbitrary Markdown inside YAML so its headings and separators cannot
+		// be mistaken for board sections or card boundaries．Legacy bodies still parse．
+		if card.Body != "" {
+			bodyBytes, err := yaml.Marshal(map[string]string{"body_markdown": card.Body})
+			if err != nil {
+				return "", err
+			}
+			b.Write(bodyBytes)
 		}
+		b.WriteString("```\n\n")
 		if i < len(doc.Cards)-1 {
 			b.WriteString("---\n\n")
 		}
@@ -269,13 +276,17 @@ func splitCardBlocks(section string) []string {
 	lines := strings.Split(section, "\n")
 	var blocks []string
 	var current []string
+	inFence := false
 	for _, line := range lines {
-		if strings.HasPrefix(line, "### ") && len(current) > 0 {
+		if strings.HasPrefix(line, "```") {
+			inFence = !inFence
+		}
+		if !inFence && strings.HasPrefix(line, "### ") && len(current) > 0 {
 			blocks = append(blocks, strings.Join(current, "\n"))
 			current = []string{line}
 			continue
 		}
-		if strings.TrimSpace(line) == "---" {
+		if !inFence && strings.TrimSpace(line) == "---" {
 			continue
 		}
 		current = append(current, line)
@@ -323,8 +334,12 @@ func parseCard(block string) (Card, error) {
 	delete(meta, "model")
 	delete(meta, "reviewed")
 	delete(meta, "tags")
-	card.Meta = meta
 	card.Body = strings.TrimSpace(body)
+	if saved, ok := meta["body_markdown"].(string); ok {
+		card.Body = saved
+		delete(meta, "body_markdown")
+	}
+	card.Meta = meta
 	return card, nil
 }
 
@@ -346,6 +361,7 @@ func parseEdges(section string) ([]Edge, error) {
 			Relation:    item.Relation,
 			Label:       item.Label,
 			Description: item.Description,
+			Meta:        item.Meta,
 		})
 	}
 	return edges, nil
@@ -384,8 +400,12 @@ func parseSections(body string) map[string]string {
 		sections[current] = strings.TrimSpace(buf.String())
 		buf.Reset()
 	}
+	inFence := false
 	for _, line := range lines {
-		if strings.HasPrefix(line, "## ") {
+		if strings.HasPrefix(line, "```") {
+			inFence = !inFence
+		}
+		if !inFence && strings.HasPrefix(line, "## ") {
 			flush()
 			current = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, "## ")))
 			continue
@@ -414,7 +434,7 @@ func extractFirstYAMLBlock(section string) (string, string, error) {
 	if end < 0 {
 		return "", "", fmt.Errorf("yaml code block is not closed")
 	}
-	yamlBlock := strings.TrimSpace(afterStart[:end])
+	yamlBlock := afterStart[:end+1]
 	body := strings.TrimSpace(afterStart[end+len("\n```"):])
 	return yamlBlock, body, nil
 }
@@ -501,6 +521,7 @@ func toEdgeYAML(edges []Edge) []edgeYAML {
 			Relation:    edge.Relation,
 			Label:       edge.Label,
 			Description: edge.Description,
+			Meta:        edge.Meta,
 		})
 	}
 	return items

@@ -1,0 +1,8 @@
+{
+  "name": "karte-crazy-wall-poc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "node server.mjs", "start": "node server.mjs", "test": "node --test tests/*.test.mjs" },
+  "dependencies": { "pdfjs-dist": "6.3.289" }
+}

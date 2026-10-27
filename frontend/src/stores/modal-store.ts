@@ -1,6 +1,5 @@
 import { createStore } from 'zustand/vanilla';
 import type { ModalState } from '../types/ui-state';
-import type { ConflictResolutionStrategy } from '../types/wails-api';
 
 interface ModalStore extends ModalState {
     // Actions

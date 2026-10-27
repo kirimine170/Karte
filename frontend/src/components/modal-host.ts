@@ -542,6 +542,7 @@ export class ModalHost extends BaseComponent {
                 // 画像プレビューモーダル
                 if (this.imagePreviewModal) {
                     this.imagePreviewModal.style.display = state.imagePreviewModal.visible ? 'flex' : 'none';
+                    this.imagePreviewModal.setAttribute('aria-hidden', String(!state.imagePreviewModal.visible));
                     if (state.imagePreviewModal.visible) {
                         this.updateImagePreview(state.imagePreviewModal);
                     }

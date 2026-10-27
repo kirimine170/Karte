@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { researchWallPreview } from './research-wall-preview';
 const isBrowser = typeof window !== 'undefined' && !window.go;
 
 function sanitizeCsvValue(value) {
@@ -73,7 +74,7 @@ export function createBrowserApi() {
         return null;
     }
 
-    return {
+    return researchWallPreview({
         async GetFileList() {
             return [
                 { path: 'content/README.md', title: 'README', modTime: '2026-06-06T08:00:00.000Z' },
@@ -406,5 +407,5 @@ export function createBrowserApi() {
         async SaveEventLogs() {
             return true;
         }
-    };
+    });
 }
