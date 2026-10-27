@@ -8,6 +8,7 @@ on:
       - '.github/workflows/frontend-ci.yml'
       - '.node-version'
       - 'frontend/**'
+      - 'examples/crazy-wall/**'
       - '!frontend/tests/**/*.e2e.*'
       - '!frontend/playwright.config.*'
   pull_request:
@@ -16,6 +17,7 @@ on:
       - '.github/workflows/frontend-ci.yml'
       - '.node-version'
       - 'frontend/**'
+      - 'examples/crazy-wall/**'
       - '!frontend/tests/**/*.e2e.*'
       - '!frontend/playwright.config.*'
 
@@ -56,6 +58,9 @@ jobs:
       - name: Frontend tests
         working-directory: frontend
         run: npm test --if-present -- --run
+
+      - name: Research Wall model tests
+        run: node --test examples/crazy-wall/tests/*.test.mjs
 
       - name: Build frontend assets
         working-directory: frontend
