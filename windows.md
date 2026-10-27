@@ -76,7 +76,7 @@ DPIスケーリングはWindows側で処理され、選択結果はWebPとして
 ## 開発環境
 
 - Go 1.25.0（`go.mod`）
-- Node.js 22.13.0（`.node-version`）
+- Node.js 22.22.2（`.node-version`。現在のjsdomなどの依存要件に合わせる）
 - Wails CLI v2（`go.mod`のWailsバージョン）
 - MSYS2 MinGW64のGCC、pkg-config、PortAudio
 
@@ -102,6 +102,9 @@ Authenticode署名、`signtool verify /pa`、起動スモーク、ZIPとSHA-256�
 ない手動実行ではunsigned RCを作れますが、v1公開には使用できません。
 
 ## 診断
+
+HTMLプレビューの書き出しは、日本語・空白・`#`・`%`を含む保存先もfile URLへ変換します。
+PDFを書き出すと、Windowsで関連付けられた既定のPDFアプリを開きます。
 
 - `SIGNING_STATUS.txt`: 配布物の署名状態
 - `runtime-manifest.json`: FFmpegの出所、構成、SHA-256

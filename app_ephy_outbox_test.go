@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -730,7 +731,7 @@ Private log body payload.
 	if err != nil {
 		t.Fatal(err)
 	}
-	exportedPath := strings.TrimPrefix(exportedURL, "file://")
+	exportedPath := exportedFilePath(t, exportedURL)
 	exportedData, err := os.ReadFile(exportedPath)
 	if err != nil {
 		t.Fatal(err)
@@ -774,13 +775,26 @@ func TestRootDocumentCreatedByUIUsesLegacyClassificationForExport(t *testing.T) 
 	if err != nil {
 		t.Fatalf("legacy-classified root document could not be exported: %v", err)
 	}
-	exported, err := os.ReadFile(strings.TrimPrefix(exportedURL, "file://"))
+	exported, err := os.ReadFile(exportedFilePath(t, exportedURL))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(exported), "Start writing your content here") {
 		t.Fatalf("root document export lost canonical body: %s", exported)
 	}
+}
+
+func exportedFilePath(t *testing.T, rawURL string) string {
+	t.Helper()
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme != "file" || parsed.Host != "" {
+		t.Fatalf("invalid local export URL: %q, %v", rawURL, err)
+	}
+	path := parsed.Path
+	if runtime.GOOS == "windows" {
+		path = strings.TrimPrefix(path, "/")
+	}
+	return filepath.FromSlash(path)
 }
 
 func TestConsultationProposalCannotReachReviewOrSave(t *testing.T) {

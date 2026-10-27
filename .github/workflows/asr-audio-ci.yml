@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-latest]
+        os: [ubuntu-22.04, macos-15, macos-15-intel, windows-latest]
     env:
       GOFLAGS: -buildvcs=false
     defaults:
@@ -48,6 +48,10 @@ jobs:
 
       - name: Download Go dependencies
         run: go mod download
+
+      - name: Install native macOS audio dependencies
+        if: runner.os == 'macOS'
+        run: brew install portaudio
 
       - name: Configure native Windows audio runtime
         if: runner.os == 'Windows'

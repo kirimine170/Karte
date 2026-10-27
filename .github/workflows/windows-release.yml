@@ -157,7 +157,7 @@ jobs:
         shell: pwsh
         run: |
           go test -count=1 github.com/kirimine170/KarteRenderer/...
-          go test -count=1 . ./cmd/buildmatrix ./internal/audio ./internal/runtimepath ./internal/screenshot ./internal/webpchunk
+          go test -count=1 . ./cmd/buildmatrix ./internal/audio ./internal/clip ./internal/runtimepath ./internal/screenshot ./internal/webpchunk
 
       - name: Download FFmpeg runtime
         uses: actions/download-artifact@v4

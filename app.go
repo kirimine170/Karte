@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	goruntime "runtime"
@@ -5300,9 +5299,7 @@ func (a *App) ExportPreviewHTML(relativePath string) (string, error) {
 		return "", fmt.Errorf("failed to write export file: %v", err)
 	}
 	a.logInfo(fmt.Sprintf("Exported preview HTML (%d bytes)", len(html)))
-	// Build file URL
-	url := "file://" + filepath.ToSlash(fp)
-	return url, nil
+	return runtimepath.FileURL(fp)
 }
 
 // ExportPDF renders the authorized canonical document as PDF and returns its path.
@@ -5362,9 +5359,6 @@ func (a *App) openPDFInViewer(pdfPath string) error {
 	if pdfPath == "" {
 		return fmt.Errorf("empty pdf path")
 	}
-	if goruntime.GOOS != "darwin" {
-		return nil
-	}
 	pathToOpen, err := filepath.Abs(filepath.Clean(pdfPath))
 	if err != nil {
 		return fmt.Errorf("abs pdf: %w", err)
@@ -5380,8 +5374,7 @@ func (a *App) openPDFInViewer(pdfPath string) error {
 		return fmt.Errorf("not a pdf file: %s", pathToOpen)
 	}
 	a.logInfo("Opening exported PDF with default app")
-	cmd := exec.Command("open", pathToOpen)
-	if err := cmd.Start(); err != nil {
+	if err := openPDFWithDefaultApp(pathToOpen); err != nil {
 		return fmt.Errorf("open pdf: %w", err)
 	}
 	return nil
