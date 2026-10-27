@@ -94,3 +94,24 @@ test('native projection preserves legacy metadata，unknown relationships and re
   assert.deepEqual(reloaded.edges[0].fromAnchor,wall.edges[0].fromAnchor);assert.equal(reloaded.edges[0].status,'reviewed');
   assert.ok(!JSON.stringify(saved).includes('resourceURL'));assert.ok(!JSON.stringify(saved).includes('revision'));
 });
+
+test('managed source refresh and layout saves preserve independent card analysis',async()=>{
+  const {fromKarteBoard,toKarteBoard,resourcePatch}=await import('../model.mjs');
+  for(const kind of ['markdown','pdf','image','audio']){
+    const source=kind==='image'?'data/image/a.webp':kind==='audio'?'data/audio/a.wav':`content/a.${kind==='pdf'?'pdf':'md'}`;
+    const original={path:'content/study.board.md',title:'研究',cards:[{id:'a',type:'resource',source,title:'資料',body:'自分の分析を残す．'}],edges:[],layout:{cards:{}}};
+    const resource={path:source,kind,body:kind==='pdf'?'':'原資料のプレビュー',revision:'1'};
+    const wall=fromKarteBoard(original,[resource]);
+    assert.equal(wall.cards[0].body,resource.body);
+    assert.equal(wall.cards[0].cardBody,original.cards[0].body);
+    wall.cards[0].x+=50;
+    assert.equal(toKarteBoard(wall,original).cards[0].body,'自分の分析を残す．');
+    Object.assign(wall.cards[0],resourcePatch({...resource,body:'更新した原資料',revision:'2'}));
+    assert.equal(toKarteBoard(wall,original).cards[0].body,'自分の分析を残す．');
+    const portable=JSON.parse(JSON.stringify(wall));
+    portable.cards[0].cardBody='カードのメモを編集．';
+    const saved=toKarteBoard(portable,original);
+    assert.equal(saved.cards[0].body,'カードのメモを編集．');
+    assert.equal(fromKarteBoard(saved,[resource]).cards[0].cardBody,'カードのメモを編集．');
+  }
+});

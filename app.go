@@ -4142,6 +4142,10 @@ func (a *App) ImportAudioBase64(filename, base64Data string) (string, error) {
 }
 
 func (a *App) importAudioFromReader(originalName string, src io.Reader) (string, error) {
+	return a.importAudioFromReaderWithTranscription(originalName, src, true)
+}
+
+func (a *App) importAudioFromReaderWithTranscription(originalName string, src io.Reader, transcribe bool) (string, error) {
 	if originalName == "" {
 		return "", fmt.Errorf("original name is required")
 	}
@@ -4194,10 +4198,14 @@ func (a *App) importAudioFromReader(originalName string, src io.Reader) (string,
 		"original_name": originalName,
 		"saved_name":    filename,
 	}
-	runtime.EventsEmit(a.ctx, "audio-imported", payload)
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "audio-imported", payload)
+	}
 	a.logInfo(fmt.Sprintf("Audio imported: %s -> %s", originalName, relPath))
 
-	a.startTranscriptionJob(destPath, relPath)
+	if transcribe {
+		a.startTranscriptionJob(destPath, relPath)
+	}
 	return relPath, nil
 }
 

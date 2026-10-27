@@ -34,6 +34,7 @@ describe('ResearchWall native host', () => {
         const saved = vi.mocked(api.SaveBoard).mock.calls[0]![1];
         expect(saved.docId).toBe(original.docId); expect(saved.tags).toEqual(['research']);
         expect(saved.notes).toBe('既存ノート'); expect(saved.cards[0]!.meta?.custom).toBe('preserved');
+        expect(saved.cards[0]!.body).toBe('old');
         expect(saved.layout.cards.md?.x).toBe(10);
     });
     it('does not discard an unsaved source editor when the wall autosaves', async () => {
@@ -78,6 +79,7 @@ it('restores image metadata through the existing managed image API', async () =>
     vi.mocked(api.LoadResearchResource).mockResolvedValue(image);
     message('import',{filename:'sketch.png',data:'AA==',metadata:'tags: [research]\nnotes: 根拠を確認\n'});
     await vi.waitFor(()=>expect(api.SaveImageMetadata).toHaveBeenCalledWith(image.path,'tags: [research]\nnotes: 根拠を確認\n'));
+    expect(api.ImportResearchResource).toHaveBeenCalledWith('sketch.png','AA==',false);
 });
 it('restores portable audio notes while retaining the newly imported audio path', async () => {
     const audio={path:'data/audio/new.wav',title:'Audio',kind:'audio' as const,body:'',url:'/audio/data/audio/new.wav',editPath:'content/new-audio.md',revision:'1'};
@@ -87,4 +89,11 @@ it('restores portable audio notes while retaining the newly imported audio path'
     vi.mocked(api.LoadResearchResource).mockResolvedValue(audio);
     message('import',{filename:'audio.wav',data:'AA==',transcript:'# 聞き取り\n研究メモを残す．'});
     await vi.waitFor(()=>expect(api.SaveFile).toHaveBeenCalledWith(audio.editPath,`${header}\n# 聞き取り\n研究メモを残す．`));
+    expect(api.ImportResearchResource).toHaveBeenCalledWith('audio.wav','AA==',true);
+});
+
+it('suppresses ASR even when the exported audio notes are empty', async () => {
+    api.ImportResearchResource=vi.fn().mockResolvedValue({path:'data/audio/new.wav',kind:'audio',body:''});
+    message('import',{filename:'audio.wav',data:'AA==',transcript:''});
+    await vi.waitFor(()=>expect(api.ImportResearchResource).toHaveBeenCalledWith('audio.wav','AA==',true));
 });

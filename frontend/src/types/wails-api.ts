@@ -217,7 +217,7 @@ export interface WailsAppAPI {
     GetFileList(): Promise<FileItem[]>;
     ListResearchResources(): Promise<ResearchResource[]>;
     LoadResearchResource(path: string): Promise<ResearchResource>;
-    ImportResearchResource(filename: string, encoded: string): Promise<ResearchResource>;
+    ImportResearchResource(filename: string, encoded: string, restoreAudioNotes: boolean): Promise<ResearchResource>;
     EditResearchResource(path: string): Promise<string>;
     CreateResearchBoard(title: string): Promise<BoardDocument>;
     SaveResearchBoardExport(filename: string, content: string): Promise<string>;

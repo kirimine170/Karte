@@ -45,6 +45,7 @@ export function validateBoard(data) {
   for (const c of data.cards) {
     if (!c || typeof c.id !== 'string' || !c.id || c.id.length>200 || /[\r\n]/.test(c.id) || ids.has(c.id) || !Object.hasOwn(KINDS, c.kind) || typeof c.title !== 'string' || typeof c.body !== 'string' || !['x','y','w','h'].every(k => Number.isFinite(c[k])) || c.w < 100 || c.w > 1200 || c.h < 80 || c.h > 1800 || Math.abs(c.x) > 30000 || Math.abs(c.y) > 30000) throw new Error('カードの形式が正しくありません．');
     if (c.source && (typeof c.source!=='string'||! /^(content|data\/(image|audio|csv))\//.test(c.source)||c.source.split('/').some(p=>p==='..'||p==='.')||c.source.includes('\\'))) throw new Error('不正な管理ファイルの参照です．');
+    if (c.cardBody !== undefined && (typeof c.cardBody !== 'string' || c.cardBody.length > 1024*1024)) throw new Error('カードのメモの形式が正しくありません．');
     if (c.resourceURL && !/^\/(pdf|image|audio)\//.test(c.resourceURL) && !/^data:(image\/(png|jpeg|webp|gif)|application\/pdf|audio\/[a-z\d.+-]+);base64,/i.test(c.resourceURL)) throw new Error('不正な管理資料URLです．');
     if (c.asset && !/^\/assets\/[a-z\d._-]+$/i.test(c.asset)) throw new Error('不正な資料パスです．');
     if(c.pdfPreview!==undefined&&!['page','detail'].includes(c.pdfPreview))throw new Error('PDFの表示形式が正しくありません．');
@@ -118,7 +119,7 @@ export function fromKarteBoard(doc, resources=[]) {
     cards:(doc.cards||[]).map((c,i)=>{
       const saved=c.meta?.researchWall||{},r=byPath.get(c.source),kind=r?.kind||saved.kind||classifyFile(c.source||'')||(c.type==='excerpt'?'excerpt':'note'),l=doc.layout?.cards?.[c.id];
       return {id:c.id,kind,title:c.title,body:c.body||'',...Object.fromEntries(WALL_CARD_FIELDS.filter(k=>saved[k]!==undefined).map(k=>[k,saved[k]])),
-        ...(c.source?{source:c.source,filename:c.source.split('/').pop()}:{}),x:l?.x??i*320,y:l?.y??100,w:l?.width||280,h:l?.height||330,
+        ...(c.source?{source:c.source,filename:c.source.split('/').pop(),cardBody:c.body||''}:{}),x:l?.x??i*320,y:l?.y??100,w:l?.width||280,h:l?.height||330,
         ...(r?resourcePatch(r):c.source?{sourceError:'原資料を読み込めません．再読込または管理先を確認してください．'}:{})};
     }),
     edges:(doc.edges||[]).map(e=>({id:e.id,from:e.from,to:e.to,relation:Object.hasOwn(RELATIONS,e.relation)?e.relation:'related_to',reason:e.description||e.label||'',status:e.meta?.researchWall?.status||'pending',...e.meta?.researchWall,
@@ -132,7 +133,7 @@ export function toKarteBoard(wall,original) {
   validateBoard(wall);
   const cards=new Map((original.cards||[]).map(c=>[c.id,c])),edges=new Map((original.edges||[]).map(e=>[e.id,e]));
   return {...original,title:wall.title,
-    cards:wall.cards.map(c=>{const prev=cards.get(c.id);return {...prev,id:c.id,type:prev?.type||(c.source?'resource':c.kind==='excerpt'?'excerpt':'claim'),title:c.title,source:c.source||'',body:c.body,
+    cards:wall.cards.map(c=>{const prev=cards.get(c.id);return {...prev,id:c.id,type:prev?.type||(c.source?'resource':c.kind==='excerpt'?'excerpt':'claim'),title:c.title,source:c.source||'',body:c.source?(c.cardBody??prev?.body??''):c.body,
       meta:{...prev?.meta,researchWall:Object.fromEntries(WALL_CARD_FIELDS.filter(k=>c[k]!==undefined).map(k=>[k,c[k]]))}};}),
     edges:wall.edges.map(e=>{const prev=edges.get(e.id);return {...prev,id:e.id,from:e.from,to:e.to,relation:e.nativeRelation&&e.relation==='related_to'?e.nativeRelation:e.relation,description:e.reason,
       meta:{...prev?.meta,researchWall:{status:e.status,...(e.fromAnchor?{fromAnchor:e.fromAnchor}:{}),...(e.toAnchor?{toAnchor:e.toAnchor}:{})}}};}),

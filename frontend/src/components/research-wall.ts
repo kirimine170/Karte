@@ -126,7 +126,7 @@ export class ResearchWall {
             }
             case 'import': {
                 if (!value || typeof value.filename !== 'string' || typeof value.data !== 'string' || value.data.length > 28*1024*1024) throw new Error('資料の形式が正しくありません．');
-                let resource = await this.api.ImportResearchResource(value.filename, value.data);
+                let resource = await this.api.ImportResearchResource(value.filename, value.data, typeof value.transcript === 'string');
                 if (resource.kind === 'image' && typeof value.metadata === 'string') {
                     if (value.metadata.length > 1024*1024) throw new Error('画像メタデータが大きすぎます．');
                     await this.api.SaveImageMetadata(resource.path, value.metadata);

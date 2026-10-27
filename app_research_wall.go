@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -217,7 +218,7 @@ func (a *App) CreateResearchBoard(title string) (*boardpkg.Document, error) {
 
 // ImportResearchResource delegates media conversion，metadata and ASR to the same importers
 // as the rest of Karte．Markdown uses SaveFile for document IDs and canonical storage．
-func (a *App) ImportResearchResource(filename, encoded string) (*ResearchResource, error) {
+func (a *App) ImportResearchResource(filename, encoded string, restoreAudioNotes bool) (*ResearchResource, error) {
 	if filename == "" || strings.ContainsAny(filename, "/\\") {
 		return nil, fmt.Errorf("invalid filename")
 	}
@@ -251,7 +252,9 @@ func (a *App) ImportResearchResource(filename, encoded string) (*ResearchResourc
 	case "image":
 		path, err = a.ImportImageBase64(filename, encoded)
 	case "audio":
-		path, err = a.ImportAudioBase64(filename, encoded)
+		// Portable notes are restored by the host after this import．Do not start
+		// an ASR writer that could race with or duplicate that linked document．
+		path, err = a.importAudioFromReaderWithTranscription(filename, bytes.NewReader(data), !restoreAudioNotes)
 	case "pdf":
 		path, err = a.ImportPdfBase64(filename, encoded)
 	default:

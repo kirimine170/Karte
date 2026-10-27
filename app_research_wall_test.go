@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func researchTestApp(t *testing.T) *App {
@@ -143,7 +144,7 @@ func TestResearchBoardExportUsesNativeDialogAndCancellation(t *testing.T) {
 func TestResearchMarkdownImportPreservesMetadataWithNewIdentity(t *testing.T) {
 	app := researchTestApp(t)
 	text := "---\ndoc_id: original-document\ntitle: 研究メモ\ntags: [研究]\n---\n\n# メモ\n\n現地スケッチを参照．\n"
-	resource, err := app.ImportResearchResource("notes.md", base64.StdEncoding.EncodeToString([]byte(text)))
+	resource, err := app.ImportResearchResource("notes.md", base64.StdEncoding.EncodeToString([]byte(text)), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,5 +158,46 @@ func TestResearchMarkdownImportPreservesMetadataWithNewIdentity(t *testing.T) {
 		if !strings.Contains(resource.Body, want) {
 			t.Fatalf("lost imported metadata or body: %s", resource.Body)
 		}
+	}
+}
+
+func TestResearchPortableAudioNotesSkipASRInitialization(t *testing.T) {
+	app := researchTestApp(t)
+	// An ordinary audio import waits for this channel before starting ASR．
+	// Restoring notes must bypass that entire path，including model readiness．
+	app.asrInitDone = make(chan struct{})
+	type result struct {
+		resource *ResearchResource
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		resource, err := app.ImportResearchResource("notes.wav", base64.StdEncoding.EncodeToString([]byte("RIFF")), true)
+		done <- result{resource, err}
+	}()
+	select {
+	case imported := <-done:
+		close(app.asrInitDone)
+		if imported.err != nil {
+			t.Fatal(imported.err)
+		}
+		if imported.resource.EditPath != "" {
+			t.Fatal("ASR created a competing transcript")
+		}
+		path, err := app.EditResearchResource(imported.resource.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = app.SaveFile(path, "---\naudio_path: "+imported.resource.Path+"\n---\n\n復元した音声メモ．\n"); err != nil {
+			t.Fatal(err)
+		}
+		reloaded, err := app.LoadResearchResource(imported.resource.Path)
+		if err != nil || reloaded.EditPath != path || !strings.Contains(reloaded.Body, "復元した音声メモ．") {
+			t.Fatalf("audio notes were not restored: %#v %v", reloaded, err)
+		}
+	case <-time.After(2 * time.Second):
+		close(app.asrInitDone)
+		<-done
+		t.Fatal("portable import waited for ASR initialization")
 	}
 }
