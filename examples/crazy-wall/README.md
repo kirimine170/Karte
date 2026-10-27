@@ -67,8 +67,11 @@ npm start
 npm test
 npm --prefix ../../frontend run typecheck
 NODE_OPTIONS=--no-experimental-webstorage npm --prefix ../../frontend test -- --run
+npm --prefix ../../frontend run e2e
 # リポジトリルートで
 # go test . ./internal/board
 ```
 
 モデルの読込み検証，関係の重複防止，接続座標，表示範囲，MarkdownのHTML無効化，引用位置の復元，曖昧な引用の検出，PDF注釈の永続化を確認します．PDF・音声・ファイル選択・復元・テキスト選択からの接続はブラウザでも操作確認します．
+
+Frontend E2Eでは，仮想管理ワークスペースを使ってカードの独自メモの保持，既存エディタとの往復，実際のPDFのページ・引用ハイライトの再読込を検証します．Goの管理API自体はGoテストで検証します．初回は`npm --prefix ../../frontend exec -- playwright install chromium`でテスト用ブラウザを取得してください．フロントまたは共有ボードコードの変更時にCIで実行し，失敗時の画面とトレースを保存します．

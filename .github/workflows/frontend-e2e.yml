@@ -7,15 +7,15 @@ on:
     paths:
       - '.github/workflows/frontend-e2e.yml'
       - '.node-version'
-      - 'frontend/tests/**/*.e2e.*'
-      - 'frontend/playwright.config.*'
+      - 'frontend/**'
+      - 'examples/crazy-wall/**'
   pull_request:
     branches: [main]
     paths:
       - '.github/workflows/frontend-e2e.yml'
       - '.node-version'
-      - 'frontend/tests/**/*.e2e.*'
-      - 'frontend/playwright.config.*'
+      - 'frontend/**'
+      - 'examples/crazy-wall/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -45,8 +45,17 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: frontend
-        run: npx playwright install --with-deps
+        run: npx playwright install --with-deps chromium
 
       - name: E2E tests
         working-directory: frontend
         run: npm run e2e --if-present
+
+      - name: Upload failed E2E diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-e2e-diagnostics
+          path: frontend/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

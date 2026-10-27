@@ -28,6 +28,8 @@ frontend/simple-test.html
 
 # Distribution files
 frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
 
 # Data files
 data/
