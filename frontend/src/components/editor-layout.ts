@@ -334,6 +334,7 @@ export class EditorLayout extends BaseComponent {
 
         // キーボードショートカット（Ctrl/Cmd+S）
         const keydownHandler = async (e: KeyboardEvent) => {
+            if (useUIStore.getState().activeTab === 'accounting') return;
             if ((e.ctrlKey || e.metaKey) && e.key === 's') {
                 e.preventDefault();
                 eventLogger.log('EditorLayout', 'keyboard-shortcut-save');
@@ -435,6 +436,8 @@ export class EditorLayout extends BaseComponent {
             this.toggleClass(mainContainer, 'workspace-mode', uiState.workspaceMode);
         }
         this.toggleClass(contentArea, 'workspace-mode', uiState.workspaceMode);
+        this.toggleClass(contentArea, 'accounting-mode', uiState.activeTab === 'accounting');
+        if (mainContainer) this.toggleClass(mainContainer, 'accounting-mode', uiState.activeTab === 'accounting');
 
         // まず、galleryAreaの表示/非表示を決定
         const shouldShowGalleryArea = uiState.imageGalleryVisible || uiState.csvGalleryVisible;

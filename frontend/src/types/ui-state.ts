@@ -2,7 +2,7 @@
 
 export type Theme = 'light' | 'dark' | 'hc';
 
-export type ActiveTab = 'editor' | 'graph' | 'board' | 'postlab';
+export type ActiveTab = 'editor' | 'graph' | 'board' | 'postlab' | 'accounting';
 
 export interface UIState {
     // レイアウト
