@@ -19,8 +19,8 @@ export class MainTabs extends BaseComponent {
         this.element = tabsContainer as HTMLElement;
 
         // タブボタンとコンテンツの取得
-        this.tabButtons = Array.from(document.querySelectorAll('.tab')) as HTMLButtonElement[];
-        this.tabContents = Array.from(document.querySelectorAll('.tab-content')) as HTMLElement[];
+        this.tabButtons = Array.from(tabsContainer.querySelectorAll('.tab')) as HTMLButtonElement[];
+        this.tabContents = Array.from(tabsContainer.parentElement!.querySelectorAll(':scope > .tab-content')) as HTMLElement[];
 
         // イベントリスナーの設定
         this.setupEventListeners();

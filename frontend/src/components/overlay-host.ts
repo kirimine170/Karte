@@ -219,6 +219,10 @@ export class OverlayHost extends BaseComponent {
     }
 
     private async handleFileDrop(files: File[]): Promise<void> {
+        if (useUIStore.getState().activeTab === 'accounting') {
+            window.dispatchEvent(new CustomEvent('karte-accounting-file-drop', { detail: { files } }));
+            return;
+        }
         const hasAudio = files.some((file) => this.isSupportedAudioFile(file.name));
         const hasImage = files.some((file) => this.isSupportedImageFile(file.name));
         const hasPdf = files.some((file) => this.isSupportedPdfFile(file.name));

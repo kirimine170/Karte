@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"karte/internal/accounting"
 	"karte/internal/asr"
 	"karte/internal/audio"
 	boardpkg "karte/internal/board"
@@ -76,6 +77,9 @@ const maxImageFileSizeForPDF = 300 * 1024   // 各画像の目標サイズ300KB
 
 // App struct
 type App struct {
+	accountingMu      sync.Mutex
+	accountingService *accounting.Service
+
 	ephyV2ConfigRoot string
 	ctx              context.Context
 	root             string

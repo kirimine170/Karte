@@ -5,6 +5,7 @@ import { MainTabs } from './components/main-tabs';
 import { EditorLayout } from './components/editor-layout';
 import { GraphView } from './components/graph-view';
 import { ResearchWall } from './components/research-wall';
+import { AccountingView } from './components/accounting-view';
 import { ModalHost } from './components/modal-host';
 import { OverlayHost } from './components/overlay-host';
 import { ImageGallery } from './components/image-gallery';
@@ -31,6 +32,7 @@ export class App {
         editorLayout: EditorLayout | null;
         graphView: GraphView | null;
         boardView: ResearchWall | null;
+        accountingView: AccountingView | null;
         modalHost: ModalHost | null;
         overlayHost: OverlayHost | null;
         imageGallery: ImageGallery | null;
@@ -44,6 +46,7 @@ export class App {
             editorLayout: null,
             graphView: null,
             boardView: null,
+            accountingView: null,
             modalHost: null,
             overlayHost: null,
             imageGallery: null,
@@ -117,6 +120,9 @@ export class App {
 
         this.components.boardView = new ResearchWall(this.api, this.runtime!);
         this.components.boardView.init();
+
+        this.components.accountingView = new AccountingView();
+        this.components.accountingView.init();
 
         this.components.modalHost = new ModalHost(this.api);
         this.components.modalHost.init();
@@ -383,6 +389,7 @@ export class App {
         }
 
         this.runtime.EventsOn('check-unsaved-before-close', async () => {
+            if (this.components.accountingView && !await this.components.accountingView.confirmClose()) return;
             if (this.components.boardView?.hasUnsavedChanges() && !await this.components.boardView.flush()) {
                 useUIStore.getState().setStatusMessage('ボードを保存できませんでした．ボードで保存エラーを確認してください．', 5000);
                 return;

@@ -5,6 +5,8 @@
     "src/components/research-wall.ts",
     "src/research-wall/entry.ts",
     "src/logic.ts",
+    "src/accounting/**/*.ts",
+    "src/components/accounting-view.ts",
     "src/__tests__/logic.test.ts",
     "src/api/wails-api.ts",
     "src/test-support/browser-api.ts",

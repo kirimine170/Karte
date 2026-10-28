@@ -1,0 +1,922 @@
+[
+  {
+    "name": "現金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "小口現金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "当座預金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "普通預金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "定期預金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "通知預金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "定期積金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "別段預金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "郵便貯金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "受取手形",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "不渡手形",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "売掛金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "貸倒引当金(売)",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "有価証券",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "商品",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "製品",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "副産物作業くず",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "半製品",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "原材料",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "仕掛品",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "貯蔵品",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "前渡金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "立替金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "前払費用",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "未収収益",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "短期貸付金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "未収入金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "仮払金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "預け金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "仮払消費税等",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "貸倒引当金(他)",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "建物",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "附属設備",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "構築物",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "機械装置",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "車両運搬具",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "工具器具備品",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "一括償却資産",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "減価償却累計額",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "土地",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "建設仮勘定",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "有形固定資産計",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "電話加入権",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "施設利用権",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "工業所有権",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "営業権",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "借地権",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "ソフトウェア",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "無形固定資産計",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "投資有価証券",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "関係会社株式",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "出資金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "関係会社出資金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "敷金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "差入保証金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "長期貸付金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "長期固定性預金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "長期滞留債権",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "長期前払費用",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "前払年金費用",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "繰延税金資産",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "預託金",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "貸倒引当金(投)",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "創立費",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "開業費",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "開発費",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "複合",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "未確定勘定",
+    "group": "asset",
+    "normal": "debit"
+  },
+  {
+    "name": "支払手形",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "買掛金",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "設備支払手形",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "短期借入金",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "未払金",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "未払費用",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "未払配当金",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "未払役員賞与",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "未払法人税等",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "未払消費税等",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "前受金",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "預り金",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "前受収益",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "仮受金",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "預り保証金",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "割引手形",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "裏書手形",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "仮受消費税等",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "長期借入金",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "長期未払金",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "繰延税金負債",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "退職給付引当金",
+    "group": "liability",
+    "normal": "credit"
+  },
+  {
+    "name": "資本金",
+    "group": "equity",
+    "normal": "credit"
+  },
+  {
+    "name": "新株式申込証拠金",
+    "group": "equity",
+    "normal": "credit"
+  },
+  {
+    "name": "資本準備金",
+    "group": "equity",
+    "normal": "credit"
+  },
+  {
+    "name": "資本金及び準備金減少差益",
+    "group": "equity",
+    "normal": "credit"
+  },
+  {
+    "name": "自己株式処分差額",
+    "group": "equity",
+    "normal": "credit"
+  },
+  {
+    "name": "利益準備金",
+    "group": "equity",
+    "normal": "credit"
+  },
+  {
+    "name": "別途積立金",
+    "group": "equity",
+    "normal": "credit"
+  },
+  {
+    "name": "繰越利益",
+    "group": "equity",
+    "normal": "credit"
+  },
+  {
+    "name": "当期純損益金額",
+    "group": "equity",
+    "normal": "credit"
+  },
+  {
+    "name": "自己株式",
+    "group": "equity",
+    "normal": "credit"
+  },
+  {
+    "name": "自己株式申込証拠金",
+    "group": "equity",
+    "normal": "credit"
+  },
+  {
+    "name": "その他有価証券評価差額金",
+    "group": "equity",
+    "normal": "credit"
+  },
+  {
+    "name": "繰延ヘッジ損益",
+    "group": "equity",
+    "normal": "credit"
+  },
+  {
+    "name": "土地再評価差額金",
+    "group": "equity",
+    "normal": "credit"
+  },
+  {
+    "name": "新株予約権",
+    "group": "equity",
+    "normal": "credit"
+  },
+  {
+    "name": "部門",
+    "group": "equity",
+    "normal": "credit"
+  },
+  {
+    "name": "売上高",
+    "group": "revenue",
+    "normal": "credit"
+  },
+  {
+    "name": "売上値引高",
+    "group": "revenue",
+    "normal": "debit"
+  },
+  {
+    "name": "売上戻り高",
+    "group": "revenue",
+    "normal": "debit"
+  },
+  {
+    "name": "売上割戻し高",
+    "group": "revenue",
+    "normal": "debit"
+  },
+  {
+    "name": "役務収益",
+    "group": "revenue",
+    "normal": "credit"
+  },
+  {
+    "name": "期首商品棚卸高",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "仕入高",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "仕入値引高",
+    "group": "expense",
+    "normal": "credit"
+  },
+  {
+    "name": "仕入戻し高",
+    "group": "expense",
+    "normal": "credit"
+  },
+  {
+    "name": "仕入割戻し高",
+    "group": "expense",
+    "normal": "credit"
+  },
+  {
+    "name": "他勘定振替高(商)",
+    "group": "expense",
+    "normal": "credit"
+  },
+  {
+    "name": "期末商品棚卸高",
+    "group": "expense",
+    "normal": "credit"
+  },
+  {
+    "name": "役員報酬",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "役員賞与",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "給料手当",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "雑給",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "賞与",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "退職金",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "法定福利費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "福利厚生費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "退職給付費用",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "採用教育費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "外注費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "荷造運賃",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "広告宣伝費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "交際費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "会議費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "旅費交通費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "通信費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "販売手数料",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "販売促進費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "消耗品費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "事務用品費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "修繕費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "水道光熱費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "新聞図書費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "諸会費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "支払手数料",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "車両費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "地代家賃",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "賃借料",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "リース料",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "保険料",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "租税公課",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "支払報酬料",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "寄付金",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "研究開発費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "減価償却費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "長期前払費用償却",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "繰延資産償却(販)",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "貸倒損失(販)",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "貸倒引当金繰入額(販)",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "雑費",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "受取利息",
+    "group": "revenue",
+    "normal": "credit"
+  },
+  {
+    "name": "受取配当金",
+    "group": "revenue",
+    "normal": "credit"
+  },
+  {
+    "name": "仕入割引",
+    "group": "revenue",
+    "normal": "credit"
+  },
+  {
+    "name": "有価証券売却益",
+    "group": "revenue",
+    "normal": "credit"
+  },
+  {
+    "name": "貸倒引当金戻入額",
+    "group": "revenue",
+    "normal": "credit"
+  },
+  {
+    "name": "雑収入",
+    "group": "revenue",
+    "normal": "credit"
+  },
+  {
+    "name": "支払利息",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "割引料",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "手形売却損",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "貸倒損失(外)",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "売上割引",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "有価証券売却損",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "繰延資産償却(外)",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "貸倒引当金繰入額(外)",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "雑損失",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "前期損益修正益",
+    "group": "revenue",
+    "normal": "credit"
+  },
+  {
+    "name": "固定資産売却益",
+    "group": "revenue",
+    "normal": "credit"
+  },
+  {
+    "name": "投資有価証券売却益",
+    "group": "revenue",
+    "normal": "credit"
+  },
+  {
+    "name": "前期損益修正損",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "固定資産売却損",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "固定資産除却損",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "投資有価証券売却損",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "法人税、住民税及び事業税",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "法人税等",
+    "group": "expense",
+    "normal": "debit"
+  },
+  {
+    "name": "法人税等調整額",
+    "group": "expense",
+    "normal": "debit"
+  }
+]
