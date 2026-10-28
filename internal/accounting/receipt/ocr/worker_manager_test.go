@@ -6,6 +6,7 @@ import (
 	"image/png"
 	"karte/internal/accounting/receipt/domain"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -13,6 +14,18 @@ import (
 )
 
 func TestMockWorkerProtocol(t *testing.T) {
+	// The mock worker uses only the standard library，so it can use the runner's Python．
+	var python string
+	for _, name := range []string{"python3.12", "python3", "python"} {
+		if path, err := exec.LookPath(name); err == nil {
+			python = path
+			break
+		}
+	}
+	if python == "" {
+		t.Skip("Python is required for the mock worker protocol test")
+	}
+	t.Setenv("RECEIPT_OCR_PYTHON", python)
 	t.Setenv("RECEIPT_OCR_MOCK", "1")
 	_, file, _, _ := runtime.Caller(0)
 	project := filepath.Clean(filepath.Join(filepath.Dir(file), ".."))
