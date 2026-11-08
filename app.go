@@ -5454,10 +5454,6 @@ func (a *App) exportPDFInternal(html string) (string, error) {
 	dataImageCount := strings.Count(html, "data:image")
 	a.logInfo(fmt.Sprintf("PDF export: DEBUG - After conversion: img tags=%d, data:image occurrences=%d", imgTagCount, dataImageCount))
 
-	if dataImageCount == 0 {
-		a.logError("PDF export: DEBUG - No data:image found in converted HTML!")
-	}
-
 	if finalHTMLSize > 1024*1024 {
 		a.logError(fmt.Sprintf("PDF export: WARNING - HTML size exceeds 1MB (%d bytes)", finalHTMLSize))
 	}
