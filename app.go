@@ -33,6 +33,7 @@ import (
 	"karte/internal/canonical"
 	"karte/internal/clip"
 	"karte/internal/contextcore"
+	"karte/internal/decisionlog"
 	"karte/internal/docid"
 	"karte/internal/ephyoutbox"
 	"karte/internal/ephyrecordsv2"
@@ -971,7 +972,13 @@ func (a *App) GetFileList() []FileItem {
 			a.logError(fmt.Sprintf("Error walking path %s: %v", p, err))
 			return nil
 		}
-		if info.IsDir() {
+		if rel, err := filepath.Rel(a.dataDir, p); err == nil && decisionlog.IsPath(rel) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if info.IsDir() || (info.Mode()&os.ModeSymlink != 0 && a.isDecisionStoragePath(p)) {
 			return nil
 		}
 		lowerName := strings.ToLower(info.Name())
@@ -2282,9 +2289,11 @@ func (a *App) ListEphyProposals() (*ephyoutbox.Inbox, error) {
 			inbox.Errors = append(inbox.Errors, ephyProposalError(proposal, "processed_"+receipt.Result, "proposal already has a final receipt"))
 			continue
 		}
-		if _, _, policyErr := a.authorizeEphyProposal(proposal, nil, "list"); policyErr != nil {
-			inbox.Errors = append(inbox.Errors, ephyProposalError(proposal, "proposal_policy_denied", "proposal is not available under the active Personal Context policy"))
-			continue
+		if !decisionlog.ValidID(proposal.CandidateID) {
+			if _, _, policyErr := a.authorizeEphyProposal(proposal, nil, "list"); policyErr != nil {
+				inbox.Errors = append(inbox.Errors, ephyProposalError(proposal, "proposal_policy_denied", "proposal is not available under the active Personal Context policy"))
+				continue
+			}
 		}
 		resolved, resolveErr := a.resolveEphyProposal(proposal)
 		if resolveErr != nil {
@@ -2307,6 +2316,9 @@ func ephyProposalError(proposal ephyoutbox.Proposal, code, message string) ephyo
 }
 
 func (a *App) resolveEphyProposal(proposal ephyoutbox.Proposal) (*ephyResolvedProposal, error) {
+	if decisionlog.ValidID(proposal.CandidateID) {
+		return a.reviewDecisionProposal(proposal)
+	}
 	if err := proposal.RequirePublishable(); err != nil {
 		return nil, err
 	}
@@ -2366,9 +2378,12 @@ func (a *App) resolveEphyProposal(proposal ephyoutbox.Proposal) (*ephyResolvedPr
 	return resolved, err
 }
 
-// AcceptEphyProposal persists reviewed content only through SaveFile and then writes a receipt.
+// AcceptEphyProposal persists reviewed content and then writes a receipt.
 // For append，editedBody is a fragment and editedFrontmatter is a patch.
 func (a *App) AcceptEphyProposal(candidateID string, editedFrontmatter map[string]any, editedBody string) (*ephyoutbox.Receipt, error) {
+	if decisionlog.ValidID(candidateID) {
+		return a.finishDecisionReview(candidateID, editedBody, false, "")
+	}
 	store, err := ephyoutbox.NewStore(a.dataDir)
 	if err != nil {
 		return nil, err
@@ -2526,6 +2541,9 @@ func (a *App) AcceptEphyProposal(candidateID string, editedFrontmatter map[strin
 }
 
 func (a *App) RejectEphyProposal(candidateID, message string) (*ephyoutbox.Receipt, error) {
+	if decisionlog.ValidID(candidateID) {
+		return a.finishDecisionReview(candidateID, "", true, message)
+	}
 	store, err := ephyoutbox.NewStore(a.dataDir)
 	if err != nil {
 		return nil, err
@@ -3462,6 +3480,9 @@ func (a *App) resolvePreviewImageURL(imagePath, currentPath string) (string, boo
 		return "", false
 	}
 	absPath := filepath.Join(a.dataDir, filepath.FromSlash(relPath))
+	if a.isDecisionStoragePath(absPath) {
+		return "", false
+	}
 	if info, err := os.Stat(absPath); err != nil || info.IsDir() {
 		return "", false
 	}
@@ -3502,7 +3523,7 @@ func (a *App) resolveContentPath(rel string) (string, bool) {
 	if strings.HasPrefix(rel, "/") || rel != filepath.ToSlash(filepath.Clean(filepath.FromSlash(rel))) {
 		return "", false
 	}
-	if !strings.HasPrefix(rel, "content/") {
+	if !strings.HasPrefix(rel, "content/") || decisionlog.IsPath(rel) {
 		return "", false
 	}
 	abs := filepath.Join(a.dataDir, filepath.FromSlash(rel))
@@ -3522,7 +3543,7 @@ func (a *App) resolveContentPath(rel string) (string, bool) {
 		return "", false
 	}
 	slashRel := filepath.ToSlash(relToContent)
-	if slashRel == ".." || strings.HasPrefix(slashRel, "../") {
+	if slashRel == ".." || strings.HasPrefix(slashRel, "../") || decisionlog.IsPath("content/"+slashRel) {
 		return "", false
 	}
 	return canonical, true
@@ -3616,6 +3637,12 @@ func (a *App) build(root string) error {
 		if err != nil {
 			return err
 		}
+		if decisionlog.IsPath(filepath.Join("content", p)) {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
 		if d.IsDir() {
 			return nil
 		}
@@ -3623,6 +3650,9 @@ func (a *App) build(root string) error {
 			return nil
 		}
 		src := filepath.Join(contentDir, p)
+		if d.Type()&os.ModeSymlink != 0 && isDecisionStoragePath(root, src) {
+			return nil
+		}
 		raw, readErr := os.ReadFile(src)
 		if readErr != nil {
 			return readErr
@@ -4749,6 +4779,15 @@ func (a *App) GetGraphData() (*GraphData, error) {
 	err := filepath.Walk(contentDir, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+		if rel, err := filepath.Rel(a.dataDir, p); err == nil && decisionlog.IsPath(rel) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 && a.isDecisionStoragePath(p) {
+			return nil
 		}
 		if !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
 			// Store path relative to dataDir so it begins with "content/..."
@@ -5928,6 +5967,9 @@ func (a *App) convertImageURLsToDataURIs(html string, totalImages int) (string, 
 			absPath = filepath.Join(a.dataDir, filepath.FromSlash(imgPath))
 		}
 
+		if a.isDecisionStoragePath(absPath) {
+			return match
+		}
 		// Check file size before reading
 		fileInfo, err := os.Stat(absPath)
 		if err != nil {
@@ -6256,8 +6298,6 @@ func (a *App) createAssetHandler() http.Handler {
 func (a *App) serveMediaFile(w http.ResponseWriter, r *http.Request, prefix, mediaType string) bool {
 	relPath := strings.TrimPrefix(r.URL.Path, prefix)
 
-	a.logInfo(fmt.Sprintf("serveMediaFile: %s request for %s, relPath: %s", mediaType, r.URL.Path, relPath))
-
 	var absPath string
 	if filepath.IsAbs(relPath) {
 		absPath = relPath
@@ -6265,6 +6305,10 @@ func (a *App) serveMediaFile(w http.ResponseWriter, r *http.Request, prefix, med
 		absPath = filepath.Join(a.dataDir, filepath.FromSlash(relPath))
 	}
 
+	if a.isDecisionStoragePath(absPath) {
+		http.NotFound(w, r)
+		return true
+	}
 	a.logInfo(fmt.Sprintf("serveMediaFile: %s resolved path: %s", mediaType, absPath))
 
 	info, err := os.Stat(absPath)
@@ -6491,6 +6535,15 @@ func (a *App) RenameFile(oldPath, newPath string) error {
 	err = filepath.Walk(contentDir, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+		if rel, err := filepath.Rel(a.dataDir, p); err == nil && decisionlog.IsPath(rel) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 && a.isDecisionStoragePath(p) {
+			return nil
 		}
 		if info.IsDir() || !strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
 			return nil

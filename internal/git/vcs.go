@@ -3,6 +3,7 @@ package git
 import (
 	"fmt"
 	"karte/internal/canonical"
+	"karte/internal/decisionlog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,7 +86,8 @@ func (v *VCS) ensureGitignore() error {
 			return err
 		}
 		text := string(data)
-		rules := []string{"content/**/ephy-v2-*.md", ".mdsys/ephy/outbox/v2/", ".mdsys/ephy/records/v2/", ".mdsys/context/v2/", ".mdsys/write.lock"}
+		rules := []string{"content/**/ephy-v2-*.md", ".mdsys/ephy/outbox/v2/", ".mdsys/ephy/records/v2/", ".mdsys/context/v2/", ".mdsys/write.lock",
+			"/.mdsys/context/v1/responses/", "/" + decisionlog.SettingsPath, "/" + decisionlog.Directory + "/", "/.mdsys/ephy/outbox/*/decision-*.json"}
 		lines := map[string]bool{}
 		for _, line := range strings.Split(text, "\n") {
 			lines[line] = true
@@ -321,6 +323,9 @@ func (v *VCS) CheckAutomaticCommit(relativePath string) error {
 		}
 		protected := func(path string) bool {
 			slash := filepath.ToSlash(path)
+			if decisionlog.IsStoragePath(slash) {
+				return true
+			}
 			if strings.HasPrefix(slash, ".mdsys/ephy/records/v2/") || strings.HasPrefix(slash, ".mdsys/ephy/outbox/v2/") || strings.HasPrefix(slash, ".mdsys/context/v2/") {
 				return true
 			}
@@ -334,7 +339,7 @@ func (v *VCS) CheckAutomaticCommit(relativePath string) error {
 			return canonical.IsRecordPath(path, data, paths)
 		}
 		if protected(relativePath) {
-			return fmt.Errorf("v2 storage-only record cannot be committed automatically")
+			return fmt.Errorf("storage-only record cannot be committed automatically")
 		}
 		status, err := worktree.Status()
 		if err != nil {
@@ -342,7 +347,7 @@ func (v *VCS) CheckAutomaticCommit(relativePath string) error {
 		}
 		for path, state := range status {
 			if state.Staging != git.Unmodified && state.Staging != git.Untracked && protected(path) {
-				return fmt.Errorf("staged v2 storage-only data blocks automatic commit")
+				return fmt.Errorf("staged storage-only data blocks automatic commit")
 			}
 		}
 		return nil

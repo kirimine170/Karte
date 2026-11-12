@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"karte/internal/canonical"
+	"karte/internal/decisionlog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -19,17 +20,18 @@ import (
 const maxCanonicalDocumentBytes = 2 * 1024 * 1024
 
 type indexedDocument struct {
-	DocID        string
-	Title        string
-	Project      string
-	Kind         string
-	Tags         []string
-	Sensitivity  string
-	RelativePath string
-	UpdatedAt    string
-	SHA256       string
-	Body         string
-	Provenance   []ProvenanceRef
+	DecisionStatus string
+	DocID          string
+	Title          string
+	Project        string
+	Kind           string
+	Tags           []string
+	Sensitivity    string
+	RelativePath   string
+	UpdatedAt      string
+	SHA256         string
+	Body           string
+	Provenance     []ProvenanceRef
 }
 
 type Service struct {
@@ -64,6 +66,12 @@ func (service *Service) Search(request Request, policy Policy) ([]SearchResult, 
 	if err != nil {
 		return nil, nil, "invalid", err
 	}
+	decisions, err := service.decisionDocuments(request.Actor, effective)
+	if err != nil {
+		return nil, nil, "invalid", err
+	}
+	documents = append(documents, decisions...)
+	decisionTerms, decisionStatus, includeHistory := decisionQuery(*request.Query, effective)
 	type rankedDocument struct {
 		document indexedDocument
 		score    float64
@@ -73,7 +81,15 @@ func (service *Service) Search(request Request, policy Policy) ([]SearchResult, 
 		if !effective.permits(document) {
 			continue
 		}
-		score := lexicalScore(*request.Query, document)
+		query := *request.Query
+		if document.DecisionStatus != "" {
+			if (!includeHistory && decisionIsHistory(document.DecisionStatus)) ||
+				(decisionStatus != "" && decisionStatus != document.DecisionStatus) {
+				continue
+			}
+			query = decisionTerms
+		}
+		score := lexicalScore(query, document)
 		if score > 0 {
 			ranked = append(ranked, rankedDocument{document: document, score: score})
 		}
@@ -94,7 +110,7 @@ func (service *Service) Search(request Request, policy Policy) ([]SearchResult, 
 			DocID: document.DocID, Title: document.Title, Project: document.Project, Kind: document.Kind,
 			Tags: document.Tags, Sensitivity: document.Sensitivity, RelativePath: document.RelativePath,
 			UpdatedAt: document.UpdatedAt, SHA256: document.SHA256,
-			Snippet: selectSnippet(document.Body, request.Query.Text), Score: item.score, Provenance: document.Provenance,
+			Snippet: searchSnippet(document, request.Query.Text), Score: item.score, Provenance: document.Provenance,
 		})
 	}
 	return results, diagnostics, "ok", nil
@@ -111,7 +127,13 @@ func (service *Service) Read(request Request, policy Policy) (*Document, []Diagn
 	if !effective.Allowed {
 		return nil, []Diagnostic{}, "denied", nil
 	}
-	documents, diagnostics, err := service.scan()
+	var documents []indexedDocument
+	diagnostics := []Diagnostic{}
+	if decisionlog.ValidID(*request.DocID) {
+		documents, err = service.decisionDocuments(request.Actor, effective)
+	} else {
+		documents, diagnostics, err = service.scan()
+	}
 	if err != nil {
 		return nil, nil, "invalid", err
 	}
@@ -183,6 +205,17 @@ func (service *Service) scan() ([]indexedDocument, []Diagnostic, error) {
 			}
 			return nil
 		}
+		relative, err := filepath.Rel(service.dataRoot, path)
+		if err != nil {
+			counts["path_escape"]++
+			return nil
+		}
+		if decisionlog.IsPath(relative) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
 			return nil
 		}
@@ -200,8 +233,7 @@ func (service *Service) scan() ([]indexedDocument, []Diagnostic, error) {
 			counts["unreadable_document"]++
 			return nil
 		}
-		protectedRelative, err := filepath.Rel(service.dataRoot, path)
-		if err != nil || canonical.IsRecordPath(protectedRelative, data, managed) {
+		if canonical.IsRecordPath(relative, data, managed) {
 			counts["v2_record_excluded"]++
 			return nil
 		}
@@ -215,12 +247,11 @@ func (service *Service) scan() ([]indexedDocument, []Diagnostic, error) {
 			counts["missing_doc_id"]++
 			return nil
 		}
-		relativePath, err := filepath.Rel(service.dataRoot, path)
-		if err != nil || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
-			counts["path_escape"]++
+		if decisionlog.ValidID(docID) {
+			counts["reserved_doc_id"]++
 			return nil
 		}
-		relativePath = filepath.ToSlash(relativePath)
+		relativePath := filepath.ToSlash(relative)
 		project := rawString(frontmatter.Raw, "project")
 		kind := rawString(frontmatter.Raw, "kind")
 		if project == "" || kind == "" {
@@ -307,6 +338,9 @@ func projectKindFromPath(relativePath string) (string, string) {
 
 func lexicalScore(query SearchQuery, document indexedDocument) float64 {
 	phrase := strings.ToLower(strings.TrimSpace(query.Text))
+	if phrase == "" {
+		return 1
+	}
 	title := strings.ToLower(document.Title)
 	body := strings.ToLower(document.Body)
 	project := strings.ToLower(document.Project)
@@ -352,6 +386,13 @@ func queryTokens(value string) []string {
 		}
 	}
 	return tokens
+}
+
+func searchSnippet(document indexedDocument, query string) string {
+	if document.DecisionStatus == "" {
+		return selectSnippet(document.Body, query)
+	}
+	return truncateRunes(document.Body, 320)
 }
 
 func selectSnippet(body, query string) string {

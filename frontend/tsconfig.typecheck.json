@@ -2,6 +2,7 @@
   "extends": "./tsconfig.json",
   "include": [
     "src/components/post-lab.ts",
+    "src/components/decision-log.ts",
     "src/components/research-wall.ts",
     "src/research-wall/entry.ts",
     "src/logic.ts",

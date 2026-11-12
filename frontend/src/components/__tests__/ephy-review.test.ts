@@ -91,7 +91,7 @@ describe('EphyReview', () => {
         expect(metadata).toContain('Confidence: 0.94');
         expect(metadata).toContain('Project-first policy');
         expect(document.getElementById('ephyProposalPreview')?.textContent).toContain('# Synthetic');
-        expect(document.getElementById('ephyReviewBtn')?.textContent).toBe('Ephy候補 (1)');
+        expect(document.getElementById('ephyReviewBtn')?.textContent).toBe('候補レビュー (1)');
         component.destroy();
     });
 
@@ -134,11 +134,11 @@ describe('EphyReview', () => {
         const component = new EphyReview(api);
         component.init();
         await vi.waitFor(() => expect(api.ListEphyProposals).toHaveBeenCalledTimes(1));
-        expect(document.getElementById('ephyReviewBtn')?.textContent).toBe('Ephy候補');
+        expect(document.getElementById('ephyReviewBtn')?.textContent).toBe('候補レビュー');
 
         await vi.advanceTimersByTimeAsync(5000);
         await Promise.resolve();
-        expect(document.getElementById('ephyReviewBtn')?.textContent).toBe('Ephy候補 (1)');
+        expect(document.getElementById('ephyReviewBtn')?.textContent).toBe('候補レビュー (1)');
 
         component.destroy();
         vi.useRealTimers();

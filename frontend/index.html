@@ -28,7 +28,7 @@
         <button class="btn" id="saveBtn">保存</button>
         <button class="btn" id="newBtn">新規</button>
         <button class="btn" id="webClipBtn">Web Clip</button>
-        <button class="btn" id="ephyReviewBtn">Ephy候補</button>
+        <button class="btn" id="ephyReviewBtn">候補レビュー</button>
         <button class="btn" id="exportPdfBtn">PDFエクスポート</button>
         <button class="btn" id="customCssBtn">Custom CSS</button>
         <span id="customCssStatus" class="custom-css-status"></span>
@@ -400,8 +400,23 @@
   <!-- Ephy proposal review modal -->
   <div id="ephyReviewModal" class="modal" style="display:none;" aria-hidden="true">
     <div class="modal-content ephy-review-content">
-      <h3>Ephy記憶候補のreview</h3>
-      <p>候補は明示的に採用するまでcanonical Markdownへ反映されません．</p>
+      <h3>候補レビュー</h3>
+      <details id="decisionLog">
+        <summary>決定ログ</summary>
+        <form id="decisionImportForm">
+          <label for="decisionSourceURL">日次サマリの出典URL</label>
+          <input id="decisionSourceURL" type="url" required>
+          <button class="btn" type="submit">ファイルを選んで取り込む</button>
+        </form>
+        <div>
+          <label for="decisionBusiness">事業</label>
+          <select id="decisionBusiness"><option value="">すべて</option></select>
+          <label for="decisionStatus">状態</label>
+          <select id="decisionStatus"><option value="">すべて</option></select>
+        </div>
+        <p id="decisionFeedback" role="status"></p>
+        <div id="decisionRows"></div>
+      </details>
       <div id="ephyProposalErrors" class="ephy-proposal-errors" style="display:none;"></div>
       <label for="ephyProposalSelect">保留中の候補</label>
       <select id="ephyProposalSelect" class="ephy-proposal-select"></select>
@@ -416,8 +431,8 @@
         </section>
       </div>
       <section>
-        <h4>Markdown本文</h4>
-        <textarea id="ephyBodyEditor" class="ephy-review-editor ephy-body-editor" spellcheck="false"></textarea>
+        <h4 id="ephyBodyLabel">Markdown本文</h4>
+        <textarea aria-labelledby="ephyBodyLabel" id="ephyBodyEditor" class="ephy-review-editor ephy-body-editor" spellcheck="false"></textarea>
       </section>
       <section>
         <h4>完成preview（create）</h4>
