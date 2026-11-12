@@ -1,0 +1,20 @@
+{
+  "schema_version": "0.1",
+  "decision_id": "decision-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "date": "2026-11-12",
+  "business": "karte",
+  "content": "検証用の機能を採用する．",
+  "status": "decided",
+  "decider": "local-human",
+  "sources": [
+    {
+      "url": "https://example.invalid/fixture",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "supersedes": "",
+  "replaced_by": "",
+  "confidence": "known",
+  "visibility": "private",
+  "updated_at": "2026-11-12T12:00:00Z"
+}

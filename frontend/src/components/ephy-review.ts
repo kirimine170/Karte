@@ -1,4 +1,6 @@
 import { BaseComponent } from './component-base';
+import { DecisionLog } from './decision-log';
+import { getWailsRuntimeAPI } from '../api/wails-api';
 import type { EphyProposalReview, EphyReceipt, WailsAppAPI } from '../types/wails-api';
 import { useUIStore } from '../stores/index';
 import { eventLogger } from '../utils/event-logger';
@@ -7,6 +9,8 @@ export class EphyReview extends BaseComponent {
     private static readonly POLL_INTERVAL_MS = 5000;
     private readonly api: WailsAppAPI;
     private readonly unsubscribe: Array<() => void> = [];
+    private readonly decisionEvents = new AbortController();
+    private decisionLog: DecisionLog | null = null;
     private proposals: EphyProposalReview[] = [];
     private selected: EphyProposalReview | null = null;
     private openButton: HTMLButtonElement | null = null;
@@ -44,6 +48,14 @@ export class EphyReview extends BaseComponent {
         this.rejectButton = document.getElementById('ephyRejectBtn') as HTMLButtonElement | null;
         this.closeButton = document.getElementById('ephyReviewCloseBtn') as HTMLButtonElement | null;
 
+        const decisionRoot = document.querySelector<HTMLDetailsElement>('#decisionLog');
+        if (decisionRoot) {
+            void getWailsRuntimeAPI().then((runtime) => {
+                if (this.decisionEvents.signal.aborted) return;
+                this.decisionLog = new DecisionLog(decisionRoot, this.api, runtime, () => this.refresh(), this.decisionEvents.signal);
+                void this.decisionLog.refresh();
+            });
+        }
         if (this.openButton) {
             this.unsubscribe.push(this.addEventListener(this.openButton, 'click', () => void this.open()));
         }
@@ -76,7 +88,7 @@ export class EphyReview extends BaseComponent {
             this.modal.style.display = 'flex';
             this.modal.setAttribute('aria-hidden', 'false');
         }
-        await this.refresh();
+        await Promise.all([this.refresh(), this.decisionLog?.refresh()]);
     }
 
     close(): void {
@@ -102,7 +114,9 @@ export class EphyReview extends BaseComponent {
                 for (const review of this.proposals) {
                     const option = document.createElement('option');
                     option.value = review.proposal.candidate_id;
-                    option.textContent = `${review.proposal.operation} · ${review.resolved_relative_path}`;
+                    option.textContent = isDecision(review)
+                        ? `決定候補 · ${review.proposal.placement.project} · ${decisionLabel(review)}`
+                        : `${review.proposal.operation} · ${review.resolved_relative_path}`;
                     this.proposalSelect.append(option);
                 }
             }
@@ -118,13 +132,17 @@ export class EphyReview extends BaseComponent {
     private updateOpenButton(): void {
         if (!this.openButton) return;
         const count = this.proposals.length;
-        this.openButton.textContent = count > 0 ? `Ephy候補 (${count})` : 'Ephy候補';
-        this.openButton.setAttribute('aria-label', count > 0 ? `Ephyからの保留候補 ${count}件` : 'Ephyからの保留候補');
+        this.openButton.textContent = count > 0 ? `候補レビュー (${count})` : '候補レビュー';
+        this.openButton.setAttribute('aria-label', count > 0 ? `保留中の候補 ${count}件` : '候補レビュー');
     }
 
     private selectProposal(candidateId: string): void {
         this.selected = this.proposals.find((item) => item.proposal.candidate_id === candidateId) || null;
         const review = this.selected;
+        const bodyLabel = document.getElementById('ephyBodyLabel');
+        if (bodyLabel) {
+            bodyLabel.textContent = review && isDecision(review) ? '決定候補（JSON）' : 'Markdown本文';
+        }
         if (!review) {
             if (this.metadata) this.metadata.textContent = '保留中の候補はありません．';
             if (this.frontmatterEditor) this.frontmatterEditor.value = '';
@@ -164,7 +182,7 @@ export class EphyReview extends BaseComponent {
         }
         if (this.preview) {
             this.preview.textContent = review.proposed_content;
-            this.preview.parentElement?.classList.toggle('ephy-hidden', proposal.operation !== 'create');
+            this.preview.parentElement?.classList.toggle('ephy-hidden', proposal.operation !== 'create' || isDecision(review));
         }
         if (this.diff) {
             this.diff.textContent = review.diff;
@@ -190,9 +208,9 @@ export class EphyReview extends BaseComponent {
         try {
             const receipt = await this.api.AcceptEphyProposal(proposal.candidate_id, frontmatter, body);
             this.showReceipt(receipt);
-            await this.refresh();
+            await Promise.all([this.refresh(), this.decisionLog?.refresh()]);
         } catch (error) {
-            useUIStore.getState().setStatusMessage('Ephy候補の採用に失敗しました', 4000);
+            useUIStore.getState().setStatusMessage(isDecision(this.selected) ? `決定候補の採用に失敗しました．${String(error)}` : 'Ephy候補の採用に失敗しました', 6000);
             eventLogger.log('EphyReview', 'accept-error', { candidateId: proposal.candidate_id, error: String(error) });
         }
     }
@@ -212,9 +230,9 @@ export class EphyReview extends BaseComponent {
 
     private showReceipt(receipt: EphyReceipt): void {
         if (receipt.result === 'accepted') {
-            useUIStore.getState().setStatusMessage('Ephy候補を採用しました', 3000);
+            useUIStore.getState().setStatusMessage('候補を採用しました', 3000);
         } else if (receipt.result === 'rejected') {
-            useUIStore.getState().setStatusMessage('Ephy候補を破棄しました', 3000);
+            useUIStore.getState().setStatusMessage('候補を破棄しました', 3000);
         } else if (receipt.result === 'conflict') {
             useUIStore.getState().setStatusMessage(`競合のため保存しませんでした: ${receipt.message || receipt.error_code || ''}`, 6000);
         } else {
@@ -230,11 +248,25 @@ export class EphyReview extends BaseComponent {
     }
 
     destroy(): void {
+        this.decisionEvents.abort();
         if (this.pollTimer !== null) {
             window.clearInterval(this.pollTimer);
             this.pollTimer = null;
         }
         this.unsubscribe.forEach((unsubscribe) => unsubscribe());
         this.unsubscribe.length = 0;
+    }
+}
+
+function isDecision(review: EphyProposalReview | null): boolean {
+    return !!review && /^decision-[a-f0-9]{64}$/.test(review.proposal.candidate_id);
+}
+
+function decisionLabel(review: EphyProposalReview): string {
+    try {
+        const { content } = JSON.parse(review.proposal.proposed_body) as { content?: string };
+        return typeof content === 'string' ? content.slice(0, 72) : '';
+    } catch {
+        return '';
     }
 }

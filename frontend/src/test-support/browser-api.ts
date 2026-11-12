@@ -142,6 +142,13 @@ export function createBrowserApi() {
             return true;
         },
 
+        async ListDecisionLog() {
+            return [];
+        },
+        async ImportDecisionSummary(_sourceURL: string) {
+            return null;
+        },
+        async WithdrawDecision(_decisionID: string) {},
         async ListEphyProposals() {
             return { proposals: [], errors: [] };
         },

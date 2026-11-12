@@ -1,5 +1,24 @@
 // Wails API型定義
 
+export interface DecisionRecord {
+    decision_id: string;
+    date: string;
+    business: string;
+    business_label?: string;
+    content: string;
+    status: 'open' | 'decided' | 'withdrawn' | 'superseded';
+    sources: Array<{ url: string; sha256: string }>;
+    supersedes: string;
+    replaced_by: string;
+    updated_at: string;
+}
+
+export interface DecisionImportResult {
+    added: number;
+    merged: number;
+    unchanged: number;
+}
+
 export interface FileItem {
     path: string;
     title?: string;
@@ -268,6 +287,9 @@ export interface WailsAppAPI {
     ImportCsvBase64(filename: string, base64Data: string): Promise<string>;
     SaveEventLogs(logsJson: string): Promise<boolean>;
     ClipURL(request: ClipRequest): Promise<ClipResult>;
+    ListDecisionLog(): Promise<DecisionRecord[]>;
+    ImportDecisionSummary(sourceURL: string): Promise<DecisionImportResult | null>;
+    WithdrawDecision(decisionID: string): Promise<void>;
     ListEphyProposals(): Promise<EphyInbox>;
     AcceptEphyProposal(candidateId: string, editedFrontmatter: Record<string, unknown>, editedBody: string): Promise<EphyReceipt>;
     RejectEphyProposal(candidateId: string, message: string): Promise<EphyReceipt>;

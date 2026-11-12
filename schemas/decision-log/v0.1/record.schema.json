@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://karte.local/schemas/decision-log/v0.1/record.schema.json",
+  "title": "Karte Decision Log v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "decision_id", "date", "business", "content", "status", "decider", "sources", "supersedes", "replaced_by", "confidence", "visibility", "updated_at"],
+  "$defs": {
+    "decisionId": {"type": "string", "pattern": "^decision-[a-f0-9]{64}$"},
+    "link": {"anyOf": [{"$ref": "#/$defs/decisionId"}, {"const": ""}]}
+  },
+  "properties": {
+    "schema_version": {"const": "0.1"},
+    "decision_id": {"$ref": "#/$defs/decisionId"},
+    "date": {"type": "string", "format": "date"},
+    "business": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+    "business_label": {"type": "string", "minLength": 1, "maxLength": 128},
+    "content": {"type": "string", "minLength": 1, "maxLength": 4000, "pattern": "\\S"},
+    "status": {"enum": ["decided", "open", "withdrawn", "superseded"]},
+    "decider": {"type": "string", "minLength": 1, "maxLength": 128},
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["url", "sha256"],
+        "properties": {
+          "url": {"type": "string", "format": "uri", "maxLength": 2048, "pattern": "^https://[^/]+", "not": {"pattern": "^https://[^/]*@"}},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+        }
+      }
+    },
+    "supersedes": {"$ref": "#/$defs/link"},
+    "replaced_by": {"$ref": "#/$defs/link"},
+    "confidence": {"enum": ["known", "hypothesis", "unverified"]},
+    "visibility": {"enum": ["private", "public"]},
+    "publication_restriction": {"const": "workspace-private"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "superseded"}}},
+      "then": {"properties": {"replaced_by": {"$ref": "#/$defs/decisionId"}}},
+      "else": {"properties": {"replaced_by": {"const": ""}}}
+    },
+    {
+      "if": {"properties": {"status": {"const": "open"}}},
+      "then": {"properties": {"supersedes": {"const": ""}}}
+    },
+    {
+      "if": {"required": ["publication_restriction"]},
+      "then": {"properties": {"visibility": {"const": "private"}}}
+    }
+  ]
+}
