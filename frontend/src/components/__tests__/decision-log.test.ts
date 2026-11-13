@@ -9,6 +9,7 @@ describe('decision log in candidate review', () => {
                 <form id="decisionImportForm"><input type="url"><button>取込</button></form>
                 <select id="decisionBusiness"><option value="">すべて</option></select>
                 <select id="decisionStatus"><option value="">すべて</option></select>
+                <form id="decisionExportForm"><select></select><button>書き出す</button></form>
                 <div id="decisionFeedback"></div><div id="decisionRows"></div>
             </details>`;
         const makeRecord = (overrides: Partial<DecisionRecord>): DecisionRecord => ({

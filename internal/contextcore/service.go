@@ -35,8 +35,9 @@ type indexedDocument struct {
 }
 
 type Service struct {
-	dataRoot    string
-	contentRoot string
+	dataRoot          string
+	contentRoot       string
+	decisionRecipient string
 }
 
 func NewService(dataDir string) (*Service, error) {
@@ -62,9 +63,13 @@ func (service *Service) Search(request Request, policy Policy) ([]SearchResult, 
 	if !effective.Allowed {
 		return []SearchResult{}, []Diagnostic{}, "denied", nil
 	}
-	documents, diagnostics, err := service.scan()
-	if err != nil {
-		return nil, nil, "invalid", err
+	var documents []indexedDocument
+	diagnostics := []Diagnostic{}
+	if !decisionlog.ValidAgent(service.decisionRecipient) {
+		documents, diagnostics, err = service.scan()
+		if err != nil {
+			return nil, nil, "invalid", err
+		}
 	}
 	decisions, err := service.decisionDocuments(request.Actor, effective)
 	if err != nil {
@@ -131,6 +136,8 @@ func (service *Service) Read(request Request, policy Policy) (*Document, []Diagn
 	diagnostics := []Diagnostic{}
 	if decisionlog.ValidID(*request.DocID) {
 		documents, err = service.decisionDocuments(request.Actor, effective)
+	} else if decisionlog.ValidAgent(service.decisionRecipient) {
+		return nil, diagnostics, "denied", nil
 	} else {
 		documents, diagnostics, err = service.scan()
 	}
@@ -144,11 +151,8 @@ func (service *Service) Read(request Request, policy Policy) (*Document, []Diagn
 		if !effective.permits(candidate) {
 			return nil, []Diagnostic{}, "denied", nil
 		}
-		return &Document{
-			DocID: candidate.DocID, Title: candidate.Title, Project: candidate.Project, Kind: candidate.Kind,
-			Tags: candidate.Tags, Sensitivity: candidate.Sensitivity, RelativePath: candidate.RelativePath,
-			UpdatedAt: candidate.UpdatedAt, SHA256: candidate.SHA256, Body: candidate.Body, Provenance: candidate.Provenance,
-		}, diagnostics, "ok", nil
+		result := contextDocument(candidate)
+		return &result, diagnostics, "ok", nil
 	}
 	if request.Actor.Type != "human" || !effective.hasCompleteVisibility() {
 		return nil, []Diagnostic{}, "denied", nil

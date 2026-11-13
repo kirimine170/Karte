@@ -39,6 +39,7 @@ import (
 	"karte/internal/ephyrecordsv2"
 	fm "karte/internal/frontmatter"
 	gitvcs "karte/internal/git"
+	"karte/internal/googlesync"
 	"karte/internal/markdown"
 	"karte/internal/printout"
 	"karte/internal/runtimepath"
@@ -80,6 +81,9 @@ const maxImageFileSizeForPDF = 300 * 1024   // 各画像の目標サイズ300KB
 type App struct {
 	accountingMu      sync.Mutex
 	accountingService *accounting.Service
+	googleSession     *googlesync.Session
+	googleDriveMu     sync.Mutex
+	googleDriveCancel context.CancelFunc
 
 	ephyV2ConfigRoot string
 	ctx              context.Context
@@ -505,7 +509,9 @@ func NewApp() *App {
 
 // NewAppWithFileSystem creates a new App with the provided FileSystem.
 func NewAppWithFileSystem(fs FileSystem) *App {
-	return &App{fs: fs}
+	return &App{fs: fs, googleSession: googlesync.NewSession(googlesync.Config{
+		ClientID: os.Getenv("KARTE_GOOGLE_CLIENT_ID"), ClientSecret: os.Getenv("KARTE_GOOGLE_CLIENT_SECRET"),
+	})}
 }
 
 // startup is called when the app starts. The context is saved
@@ -626,6 +632,10 @@ func (a *App) startup(ctx context.Context) {
 		go a.runContextProcessor(ctx)
 	}
 
+	driveCtx, cancelDrive := context.WithCancel(ctx)
+	a.googleDriveCancel = cancelDrive
+	go a.runGoogleDecisionSync(driveCtx)
+
 	a.asrInitDone = make(chan struct{})
 	go func() {
 		if err := a.initASRService(); err != nil {
@@ -694,6 +704,9 @@ func (a *App) ProcessContextRequests() (contextcore.ProcessSummary, error) {
 
 // shutdown is invoked by Wails when the app is closing.
 func (a *App) shutdown(ctx context.Context) {
+	if a.googleDriveCancel != nil {
+		a.googleDriveCancel()
+	}
 	a.webClipConversionMu.Lock()
 	a.webClipConversionClosing = true
 	a.webClipConversionMu.Unlock()
@@ -5137,7 +5150,7 @@ func (a *App) GetGraphData() (*GraphData, error) {
 				if docMapData, err := os.ReadFile(docMapPath); err == nil {
 					var docMap map[string]string
 					if err := json.Unmarshal(docMapData, &docMap); err == nil {
-						if currentPath, exists := docMap[edge.TargetDocID]; exists {
+						if currentPath, exists := docMap[edge.TargetDocID]; exists && !a.isGraphDecisionPath(currentPath) {
 							// doc_mapから取得したパスでファイルを読み込む
 							// currentPathは "content/..." 形式なので、filepath.FromSlashで正規化してから結合
 							normalizedPath := filepath.FromSlash(currentPath)
@@ -6866,6 +6879,40 @@ func (a *App) extractLinks(content string) []LinkInfo {
 	return links
 }
 
+// isGraphDecisionPath checks literal and encoded paths and filesystem aliases.
+func (a *App) isGraphDecisionPath(relative string) bool {
+	for _, path := range []string{relative, decodedGraphPath(relative)} {
+		path = strings.ReplaceAll(path, "\\", "/")
+		absolute := path
+		if filePath, isFileURL := strings.CutPrefix(absolute, "file://"); isFileURL {
+			absolute = filePath
+			if strings.HasPrefix(absolute, "/") && filepath.VolumeName(absolute[1:]) != "" {
+				absolute = absolute[1:]
+			}
+		}
+		if filepath.IsAbs(absolute) {
+			rel, err := filepath.Rel(a.dataDir, absolute)
+			if (err == nil && decisionlog.IsStoragePath(rel)) || a.isDecisionStoragePath(absolute) {
+				return true
+			}
+		}
+		path = strings.TrimLeft(path, "/")
+		path = filepath.Clean(path)
+		if decisionlog.IsStoragePath(path) || a.isDecisionStoragePath(filepath.Join(a.dataDir, path)) {
+			return true
+		}
+	}
+	return false
+}
+
+func decodedGraphPath(path string) string {
+	decoded, err := url.PathUnescape(path)
+	if err != nil {
+		return path
+	}
+	return decoded
+}
+
 // resolveLinkTarget resolves a link target to a node ID
 func (a *App) resolveLinkTarget(link LinkInfo, currentFile string) string {
 	a.logPrivate(fmt.Sprintf("Resolving link: %s (kind: %s) from file: %s", link.Target, link.Kind, currentFile))
@@ -6874,16 +6921,26 @@ func (a *App) resolveLinkTarget(link LinkInfo, currentFile string) string {
 	case "wikilink", "markdown_link":
 		// 相対パスを解決
 		target := link.Target
+		if a.isGraphDecisionPath(target) {
+			return ""
+		}
 		if !strings.HasPrefix(target, "/") && !strings.HasPrefix(target, "http") {
 			// 相対パスの場合、現在のファイルからの相対パスとして解決
 			currentDir := filepath.Dir(currentFile)
 			target = filepath.Join(currentDir, target)
 			target = filepath.ToSlash(target)
 		}
-		result := "doc:/" + strings.TrimPrefix(target, "content/")
+		docPath := strings.TrimPrefix(target, "content/")
+		if a.isGraphDecisionPath(target) || a.isGraphDecisionPath(filepath.Join("content", docPath)) {
+			return ""
+		}
+		result := "doc:/" + docPath
 		a.logPrivate(fmt.Sprintf("Resolved link to: %s", result))
 		return result
 	case "img":
+		if a.isGraphDecisionPath(link.Target) {
+			return ""
+		}
 		result := "img:/" + link.Target
 		a.logPrivate(fmt.Sprintf("Resolved link to: %s", result))
 		return result

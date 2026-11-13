@@ -56,6 +56,9 @@ func TestReplacementChainValidation(t *testing.T) {
 	a, b, c := records[0], records[1], records[2]
 	b.Supersedes, c.Supersedes = a.ID, b.ID
 	err = canonical.WithWriter(root, func(w *canonical.Writer) error {
+		if err := InitializeSettings(w); err != nil {
+			return err
+		}
 		for _, record := range []Record{a, b, c} {
 			if _, err := Accept(w, record); err != nil {
 				return err

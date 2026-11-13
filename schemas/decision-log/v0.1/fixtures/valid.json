@@ -2,13 +2,14 @@
   "schema_version": "0.1",
   "decision_id": "decision-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "date": "2026-11-12",
-  "business": "karte",
-  "content": "検証用の機能を採用する．",
+  "business": "overall",
+  "business_label": "全体",
+  "content": "作業記録の保管方法を決める。",
   "status": "decided",
-  "decider": "local-human",
+  "decider": "雫さん",
   "sources": [
     {
-      "url": "https://example.invalid/fixture",
+      "url": "https://example.invalid/decision-log-fixture",
       "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
     }
   ],
@@ -16,5 +17,9 @@
   "replaced_by": "",
   "confidence": "known",
   "visibility": "private",
+  "visibility_tags": [
+    "private"
+  ],
+  "publication_restriction": "workspace-private",
   "updated_at": "2026-11-12T12:00:00Z"
 }

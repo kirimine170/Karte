@@ -74,10 +74,6 @@ func (settings Settings) ExtractSummary(filename string, data []byte, sourceURL 
 	}
 
 	businesses := settings.businessLabels()
-	reviewer := settings.Decider
-	if reviewer == "" {
-		reviewer = "local-human"
-	}
 	source := Source{URL: sourceURL, SHA256: canonical.Hash(data)}
 	seen := map[string]bool{}
 	result := []Record{}
@@ -156,10 +152,10 @@ func (settings Settings) ExtractSummary(filename string, data []byte, sourceURL 
 				status = sectionStatus
 			case bullet && (section == "request" || section == "delegation"):
 				status = Open
-			case bullet && section == "activity" && (strings.Contains(line, "運用を依頼された") || strings.Contains(line, "よう依頼された")):
-				status = Decided
 			case bullet && itemBusiness != "overall" && (strings.Contains(line, "：構想・検討") || strings.Contains(line, "：検討案")):
 				status = Open
+			case bullet && section == "activity":
+				status = recordedActivityStatus(line)
 			}
 		}
 		if status == "" || isNoDecision(line) {
@@ -178,8 +174,8 @@ func (settings Settings) ExtractSummary(filename string, data []byte, sourceURL 
 		}
 		record := Record{
 			Version: Version, ID: decisionID(itemBusiness, line), Date: match[1],
-			Business: itemBusiness, BusinessLabel: businesses[itemBusiness], Content: line, Status: status, Decider: reviewer,
-			Sources: []Source{source}, Confidence: confidence, Visibility: Private,
+			Business: itemBusiness, BusinessLabel: businesses[itemBusiness], Content: line, Status: status, Decider: Reviewer,
+			Sources: []Source{source}, Confidence: confidence, Visibility: Private, VisibilityTags: []string{Private},
 			UpdatedAt: now.UTC().Format(time.RFC3339Nano),
 		}
 		if settings.requiresPrivate(record) {
@@ -195,6 +191,20 @@ func (settings Settings) ExtractSummary(filename string, data []byte, sourceURL 
 		result = append(result, record)
 	}
 	return result, nil
+}
+
+func recordedActivityStatus(line string) string {
+	switch {
+	case strings.HasSuffix(line, "保留中，と記録した。"):
+		return Open
+	case strings.Contains(line, "方針を記録した。"),
+		strings.Contains(line, "稼ぐ柱を記録した。"),
+		strings.Contains(line, "運用を依頼された"),
+		strings.Contains(line, "よう依頼された"):
+		return Decided
+	default:
+		return ""
+	}
 }
 
 func statusForLabel(label string) string {
@@ -267,7 +277,7 @@ func Proposal(record Record) (ephyoutbox.Proposal, error) {
 	proposal := ephyoutbox.Proposal{
 		SchemaVersion: ephyoutbox.SchemaVersion, CandidateID: record.ID, Operation: "create",
 		ProposedFrontmatter: map[string]any{"title": "決定ログの候補", "tags": []string{"decision-log"}},
-		ProposedBody:        string(encoded), SourceRefs: provenance, Sensitivity: Sensitivity(record.Visibility),
+		ProposedBody:        string(encoded), SourceRefs: provenance, Sensitivity: record.ContextSensitivity(),
 		Placement: ephyoutbox.PlacementHint{
 			Project: record.Business, Kind: "decision", YearMonth: record.Date[:7],
 			Confidence: &confidence, PreferredFilename: record.ID + ".md",
@@ -284,7 +294,7 @@ func DecodeProposal(proposal ephyoutbox.Proposal) (Record, error) {
 		return Record{}, err
 	}
 	if proposal.Operation != "create" || proposal.Placement.Kind != "decision" ||
-		proposal.Placement.Project != record.Business || proposal.Sensitivity != Sensitivity(record.Visibility) ||
+		proposal.Placement.Project != record.Business || proposal.Sensitivity != record.ContextSensitivity() ||
 		proposal.CandidateID != record.ID || record.ID != decisionID(record.Business, record.Content) ||
 		(record.Status != Open && record.Status != Decided) {
 		return Record{}, fmt.Errorf("invalid decision proposal")
@@ -300,14 +310,11 @@ func DecodeProposal(proposal ephyoutbox.Proposal) (Record, error) {
 	return record, nil
 }
 
-func Sensitivity(visibility string) string {
-	if visibility == Public {
-		return "public"
-	}
-	return "internal"
+func Queue(w *canonical.Writer, store *ephyoutbox.Store, records []Record) (ImportResult, error) {
+	return queue(w, store, records, "")
 }
 
-func Queue(w *canonical.Writer, store *ephyoutbox.Store, records []Record) (ImportResult, error) {
+func queue(w *canonical.Writer, store *ephyoutbox.Store, records []Record, agent string) (ImportResult, error) {
 	var result ImportResult
 	entries, err := load(w)
 	if err != nil {
@@ -315,7 +322,7 @@ func Queue(w *canonical.Writer, store *ephyoutbox.Store, records []Record) (Impo
 	}
 	for _, record := range records {
 		if entry, ok := entries[record.ID]; ok {
-			if entry.Visibility != Private {
+			if agent != "" || entry.stored.shareable() {
 				result.Unchanged++
 				continue
 			}
@@ -346,6 +353,10 @@ func Queue(w *canonical.Writer, store *ephyoutbox.Store, records []Record) (Impo
 		oldBytes, err := w.ReadLimit(pendingPath, 2*1024*1024)
 		switch {
 		case err == nil:
+			if agent != "" {
+				result.Unchanged++
+				continue
+			}
 			oldProposal, err := ephyoutbox.DecodeProposal(oldBytes)
 			if err != nil {
 				return result, err
@@ -354,8 +365,18 @@ func Queue(w *canonical.Writer, store *ephyoutbox.Store, records []Record) (Impo
 			if err != nil {
 				return result, err
 			}
+			migrated := false
+			if old.Decider == "local-human" {
+				settings, err := LoadSettings(w)
+				if err != nil {
+					return result, err
+				}
+				if settings.Decider == Reviewer {
+					old.Decider, migrated = Reviewer, true
+				}
+			}
 			sources := MergeSources(old.Sources, record.Sources)
-			if len(sources) == len(old.Sources) {
+			if len(sources) == len(old.Sources) && !migrated {
 				result.Unchanged++
 				continue
 			}
@@ -369,6 +390,9 @@ func Queue(w *canonical.Writer, store *ephyoutbox.Store, records []Record) (Impo
 		proposal, err := Proposal(record)
 		if err != nil {
 			return result, err
+		}
+		if agent != "" {
+			proposal.ProposedFrontmatter["submitted_by"] = agent
 		}
 		data, err := json.MarshalIndent(proposal, "", "  ")
 		if err != nil {

@@ -31,7 +31,7 @@ func TestDecisionLogAcceptance(t *testing.T) {
 	t.Run("fixture", func(t *testing.T) {
 		runDecisionAcceptance(t, filepath.Join("testdata", "decision-log", "2026-11-12_fixture.txt"),
 			"https://example.invalid/summary", decisionAcceptanceCase{
-				Settings:     decisionlog.Settings{Businesses: map[string]string{"workshop": "工作室"}},
+				Settings:     decisionlog.Settings{Businesses: map[string]string{"workshop": "工作室"}, Decider: decisionlog.Reviewer},
 				DecidedQuery: "収益の柱", OpenBusiness: "workshop", OpenMatch: "利用時間",
 			})
 	})
@@ -51,12 +51,20 @@ func TestDecisionLogAcceptance(t *testing.T) {
 		if err := json.Unmarshal(raw, &profile); err != nil || profile.DecidedQuery == "" || profile.OpenBusiness == "" || profile.OpenMatch == "" {
 			t.Fatal("invalid decision acceptance case")
 		}
+		if profile.Settings.Decider == "" {
+			profile.Settings.Decider = decisionlog.Reviewer
+		}
 		runDecisionAcceptance(t, path, url, profile)
 	})
 }
 
 func runDecisionAcceptance(t *testing.T, path, sourceURL string, profile decisionAcceptanceCase) {
 	t.Helper()
+	summary, err := decisionlog.ReadSummary(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceHash := canonical.Hash(summary)
 	originalQuery := profile.DecidedQuery
 	app, root := newEphyTestApp(t)
 	settings, err := json.Marshal(profile.Settings)
@@ -171,7 +179,8 @@ func runDecisionAcceptance(t *testing.T, path, sourceURL string, profile decisio
 	result := contextCall(localHumanActor, "search", originalQuery, nil)
 	if len(result.Results) != 1 || result.Results[0].DocID != id ||
 		!slices.Contains(result.Results[0].Tags, "decision:decided") ||
-		len(result.Results[0].Provenance) != 3 || result.Results[0].Provenance[0].Reference != sourceURL {
+		len(result.Results[0].Provenance) != 3 || result.Results[0].Provenance[0].Reference != sourceURL ||
+		result.Results[0].Provenance[0].SHA256 != sourceHash {
 		t.Fatal("active decision was not returned with state and all sources")
 	}
 	open := contextCall(localHumanActor, "search", "未決 "+profile.Settings.Businesses[profile.OpenBusiness], nil)
@@ -285,7 +294,11 @@ func TestPublicDecisionContext(t *testing.T) {
 	}
 	record := records[0]
 	record.Visibility = decisionlog.Public
+	record.VisibilityTags = nil
 	if err := canonical.WithWriter(root, func(w *canonical.Writer) error {
+		if err := decisionlog.InitializeSettings(w); err != nil {
+			return err
+		}
 		_, err := decisionlog.Accept(w, record)
 		return err
 	}); err != nil {

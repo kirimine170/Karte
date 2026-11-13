@@ -414,8 +414,32 @@
           <label for="decisionStatus">状態</label>
           <select id="decisionStatus"><option value="">すべて</option></select>
         </div>
+        <form id="decisionExportForm">
+          <label for="decisionExportRecipient">書き出し先</label>
+          <select id="decisionExportRecipient">
+            <option value="public">一般公開</option>
+            <option value="agent:grok">Grok Bot</option>
+            <option value="agent:muse">Muse</option>
+            <option value="agent:chatgpt">ChatGPT</option>
+          </select>
+          <button class="btn" type="submit">JSONを書き出す</button>
+        </form>
         <p id="decisionFeedback" role="status"></p>
         <div id="decisionRows"></div>
+        <details id="decisionGoogleAccount">
+          <summary>Googleアカウント</summary>
+          <p data-google-status role="status"></p>
+          <button class="btn" data-google-sign-in type="button">Googleでログイン</button>
+          <button class="btn btn-secondary" data-google-sign-out type="button" hidden>ログアウト</button>
+          <form id="decisionGoogleSync" hidden>
+            <label for="decisionGoogleSyncName">同期ID</label>
+            <input id="decisionGoogleSyncName" maxlength="64" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+            <button class="btn" data-sync-enable type="submit">同期を有効にする</button>
+            <button class="btn" data-sync-now type="button" hidden>今すぐ同期</button>
+            <button class="btn btn-secondary" data-sync-disable type="button" hidden>同期を停止</button>
+            <p data-sync-status role="status"></p>
+          </form>
+        </details>
       </details>
       <div id="ephyProposalErrors" class="ephy-proposal-errors" style="display:none;"></div>
       <label for="ephyProposalSelect">保留中の候補</label>

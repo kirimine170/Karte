@@ -1,4 +1,4 @@
-import type { DecisionRecord, WailsAppAPI, WailsRuntimeAPI } from '../types/wails-api';
+import type { DecisionRecord, GoogleAccountStatus, GoogleSyncStatus, WailsAppAPI, WailsRuntimeAPI } from '../types/wails-api';
 
 const statusLabels: Record<DecisionRecord['status'], string> = {
     open: '未決', decided: '決定', withdrawn: '撤回', superseded: '置換',
@@ -26,6 +26,24 @@ export class DecisionLog {
             this.status.add(new Option(label, id));
         }
         this.status.value = 'open';
+        const exportForm = root.querySelector<HTMLFormElement>('#decisionExportForm')!;
+        exportForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const button = exportForm.querySelector<HTMLButtonElement>('button')!;
+            const recipient = exportForm.querySelector<HTMLSelectElement>('select')!;
+            button.disabled = true;
+            this.feedback.textContent = '';
+            try {
+                if (await this.api.ExportDecisionLog(recipient.value)) {
+                    this.feedback.textContent = '決定ログを書き出しました．';
+                }
+            } catch {
+                this.feedback.textContent = '決定ログを書き出せませんでした．';
+            } finally {
+                button.disabled = false;
+            }
+        }, { signal });
+        this.bindGoogleAccount(signal);
         this.business.addEventListener('change', () => this.render(), { signal });
         this.status.addEventListener('change', () => this.render(), { signal });
         root.addEventListener('toggle', () => void this.refresh(), { signal });
@@ -48,6 +66,89 @@ export class DecisionLog {
                 button.disabled = false;
             }
         }, { signal });
+    }
+
+    private bindGoogleAccount(signal: AbortSignal): void {
+        const panel = this.root.querySelector<HTMLDetailsElement>('#decisionGoogleAccount');
+        if (!panel) return;
+        const status = panel.querySelector<HTMLElement>('[data-google-status]')!;
+        const signIn = panel.querySelector<HTMLButtonElement>('[data-google-sign-in]')!;
+        const signOut = panel.querySelector<HTMLButtonElement>('[data-google-sign-out]')!;
+        const syncPanel = panel.querySelector<HTMLFormElement>('#decisionGoogleSync')!;
+        const refreshSync = this.bindGoogleSync(syncPanel, signal);
+        const render = (value: GoogleAccountStatus) => {
+            status.textContent = value.connected ? value.email || 'ログイン済み' : '未ログイン';
+            signIn.hidden = value.connected;
+            signOut.hidden = !value.connected;
+            syncPanel.hidden = !value.connected;
+            if (value.connected) void refreshSync();
+        };
+        const run = async (operation: () => Promise<GoogleAccountStatus>) => {
+            signIn.disabled = signOut.disabled = true;
+            try {
+                render(await operation());
+            } catch (error) {
+                status.textContent = String(error);
+            } finally {
+                signIn.disabled = signOut.disabled = false;
+            }
+        };
+        panel.addEventListener('toggle', () => {
+            if (panel.open && !signIn.disabled) void run(() => this.api.GoogleAccountStatus());
+        }, { signal });
+        signIn.addEventListener('click', () => void run(() => this.api.SignInGoogle()), { signal });
+        signOut.addEventListener('click', () => void run(async () => {
+            await this.api.SignOutGoogle();
+            return { connected: false };
+        }), { signal });
+    }
+
+    private bindGoogleSync(form: HTMLFormElement, signal: AbortSignal): () => Promise<void> {
+        const name = form.querySelector<HTMLInputElement>('input')!;
+        const enable = form.querySelector<HTMLButtonElement>('[data-sync-enable]')!;
+        const disable = form.querySelector<HTMLButtonElement>('[data-sync-disable]')!;
+        const now = form.querySelector<HTMLButtonElement>('[data-sync-now]')!;
+        const status = form.querySelector<HTMLElement>('[data-sync-status]')!;
+        const render = (value: GoogleSyncStatus) => {
+            if (value.name) name.value = value.name;
+            name.readOnly = Boolean(value.name);
+            enable.hidden = value.enabled;
+            disable.hidden = now.hidden = !value.enabled;
+            status.textContent = value.conflicts > 0
+                ? `競合した版を ${value.conflicts} 件保存しました．`
+                : value.last_sync ? `最終同期 ${new Date(value.last_sync).toLocaleString('ja-JP')}` : '';
+        };
+        const run = async (operation: () => Promise<GoogleSyncStatus>) => {
+            enable.disabled = disable.disabled = now.disabled = true;
+            try {
+                render(await operation());
+            } catch (error) {
+                status.textContent = String(error);
+            } finally {
+                enable.disabled = disable.disabled = now.disabled = false;
+            }
+        };
+        const sync = () => run(async () => {
+            const value = await this.api.SyncGoogleDecisions();
+            await this.refresh();
+            return value;
+        });
+        form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            void run(() => this.api.SetGoogleDecisionSync(name.value, true)).then(() => {
+                if (!now.hidden) void sync();
+            });
+        }, { signal });
+        now.addEventListener('click', () => void sync(), { signal });
+        disable.addEventListener('click', () => void run(() => this.api.SetGoogleDecisionSync(name.value, false)), { signal });
+        const stop = this.runtime.EventsOn('google-decision-sync', (value) => {
+            if (!form.hidden && !now.disabled && value && typeof value === 'object') {
+                render(value as GoogleSyncStatus);
+                void this.refresh();
+            }
+        });
+        signal.addEventListener('abort', stop, { once: true });
+        return () => run(() => this.api.GoogleDecisionSyncStatus());
     }
 
     async refresh(): Promise<void> {

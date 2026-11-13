@@ -87,7 +87,7 @@ func (v *VCS) ensureGitignore() error {
 		}
 		text := string(data)
 		rules := []string{"content/**/ephy-v2-*.md", ".mdsys/ephy/outbox/v2/", ".mdsys/ephy/records/v2/", ".mdsys/context/v2/", ".mdsys/write.lock",
-			"/.mdsys/context/v1/responses/", "/" + decisionlog.SettingsPath, "/" + decisionlog.Directory + "/", "/.mdsys/ephy/outbox/*/decision-*.json"}
+			"/.mdsys/context/v1/responses/", "/.mdsys/decision-sync/", "/.mdsys/decision-agents.json", "/" + decisionlog.SettingsPath, "/" + decisionlog.Directory + "/", "/.mdsys/ephy/outbox/*/decision-*.json"}
 		lines := map[string]bool{}
 		for _, line := range strings.Split(text, "\n") {
 			lines[line] = true

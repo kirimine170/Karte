@@ -45,6 +45,7 @@ type Record struct {
 	ReplacedBy             string   `json:"replaced_by"`
 	Confidence             string   `json:"confidence"`
 	Visibility             string   `json:"visibility"`
+	VisibilityTags         []string `json:"visibility_tags,omitempty"`
 	PublicationRestriction string   `json:"publication_restriction,omitempty"`
 	UpdatedAt              string   `json:"updated_at"`
 }
@@ -92,6 +93,9 @@ func (r Record) Validate() error {
 			return fmt.Errorf("invalid or duplicate decision source")
 		}
 		seen[source.URL] = true
+	}
+	if err := validateVisibilityTags(r.VisibilityTags); err != nil {
+		return err
 	}
 	if r.PublicationRestriction != "" && r.PublicationRestriction != WorkspacePrivate {
 		return fmt.Errorf("invalid decision publication restriction")

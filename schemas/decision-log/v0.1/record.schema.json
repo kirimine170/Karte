@@ -37,6 +37,17 @@
     "replaced_by": {"$ref": "#/$defs/link"},
     "confidence": {"enum": ["known", "hypothesis", "unverified"]},
     "visibility": {"enum": ["private", "public"]},
+    "visibility_tags": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {"anyOf": [
+        {"enum": ["public", "internal", "private", "agent:grok", "agent:muse", "agent:chatgpt"]},
+        {"type": "string", "pattern": "^business:[a-z0-9][a-z0-9._-]{0,63}$"}
+      ]},
+      "if": {"contains": {"const": "private"}},
+      "then": {"maxItems": 1}
+    },
     "publication_restriction": {"const": "workspace-private"},
     "updated_at": {"type": "string", "format": "date-time"}
   },

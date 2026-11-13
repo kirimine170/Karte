@@ -15,7 +15,47 @@ import (
 	"karte/internal/canonical"
 )
 
-const SettingsPath = ".mdsys/decision-log.json"
+const (
+	SettingsPath = ".mdsys/decision-log.json"
+	Reviewer     = "雫さん"
+)
+
+var requiredPrivatePair = [2]string{"hsap", "essen"}
+
+func defaultBusinesses() map[string]string {
+	return map[string]string{
+		"overall": "全体", "karte": "Karte", "hacksick": "HackSick", "essen": "ESSEN",
+		"mirai-labo": "MIRAIラボ", "hsap": "HSAP", "ephy": "ephy", "far": "FAR",
+	}
+}
+
+// InitializeSettings persists defaults on the first import. Review requires
+// an on-disk reviewer so that missing configuration fails closed.
+func InitializeSettings(w *canonical.Writer) error {
+	if _, err := w.ReadLimit(SettingsPath, 64*1024); !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return writeSettings(w, Settings{
+		Businesses:      defaultBusinesses(),
+		PrivateTogether: [][]string{{requiredPrivatePair[0], requiredPrivatePair[1]}},
+		Decider:         Reviewer,
+	})
+}
+
+func writeSettings(w *canonical.Writer, settings Settings) error {
+	raw, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	return w.Write(SettingsPath, raw, 0600)
+}
+
+func requireReviewer(settings Settings, decider string) error {
+	if settings.Decider != Reviewer || decider != Reviewer {
+		return fmt.Errorf("decision review requires the configured reviewer %s", Reviewer)
+	}
+	return nil
+}
 
 type Settings struct {
 	Businesses      map[string]string `json:"businesses"`
@@ -40,29 +80,36 @@ func LoadSettings(w *canonical.Writer) (Settings, error) {
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return Settings{}, fmt.Errorf("invalid decision log settings JSON")
 	}
+	if err := settings.validate(); err != nil {
+		return Settings{}, err
+	}
+	return settings, nil
+}
+
+func (settings Settings) validate() error {
 	for id, label := range settings.Businesses {
 		if !businessPattern.MatchString(id) || !validLabel(label) {
-			return Settings{}, fmt.Errorf("invalid decision log business")
+			return fmt.Errorf("invalid decision log business")
 		}
 	}
 	owners := map[string]string{}
 	for id, label := range settings.businessLabels() {
 		for _, alias := range []string{normalizeName(id), normalizeName(label)} {
 			if owner, exists := owners[alias]; exists && owner != id {
-				return Settings{}, fmt.Errorf("duplicate decision log business label")
+				return fmt.Errorf("duplicate decision log business label")
 			}
 			owners[alias] = id
 		}
 	}
 	for _, pair := range settings.PrivateTogether {
 		if len(pair) != 2 || !validLabel(pair[0]) || !validLabel(pair[1]) || normalizeName(pair[0]) == normalizeName(pair[1]) {
-			return Settings{}, fmt.Errorf("invalid decision log publication rule")
+			return fmt.Errorf("invalid decision log publication rule")
 		}
 	}
 	if settings.Decider != "" && !validLabel(settings.Decider) {
-		return Settings{}, fmt.Errorf("invalid decision log reviewer")
+		return fmt.Errorf("invalid decision log reviewer")
 	}
-	return settings, nil
+	return nil
 }
 
 func validLabel(label string) bool {
@@ -73,7 +120,7 @@ func validLabel(label string) bool {
 func normalizeName(name string) string { return strings.ToLower(norm.NFKC.String(name)) }
 
 func (s Settings) businessLabels() map[string]string {
-	labels := map[string]string{"overall": "全体", "karte": "Karte"}
+	labels := defaultBusinesses()
 	for id, label := range s.Businesses {
 		labels[id] = label
 	}
@@ -84,11 +131,25 @@ func (s Settings) requiresPrivate(record Record) bool {
 	if record.PublicationRestriction != "" {
 		return true
 	}
-	text := normalizeName(record.Business + " " + record.BusinessLabel + " " + record.Content)
-	for _, pair := range s.PrivateTogether {
-		if strings.Contains(text, normalizeName(pair[0])) && strings.Contains(text, normalizeName(pair[1])) {
+	for _, pair := range s.publicationPairs() {
+		if mentionsBusiness(record, pair[0]) && mentionsBusiness(record, pair[1]) {
 			return true
 		}
 	}
 	return false
+}
+
+func (s Settings) publicationPairs() [][2]string {
+	pairs := [][2]string{requiredPrivatePair}
+	for _, pair := range s.PrivateTogether {
+		if len(pair) == 2 && (normalizeName(pair[0]) != requiredPrivatePair[0] || normalizeName(pair[1]) != requiredPrivatePair[1]) {
+			pairs = append(pairs, [2]string{pair[0], pair[1]})
+		}
+	}
+	return pairs
+}
+
+func mentionsBusiness(record Record, name string) bool {
+	text := normalizeName(record.Business + " " + record.BusinessLabel + " " + record.Content)
+	return strings.Contains(text, normalizeName(name))
 }
