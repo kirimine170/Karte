@@ -22,7 +22,7 @@ func (s osCredentialStore) load() ([]byte, error) {
 	defer C.free(unsafe.Pointer(account))
 	var size C.UInt32
 	var data unsafe.Pointer
-	status := C.SecKeychainFindGenericPassword(nil, C.UInt32(len(s.key)), service,
+	status := C.SecKeychainFindGenericPassword(0, C.UInt32(len(s.key)), service,
 		C.UInt32(len(keychainAccount)), account, &size, &data, nil)
 	if err := keychainError(status); err != nil {
 		return nil, err
@@ -40,7 +40,7 @@ func (s osCredentialStore) save(data []byte) error {
 	defer C.free(unsafe.Pointer(account))
 	payload := C.CBytes(data)
 	defer C.free(payload)
-	status := C.SecKeychainAddGenericPassword(nil, C.UInt32(len(s.key)), service,
+	status := C.SecKeychainAddGenericPassword(0, C.UInt32(len(s.key)), service,
 		C.UInt32(len(keychainAccount)), account, C.UInt32(len(data)), payload, nil)
 	if status != C.errSecDuplicateItem {
 		return keychainError(status)
@@ -67,7 +67,7 @@ func (s osCredentialStore) findItem() (C.SecKeychainItemRef, error) {
 	defer C.free(unsafe.Pointer(service))
 	defer C.free(unsafe.Pointer(account))
 	var item C.SecKeychainItemRef
-	status := C.SecKeychainFindGenericPassword(nil, C.UInt32(len(s.key)), service,
+	status := C.SecKeychainFindGenericPassword(0, C.UInt32(len(s.key)), service,
 		C.UInt32(len(keychainAccount)), account, nil, nil, &item)
 	return item, keychainError(status)
 }
