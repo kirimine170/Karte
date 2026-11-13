@@ -142,6 +142,32 @@ export function createBrowserApi() {
             return true;
         },
 
+        async ExportDecisionLog(_recipient: string) {
+            return false;
+        },
+
+        async GoogleAccountStatus() {
+            return { connected: false };
+        },
+
+        async SignInGoogle() {
+            throw new Error('Googleログインはデスクトップアプリで利用できます');
+        },
+
+        async SignOutGoogle() {},
+
+        async GoogleDecisionSyncStatus() {
+            return { enabled: false, conflicts: 0 };
+        },
+
+        async SetGoogleDecisionSync() {
+            throw new Error('決定ログ同期はデスクトップアプリで利用できます');
+        },
+
+        async SyncGoogleDecisions() {
+            throw new Error('決定ログ同期はデスクトップアプリで利用できます');
+        },
+
         async ListDecisionLog() {
             return [];
         },

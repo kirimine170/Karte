@@ -13,6 +13,18 @@ export interface DecisionRecord {
     updated_at: string;
 }
 
+export interface GoogleAccountStatus {
+    connected: boolean;
+    email?: string;
+}
+
+export interface GoogleSyncStatus {
+    enabled: boolean;
+    name?: string;
+    last_sync?: string;
+    conflicts: number;
+}
+
 export interface DecisionImportResult {
     added: number;
     merged: number;
@@ -288,6 +300,13 @@ export interface WailsAppAPI {
     SaveEventLogs(logsJson: string): Promise<boolean>;
     ClipURL(request: ClipRequest): Promise<ClipResult>;
     ListDecisionLog(): Promise<DecisionRecord[]>;
+    ExportDecisionLog(recipient: string): Promise<boolean>;
+    GoogleAccountStatus(): Promise<GoogleAccountStatus>;
+    SignInGoogle(): Promise<GoogleAccountStatus>;
+    SignOutGoogle(): Promise<void>;
+    GoogleDecisionSyncStatus(): Promise<GoogleSyncStatus>;
+    SetGoogleDecisionSync(name: string, enabled: boolean): Promise<GoogleSyncStatus>;
+    SyncGoogleDecisions(): Promise<GoogleSyncStatus>;
     ImportDecisionSummary(sourceURL: string): Promise<DecisionImportResult | null>;
     WithdrawDecision(decisionID: string): Promise<void>;
     ListEphyProposals(): Promise<EphyInbox>;

@@ -72,9 +72,10 @@ type Server struct {
 	// policy and scope are the startup snapshot used only for diagnostics
 	// (Summary). Every call re-derives the live grant from disk via
 	// currentScope, so these fields are never an authorization source.
-	policy   contextcore.Policy
-	scope    contextcore.MCPScope
-	dataRoot string
+	policy     contextcore.Policy
+	scope      contextcore.MCPScope
+	dataRoot   string
+	agentToken string
 }
 
 // NewServer builds the adapter against dataDir. Every failure mode is fatal:
@@ -118,7 +119,7 @@ func NewServer(dataDir string) (*Server, error) {
 		return nil, fmt.Errorf("open contextcore service: %w", err)
 	}
 	return &Server{
-		service:  service,
+		service:  service.WithDecisionRecipient("public"),
 		policy:   policy,
 		scope:    scope,
 		dataRoot: realRoot,
@@ -236,13 +237,17 @@ func (s *Server) dispatch(encoder *json.Encoder, line string) error {
 	}
 	switch req.Method {
 	case "initialize":
+		instructions := "Read-only facade over a dedicated Karte data root. Tools: karte_search, karte_read."
+		if s.agentToken != "" {
+			instructions = "Decision log only. Search and read permitted decisions, or submit a private proposal for human review."
+		}
 		result := map[string]any{
 			"protocolVersion": protocolVersion,
 			"serverInfo":      map[string]string{"name": serverName, "version": serverVersion},
 			"capabilities": map[string]any{
 				"tools": map[string]any{"listChanged": false},
 			},
-			"instructions": "Read-only facade over a dedicated Karte data root. Tools: karte_search, karte_read.",
+			"instructions": instructions,
 		}
 		return s.encodeResult(encoder, req.ID, result)
 	case "notifications/initialized":
@@ -251,38 +256,42 @@ func (s *Server) dispatch(encoder *json.Encoder, line string) error {
 	case "ping":
 		return s.encodeResult(encoder, req.ID, map[string]any{})
 	case "tools/list":
-		return s.encodeResult(encoder, req.ID, map[string]any{
-			"tools": []map[string]any{
-				{
-					"name":        "karte_search",
-					"description": "Search the dedicated Karte data root for Markdown documents. Honors project scope, tag scope, and the policy's sensitivity ceiling. Returns doc_id, relative path, SHA-256, tags, and snippet for each match.",
-					"inputSchema": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"query":       map[string]any{"type": "string", "description": "Text to search for in title, body, and frontmatter fields.", "minLength": 1, "maxLength": 2048},
-							"top_k":       map[string]any{"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
-							"projects":    map[string]any{"type": "array", "minItems": 1, "maxItems": 64, "items": map[string]any{"type": "string", "maxLength": 64, "pattern": `^(\*|[a-z0-9][a-z0-9._-]{0,63})$`}, "description": "Restrict the search to these projects. Omit for all projects allowed by policy."},
-							"tags":        map[string]any{"type": "array", "minItems": 1, "maxItems": 64, "items": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "description": "Restrict the search to documents carrying every requested tag."},
-							"sensitivity": map[string]any{"type": "string", "enum": []string{"public", "internal", "confidential", "restricted"}, "description": "Maximum sensitivity level to include. Defaults to the policy ceiling for the configured actor."},
-						},
-						"required":             []string{"query"},
-						"additionalProperties": false,
+		tools := []map[string]any{
+			{
+				"name":        "karte_search",
+				"description": "Search the dedicated Karte data root for Markdown documents. Honors project scope, tag scope, and the policy's sensitivity ceiling. Returns doc_id, relative path, SHA-256, tags, and snippet for each match.",
+				"inputSchema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"query":       map[string]any{"type": "string", "description": "Text to search for in title, body, and frontmatter fields.", "minLength": 1, "maxLength": 2048},
+						"top_k":       map[string]any{"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
+						"projects":    map[string]any{"type": "array", "minItems": 1, "maxItems": 64, "items": map[string]any{"type": "string", "maxLength": 64, "pattern": `^(\*|[a-z0-9][a-z0-9._-]{0,63})$`}, "description": "Restrict the search to these projects. Omit for all projects allowed by policy."},
+						"tags":        map[string]any{"type": "array", "minItems": 1, "maxItems": 64, "items": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "description": "Restrict the search to documents carrying every requested tag."},
+						"sensitivity": map[string]any{"type": "string", "enum": []string{"public", "internal", "confidential", "restricted"}, "description": "Maximum sensitivity level to include. Defaults to the policy ceiling for the configured actor."},
 					},
-				},
-				{
-					"name":        "karte_read",
-					"description": "Read a single document by its stable doc_id. The response carries the canonical body, relative path, SHA-256, and frontmatter metadata.",
-					"inputSchema": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"doc_id": map[string]any{"type": "string", "description": "Stable document identifier from frontmatter (doc_id field).", "minLength": 1, "maxLength": 256},
-						},
-						"required":             []string{"doc_id"},
-						"additionalProperties": false,
-					},
+					"required":             []string{"query"},
+					"additionalProperties": false,
 				},
 			},
-		})
+			{
+				"name":        "karte_read",
+				"description": "Read a single document by its stable doc_id. The response carries the canonical body, relative path, SHA-256, and frontmatter metadata.",
+				"inputSchema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"doc_id": map[string]any{"type": "string", "description": "Stable document identifier from frontmatter (doc_id field).", "minLength": 1, "maxLength": 256},
+					},
+					"required":             []string{"doc_id"},
+					"additionalProperties": false,
+				},
+			},
+		}
+		if s.agentToken != "" {
+			tools[0]["description"] = "Search decisions visible to the authenticated recipient."
+			tools[1]["description"] = "Read a visible decision by its stable decision ID."
+			tools = append(tools, proposalTool())
+		}
+		return s.encodeResult(encoder, req.ID, map[string]any{"tools": tools})
 	case "tools/call":
 		return s.handleToolCall(encoder, req)
 	default:
@@ -333,6 +342,11 @@ func (s *Server) handleToolCall(encoder *json.Encoder, req request) error {
 		payload, err = s.search(call.Arguments)
 	case "karte_read":
 		payload, err = s.read(call.Arguments)
+	case "karte_propose_decision":
+		if s.agentToken == "" {
+			return s.encodeError(encoder, req.ID, -32602, "unknown tool")
+		}
+		payload, err = s.proposeDecision(call.Arguments)
 	default:
 		return s.encodeError(encoder, req.ID, -32602, fmt.Sprintf("unknown tool: %s", call.Name))
 	}
@@ -374,6 +388,9 @@ func (s *Server) currentScope() (contextcore.MCPScope, contextcore.Policy, error
 	policy, err := s.loadCurrentPolicy()
 	if err != nil {
 		return contextcore.MCPScope{}, contextcore.Policy{}, err
+	}
+	if s.agentToken != "" {
+		return s.agentScope(policy)
 	}
 	scope, err := contextcore.LoadMCPScope(s.dataRoot, policy)
 	if err != nil {

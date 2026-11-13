@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -55,6 +57,9 @@ func (a *App) importDecisionSummary(path, sourceURL string) (*decisionlog.Import
 				return err
 			}
 		}
+		if err := decisionlog.InitializeSettings(w); err != nil {
+			return err
+		}
 		result, err = decisionlog.Queue(w, store, records)
 		return err
 	})
@@ -92,6 +97,37 @@ func (a *App) ListDecisionLog() ([]decisionlog.Record, error) {
 	return records, err
 }
 
+// ExportDecisionLog writes the decision projection for the selected recipient.
+func (a *App) ExportDecisionLog(recipient string) (bool, error) {
+	service, err := contextcore.NewService(a.dataDir)
+	if err != nil {
+		return false, err
+	}
+	policy, err := contextcore.LoadPolicy(a.dataDir)
+	if err != nil {
+		return false, err
+	}
+	records, err := service.ExportDecisions(localHumanActor, policy, recipient)
+	if err != nil {
+		return false, err
+	}
+	data, err := json.MarshalIndent(records, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title: "決定ログを書き出す", DefaultFilename: "decisions.json",
+		Filters: []runtime.FileFilter{{DisplayName: "JSON", Pattern: "*.json"}},
+	})
+	if err != nil || path == "" {
+		return false, err
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0600); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (a *App) WithdrawDecision(id string) error {
 	if !decisionlog.ValidID(id) {
 		return fmt.Errorf("invalid decision ID")
@@ -119,7 +155,7 @@ func checkDecisionPolicy(policy contextcore.Policy, r decisionlog.Record, capabi
 		tags = append(tags, "decision:history")
 	}
 	authorization, err := policy.Authorize(localHumanActor, capability, contextcore.Resource{
-		Project: r.Business, Kind: "decision", Sensitivity: decisionlog.Sensitivity(r.Visibility),
+		Project: r.Business, Kind: "decision", Sensitivity: r.ContextSensitivity(),
 		Tags: tags, ProvenanceTypes: []string{"meeting-summary"},
 	})
 	if err != nil {
@@ -205,7 +241,7 @@ func (a *App) finishDecisionReview(candidateID, editedBody string, reject bool, 
 			if record.ID != original.ID || record.Business != original.Business || record.Date != original.Date ||
 				record.BusinessLabel != original.BusinessLabel || record.Decider != original.Decider ||
 				record.Visibility != original.Visibility || record.PublicationRestriction != original.PublicationRestriction {
-				return fmt.Errorf("decision identity, date, business, reviewer, and visibility are fixed for this candidate")
+				return fmt.Errorf("decision identity, date, business, reviewer, and legacy visibility are fixed for this candidate")
 			}
 			record.UpdatedAt, record.Sources = now, original.Sources
 			if err := a.authorizeDecision(record, contextcore.CapabilityReview); err != nil {

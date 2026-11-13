@@ -1,0 +1,24 @@
+{
+  "schema_version": "0.1",
+  "decision_id": "decision-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "date": "2026-11-12",
+  "business": "karte",
+  "business_label": "Karte",
+  "content": "架空のワークショップの日程を公開する。",
+  "status": "decided",
+  "decider": "雫さん",
+  "sources": [
+    {
+      "url": "https://example.invalid/decision-log-fixture",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "supersedes": "",
+  "replaced_by": "",
+  "confidence": "known",
+  "visibility": "private",
+  "visibility_tags": [
+    "public"
+  ],
+  "updated_at": "2026-11-12T12:00:00Z"
+}

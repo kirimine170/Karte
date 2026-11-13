@@ -22,6 +22,7 @@ import (
 	"syscall"
 
 	"karte/internal/contextcore/mcp"
+	"karte/internal/decisionlog"
 )
 
 func main() {
@@ -32,12 +33,46 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 	flags := flag.NewFlagSet("karte-mcp", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	check := flags.Bool("check", false, "Validate the environment and exit without serving.")
+	issue := flags.String("issue-decision-token", "", "Issue or rotate the token for an agent recipient.")
+	httpAddress := flags.String("agent-http", "", "Serve the authenticated decision MCP on a loopback address.")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 
 	dataDir := os.Getenv("KARTE_DATA_DIR")
-	server, err := mcp.NewServer(dataDir)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if *issue != "" {
+		if dataDir == "" || *httpAddress != "" || *check {
+			fmt.Fprintln(stderr, "karte-mcp: issue a token separately with an explicit KARTE_DATA_DIR")
+			return 2
+		}
+		token, err := decisionlog.IssueAgentToken(dataDir, *issue)
+		if err != nil {
+			fmt.Fprintf(stderr, "karte-mcp: could not issue token: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, token)
+		return 0
+	}
+	if *httpAddress != "" {
+		if *check {
+			fmt.Fprintln(stderr, "karte-mcp: use --agent-http without --check")
+			return 2
+		}
+		if err := mcp.ServeAgents(ctx, dataDir, *httpAddress); err != nil {
+			fmt.Fprintf(stderr, "karte-mcp: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	var server *mcp.Server
+	var err error
+	if token := os.Getenv("KARTE_DECISION_AGENT_TOKEN"); token != "" {
+		server, err = mcp.NewAgentServer(dataDir, token)
+	} else {
+		server, err = mcp.NewServer(dataDir)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "karte-mcp: %v\n", err)
 		return 1
@@ -47,8 +82,6 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		return 0
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	if err := server.Run(ctx, stdin, stdout); err != nil && ctx.Err() == nil {
 		fmt.Fprintf(stderr, "karte-mcp: %v\n", err)
 		return 1

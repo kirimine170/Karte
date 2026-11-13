@@ -32,7 +32,8 @@ func IsPath(path string) bool {
 
 func IsStoragePath(path string) bool {
 	path = strings.ToLower(filepath.ToSlash(path))
-	return path == SettingsPath || strings.HasPrefix(path, ".mdsys/context/v1/responses/") || IsPath(path) || (strings.HasPrefix(path, ".mdsys/ephy/outbox/") &&
+	return path == SettingsPath || path == ".mdsys/decision-agents.json" || path == ".mdsys/decision-sync" || strings.HasPrefix(path, ".mdsys/decision-sync/") ||
+		strings.HasPrefix(path, ".mdsys/context/v1/responses/") || IsPath(path) || (strings.HasPrefix(path, ".mdsys/ephy/outbox/") &&
 		strings.HasSuffix(path, ".json") && ValidID(strings.TrimSuffix(filepath.Base(path), ".json")))
 }
 
@@ -141,6 +142,32 @@ func List(w *canonical.Writer) ([]Entry, error) {
 		}
 		result = append(result, entry)
 	}
+	// Evaluate the same workspace snapshot for search, read and export,
+	// regardless of which records a particular request selects.
+	restricted := make(map[int]bool)
+	for _, pair := range settings.publicationPairs() {
+		var first, second []int
+		for i, entry := range result {
+			if entry.PublicationRestriction != "" || !entry.Record.shareable() {
+				continue
+			}
+			if mentionsBusiness(entry.Record, pair[0]) {
+				first = append(first, i)
+			}
+			if mentionsBusiness(entry.Record, pair[1]) {
+				second = append(second, i)
+			}
+		}
+		if len(first) > 0 && len(second) > 0 {
+			for _, i := range append(first, second...) {
+				restricted[i] = true
+			}
+		}
+	}
+	for i := range restricted {
+		result[i].Visibility = Private
+		result[i].PublicationRestriction = WorkspacePrivate
+	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].Date == result[j].Date {
 			return result[i].ID < result[j].ID
@@ -184,22 +211,32 @@ func Accept(w *canonical.Writer, record Record) (Entry, error) {
 	if err != nil {
 		return Entry{}, err
 	}
+	if err := requireReviewer(settings, record.Decider); err != nil {
+		return Entry{}, err
+	}
 	if record.Supersedes != "" {
 		old, ok := entries[record.Supersedes]
 		if !ok || old.Business != record.Business || (old.Status != Decided && old.Status != Open) {
 			return Entry{}, fmt.Errorf("replacement requires an active decision in the same business")
 		}
-		if record.Visibility == Public && (old.Visibility == Private || settings.requiresPrivate(old.Record)) {
+		if record.shareable() && (!old.Record.shareable() || settings.requiresPrivate(old.Record)) {
 			return Entry{}, fmt.Errorf("a public decision cannot replace a private decision")
 		}
 	}
-	if record.Visibility == Public && settings.requiresPrivate(record) {
+	if record.shareable() && settings.requiresPrivate(record) {
 		return Entry{}, fmt.Errorf("decision is restricted to the workspace")
 	}
 	return write(w, record, nil)
 }
 
 func Withdraw(w *canonical.Writer, id, now string) error {
+	settings, err := LoadSettings(w)
+	if err != nil {
+		return err
+	}
+	if err := requireReviewer(settings, Reviewer); err != nil {
+		return err
+	}
 	entries, err := load(w)
 	if err != nil {
 		return err

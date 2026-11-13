@@ -177,7 +177,16 @@ jobs:
           go test github.com/kirimine170/KarteRenderer/...
           go test . -run 'Test(KarteRendererDependencyContractFixtures|ExportHTMLToPDFWithRendererUsesTemporaryHTMLInput)$'
 
+      - name: Set up Python for receipt OCR tests
+        id: ocr-python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
       - name: Run full native platform regression tests
+        env:
+          RECEIPT_OCR_PYTHON: ${{ steps.ocr-python.outputs.python-path }}
+          PYTHONUTF8: '1'
         run: go test -count=1 ./...
 
       - name: Run native platform vet checks

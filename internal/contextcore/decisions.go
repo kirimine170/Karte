@@ -8,7 +8,72 @@ import (
 	"karte/internal/decisionlog"
 )
 
+// WithDecisionRecipient binds an authenticated transport to a decision
+// recipient. The file-backed Context request cannot set this value.
+func (service *Service) WithDecisionRecipient(recipient string) *Service {
+	bound := *service
+	bound.decisionRecipient = recipient
+	return &bound
+}
+
 func (service *Service) decisionDocuments(actor Actor, scope EffectiveScope) ([]indexedDocument, error) {
+	localHuman := actor.Type == "human" && actor.ID == "local-human"
+	var tags []string
+	if actor.Type == "ephy" && actor.ID == "ephy" ||
+		actor.Type == "tool" && service.decisionRecipient == decisionlog.Public {
+		tags = []string{decisionlog.Public}
+	}
+	authenticatedAgent := actor.Type == "tool" && actor.ID == service.decisionRecipient && decisionlog.ValidAgent(actor.ID)
+	if authenticatedAgent {
+		tags = []string{decisionlog.Public, decisionlog.Internal, actor.ID}
+	}
+	return service.decisionDocumentsFor(scope, localHuman, tags, authenticatedAgent, nil)
+}
+
+func (service *Service) ExportDecisions(actor Actor, policy Policy, recipient string) ([]Document, error) {
+	if recipient != decisionlog.Public && !decisionlog.ValidAgent(recipient) {
+		return nil, fmt.Errorf("invalid decision export recipient")
+	}
+	scope, err := policy.ResolveFor(actor, Scope{SensitivityCeiling: "restricted"}, CapabilityExport)
+	if err != nil {
+		return nil, err
+	}
+	if !scope.Allowed {
+		return nil, fmt.Errorf("decision export is not authorized")
+	}
+	tags := []string{decisionlog.Public}
+	var recipientScope *EffectiveScope
+	if recipient != decisionlog.Public {
+		tags = append(tags, recipient)
+		if _, configured := policy.Actors[recipient]; configured {
+			grant, err := policy.ResolveFor(Actor{Type: "tool", ID: recipient}, Scope{SensitivityCeiling: "restricted"}, CapabilityRead)
+			if err != nil {
+				return nil, err
+			}
+			recipientScope = &grant
+			tags = append(tags, decisionlog.Internal)
+		}
+	}
+	entries, err := service.decisionDocumentsFor(scope, false, tags, recipientScope != nil, recipientScope)
+	if err != nil {
+		return nil, err
+	}
+	documents := make([]Document, 0, len(entries))
+	for _, entry := range entries {
+		documents = append(documents, contextDocument(entry))
+	}
+	return documents, nil
+}
+
+func contextDocument(candidate indexedDocument) Document {
+	return Document{
+		DocID: candidate.DocID, Title: candidate.Title, Project: candidate.Project, Kind: candidate.Kind,
+		Tags: candidate.Tags, Sensitivity: candidate.Sensitivity, RelativePath: candidate.RelativePath,
+		UpdatedAt: candidate.UpdatedAt, SHA256: candidate.SHA256, Body: candidate.Body, Provenance: candidate.Provenance,
+	}
+}
+
+func (service *Service) decisionDocumentsFor(scope EffectiveScope, localHuman bool, recipientTags []string, businessRecipient bool, recipientScope *EffectiveScope) ([]indexedDocument, error) {
 	var entries []decisionlog.Entry
 	err := canonical.WithWriter(service.dataRoot, func(w *canonical.Writer) error {
 		var err error
@@ -21,9 +86,16 @@ func (service *Service) decisionDocuments(actor Actor, scope EffectiveScope) ([]
 
 	documents := make([]indexedDocument, 0, len(entries))
 	visible := make(map[string]bool)
-	localHuman := actor.Type == "human" && actor.ID == "local-human"
 	for _, entry := range entries {
-		if entry.Visibility == decisionlog.Private && !localHuman {
+		tags := recipientTags
+		businessScope := scope
+		if recipientScope != nil {
+			businessScope = *recipientScope
+		}
+		if businessRecipient && (businessScope.AllProjects || businessScope.Projects[entry.Business]) {
+			tags = append(append([]string(nil), tags...), "business:"+entry.Business)
+		}
+		if !localHuman && !entry.VisibleTo(tags) {
 			continue
 		}
 		label := decisionlog.StatusLabel(entry.Status)
@@ -31,7 +103,7 @@ func (service *Service) decisionDocuments(actor Actor, scope EffectiveScope) ([]
 			DocID: entry.ID, Title: truncateRunes(entry.Content, 160),
 			Project: entry.Business, Kind: "decision",
 			Tags:        []string{"decision-log", "decision:" + entry.Status},
-			Sensitivity: decisionlog.Sensitivity(entry.Visibility), RelativePath: decisionlog.Path(entry.ID),
+			Sensitivity: entry.ContextSensitivity(), RelativePath: decisionlog.Path(entry.ID),
 			UpdatedAt: entry.UpdatedAt, SHA256: entry.SHA256, DecisionStatus: entry.Status,
 			Body: fmt.Sprintf("状態　%s\n事業　%s\n日付　%s\n決定者　%s\n\n%s", label, entry.DisplayBusiness(), entry.Date, entry.Decider, entry.Content),
 		}
@@ -42,6 +114,9 @@ func (service *Service) decisionDocuments(actor Actor, scope EffectiveScope) ([]
 			document.Provenance = append(document.Provenance, ProvenanceRef{
 				Type: "meeting-summary", Reference: source.URL, SHA256: source.SHA256,
 			})
+		}
+		if recipientScope != nil && !recipientScope.permits(document) {
+			continue
 		}
 		// Relationship visibility follows the actor's policy. Request tag filters
 		// only select results and do not hide permitted links to a different state.

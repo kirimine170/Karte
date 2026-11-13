@@ -22,6 +22,8 @@ on:
       - 'go.sum'
       - 'schemas/karte-ephy/v2/**'
       - 'schemas/karte-context/v2/**'
+      - 'schemas/decision-log/**'
+      - 'scripts/verify_decision_log_fixtures.py'
       - 'scripts/*runtime_record*'
   pull_request:
     branches: [main]
@@ -43,6 +45,8 @@ on:
       - 'go.sum'
       - 'schemas/karte-ephy/v2/**'
       - 'schemas/karte-context/v2/**'
+      - 'schemas/decision-log/**'
+      - 'scripts/verify_decision_log_fixtures.py'
       - 'scripts/*runtime_record*'
 
 concurrency:
@@ -76,9 +80,10 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Validate Runtime record v2 schemas and fixtures
+      - name: Validate record schemas and fixtures
         run: |
           python -m pip install 'jsonschema[format]>=4.23,<5.0'
+          python scripts/verify_decision_log_fixtures.py
           python scripts/verify_runtime_record_fixtures.py
           python scripts/smoke_runtime_records_v2.py
           python scripts/verify_worker_experiment_fixture.py
