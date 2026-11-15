@@ -1,0 +1,40 @@
+{
+  "type": "resource_graph",
+  "schema_version": "0.1",
+  "workspace_id": "fixture-workspace",
+  "resources": [
+    {
+      "resource_id": "notes",
+      "kind": "markdown",
+      "legacy_doc_id": "doc:会議📝"
+    }
+  ],
+  "revisions": [
+    {
+      "revision_id": "note-initial",
+      "resource_id": "notes",
+      "parent_revision_ids": [
+        "note-other"
+      ],
+      "blob": {
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "size": 160,
+        "media_type": "text/markdown"
+      }
+    },
+    {
+      "revision_id": "note-other",
+      "resource_id": "notes",
+      "parent_revision_ids": [
+        "note-initial"
+      ],
+      "blob": {
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "size": 160,
+        "media_type": "text/markdown"
+      }
+    }
+  ],
+  "relations": [],
+  "change_events": []
+}

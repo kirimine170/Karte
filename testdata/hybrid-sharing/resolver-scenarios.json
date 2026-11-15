@@ -1,0 +1,67 @@
+{
+  "graph_fixture": "valid-graph.json",
+  "board_move": {
+    "resource_id": "report",
+    "historical_source": "content/旧/調査 #1.pdf",
+    "current_source": "content/調査/調査 #1.pdf",
+    "revision_id": "report-v1",
+    "missing_source": "content/調査/欠損.pdf",
+    "missing_outcome": "missing"
+  },
+  "context_read": {
+    "doc_id": "doc:会議📝",
+    "resource_id": "notes"
+  },
+  "pdf_anchor": {
+    "relation_id": "pdf-citation",
+    "revision_id": "report-v1",
+    "blob_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "page": 4,
+    "outcome": "resolved"
+  },
+  "webp_derivative": {
+    "relation_id": "map-origin",
+    "source_resource_id": "original",
+    "derived_resource_id": "map",
+    "derived_revision_id": "map-metadata",
+    "previous_revision_id": "map-v1",
+    "chunks_available": false,
+    "outcome": "resolved_by_catalog"
+  },
+  "dependency_cycle": {
+    "root_revision_id": "note-mac",
+    "visited_revision_ids": [
+      "note-mac",
+      "report-v1"
+    ],
+    "back_edge_id": "note-embed",
+    "outcome": "complete"
+  },
+  "following_head": {
+    "resource_id": "notes",
+    "head_revision_ids": [
+      "note-mac",
+      "note-windows"
+    ],
+    "outcome": "conflict"
+  },
+  "fixed_in_conflict": {
+    "resource_id": "notes",
+    "revision_id": "note-initial",
+    "outcome": "resolved"
+  },
+  "path_aliases": [
+    {
+      "kind": "history",
+      "source": "content/旧/調査 #1.pdf",
+      "resource_id": "report",
+      "revision_id": "report-v1"
+    },
+    {
+      "kind": "current",
+      "source": "content/調査/調査 #1.pdf",
+      "resource_id": "report",
+      "revision_id": "report-v1"
+    }
+  ]
+}

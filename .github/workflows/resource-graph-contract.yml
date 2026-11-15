@@ -1,0 +1,64 @@
+name: Resource Graph Contract
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/resource-graph-contract.yml'
+      - 'architecture/adr/ADR-0007-resource-graph-g0.md'
+      - 'internal/resourcegraph/**'
+      - 'testdata/hybrid-sharing/**'
+      - 'architecture/HSH-02_READ_ONLY_RESOURCE_RESOLVER.md'
+      - 'schemas/hybrid-sharing/v0.1/resource-graph*'
+      - 'schemas/hybrid-sharing/v0.1/resource-graph-fixtures/**'
+      - 'scripts/verify_resource_graph_fixtures.py'
+      - 'schemas/karte-ephy/v2/fixtures/grant.json'
+      - 'go.mod'
+      - 'go.sum'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/resource-graph-contract.yml'
+      - 'architecture/adr/ADR-0007-resource-graph-g0.md'
+      - 'internal/resourcegraph/**'
+      - 'testdata/hybrid-sharing/**'
+      - 'architecture/HSH-02_READ_ONLY_RESOURCE_RESOLVER.md'
+      - 'schemas/hybrid-sharing/v0.1/resource-graph*'
+      - 'schemas/hybrid-sharing/v0.1/resource-graph-fixtures/**'
+      - 'scripts/verify_resource_graph_fixtures.py'
+      - 'schemas/karte-ephy/v2/fixtures/grant.json'
+      - 'go.mod'
+      - 'go.sum'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: resource-graph-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-15, windows-latest]
+    env:
+      GOFLAGS: -buildvcs=false
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check fixture shapes
+        run: |
+          python -m pip install 'jsonschema>=4.23,<5'
+          python scripts/verify_resource_graph_fixtures.py
+      - name: Check graph semantics and Go types
+        run: go test -count=1 -v ./internal/resourcegraph

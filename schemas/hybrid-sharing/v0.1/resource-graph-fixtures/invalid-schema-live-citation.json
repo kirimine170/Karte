@@ -1,0 +1,50 @@
+{
+  "type": "resource_graph",
+  "schema_version": "0.1",
+  "workspace_id": "fixture-workspace",
+  "resources": [
+    {
+      "resource_id": "notes",
+      "kind": "markdown",
+      "legacy_doc_id": "doc:会議📝"
+    },
+    {
+      "resource_id": "report",
+      "kind": "pdf"
+    }
+  ],
+  "revisions": [
+    {
+      "revision_id": "note-initial",
+      "resource_id": "notes",
+      "parent_revision_ids": [],
+      "blob": {
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "size": 160,
+        "media_type": "text/markdown"
+      }
+    },
+    {
+      "revision_id": "report-v1",
+      "resource_id": "report",
+      "parent_revision_ids": [],
+      "blob": {
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "size": 2048,
+        "media_type": "application/pdf"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "relation_id": "bad-ref",
+      "kind": "cites",
+      "source_revision_id": "note-initial",
+      "target": {
+        "mode": "follow_head",
+        "resource_id": "report"
+      }
+    }
+  ],
+  "change_events": []
+}
