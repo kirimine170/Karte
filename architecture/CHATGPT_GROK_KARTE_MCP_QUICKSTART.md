@@ -116,13 +116,16 @@ ChatGPTの標準認証設定はOAuth等を扱うため，静的なKarteトーク
 
 ```powershell
 tunnel-client help quickstart
-tunnel-client init --sample sample_mcp_stdio_local --profile karte-stdio --tunnel-id '<利用者のTunnel ID>' --mcp-command 'C:\Karte-Test\karte-mcp.exe --shared-context'
+tunnel-client init --sample sample_mcp_stdio_local --profile karte-stdio --tunnel-id '<利用者のTunnel ID>' --mcp-command "'C:/Karte-Test/karte-mcp.exe' --shared-context"
 tunnel-client doctor --profile karte-stdio --explain
 tunnel-client run --profile karte-stdio
 ```
 
 トンネルの準備完了を確認してから，ChatGPTの Plugins → Add custom MCP server → Tunnel で
-同じTunnelを選び，アプリをインストールする．この構成ではプラグイン利用者が同じ `agent:chatgpt` としてKarteを参照するため，
+同じTunnelを選ぶ．この専用STDIO構成では，Workspaceが許可している場合にアプリの認証を
+**No authentication** として作成し，インストールする．認証はTunnelの利用制限とKarte子プロセスで行う．
+Workspaceがアプリ側のOAuthを必須とする場合は，別途認証が必要になる．
+この構成ではプラグイン利用者が同じ `agent:chatgpt` としてKarteを参照するため，
 合成試験用のプライベートアプリに限定する．アカウント単位のKarte認可が必要な共有構成では別途認証を設計する．
 終了時は `tunnel-client run` を実行中の端末で Ctrl+C．STDIOを単独で起動した場合は標準入力を閉じる．
 
