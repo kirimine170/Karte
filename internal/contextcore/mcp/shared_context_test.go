@@ -107,8 +107,8 @@ func TestSharedContextAgentsAreScopedAndLegacyModeIsDecisionOnly(t *testing.T) {
 		}
 		for _, query := range []string{tc.denied, "PRIVATE_2717", "UNINDEXED_2717"} {
 			denied := call(shared, tc.token, query)
-			if denied.Code != http.StatusOK || strings.Contains(denied.Body.String(), "doc_id") ||
-				strings.Contains(denied.Body.String(), query) || strings.Contains(denied.Body.String(), "missing_doc_id") {
+			if denied.Code != http.StatusOK || strings.Contains(denied.Body.String(), query) ||
+				strings.Contains(denied.Body.String(), "secret-note") || strings.Contains(denied.Body.String(), "missing_doc_id") {
 				t.Fatalf("denied search revealed data or diagnostics: %d %s", denied.Code, denied.Body.String())
 			}
 		}
