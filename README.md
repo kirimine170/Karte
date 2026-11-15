@@ -157,6 +157,8 @@ karte-desktop/
 - `public/` … ビルドされたHTMLファイル
 - `.mdsys/` … システム領域（index、drafts等）
 
+AI共有実験：認証済みのChatGPT／Grok Bot向けに `karte-mcp --shared-context` を追加した．既定のDecision MCPは変更せず，明示オプトイン時だけ許可されたWorkspace Markdownも検索・読取できる．アカウント接続，最小権限ポリシー，トンネル構成は [ChatGPT／Grok MCP接続ガイド](architecture/CHATGPT_GROK_KARTE_MCP_QUICKSTART.md) を参照．
+
 Ephy連携V1では`.mdsys/ephy/outbox`をreview済みfile exchangeに使用する．Ephyは`content`をread-onlyで参照し，Karteの`Ephy候補`画面で明示的に採用したproposalだけが既存`SaveFile`経路からcanonical Markdownへ反映される．contractと障害回復手順は[`Karte–Ephy reviewed outbox V1`](architecture/KARTE_EPHY_OUTBOX.md)を参照する．
 
 ## キーボードショートカット
