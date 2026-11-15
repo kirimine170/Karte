@@ -95,6 +95,10 @@ test('imports a portable PDF reference and restores its page and highlight after
   await expect(restored.locator('#viewer-body .reference-highlight')).toBeVisible();
   await expect(restored.locator('#viewer-body .textLayer')).not.toBeEmpty();
   await restored.getByRole('button', { name: '資料を閉じる', exact: true }).click();
+  await restored.locator('.reference-chip.unresolved').click();
+  await expect(restored.locator('#page-label')).toHaveText('1 / 2');
+  await expect(restored.locator('#viewer-body .reference-highlight')).toHaveCount(0);
+  await restored.getByRole('button', { name: '資料を閉じる', exact: true }).click();
   // Portable imports create another board，leaving the original analysis intact．
   await restored.getByRole('button', { name: 'ボードを開く', exact: true }).click();
   await restored.locator('.native-resource').filter({ hasText: boardTitle }).click();

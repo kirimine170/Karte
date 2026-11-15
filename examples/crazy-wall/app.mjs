@@ -109,7 +109,7 @@ function paintBoardHighlights() {
   }
 }
 function referenceWorldPoint(key) {
-  const el=cardLayer.querySelector(`.reference-highlight[data-reference-key="${CSS.escape(key)}"]`)||cardLayer.querySelector(`.reference-chip[data-reference-key="${CSS.escape(key)}"]`);
+  const el=cardLayer.querySelector(`.reference-highlight[data-reference-key="${CSS.escape(key)}"]`)||cardLayer.querySelector(`.reference-chip:not(.unresolved)[data-reference-key="${CSS.escape(key)}"]`);
   if(!el)return null;const r=el.getBoundingClientRect(),v=viewport.getBoundingClientRect();
   return {x:(r.left+r.width/2-v.left-view.x)/view.zoom,y:(r.top+r.height/2-v.top-view.y)/view.zoom};
 }
@@ -205,7 +205,7 @@ function renderEdges() {
     const d = `M${p.x1} ${p.y1} Q${mx+8} ${my+13} ${p.x2} ${p.y2}`;
     const dimmed = selected?.type === 'card' && e.from !== selected.id && e.to !== selected.id;
     const html=`<g class="edge${active ? ' selected' : ''}${dimmed ? ' dimmed' : ''}" data-edge="${esc(e.id)}"><path class="thread" d="${d}" stroke="${r.color}" ${e.status === 'pending' ? 'stroke-dasharray="5 4"' : ''} marker-end="url(#arrow-${e.relation})"/><path class="edge-hit" tabindex="0" role="button" aria-label="${esc(a.title + 'から' + b.title + 'への関係：' + r.short)}" data-edge="${esc(e.id)}" d="${d}"/><circle cx="${p.x1}" cy="${p.y1}" r="3.5" stroke="${r.color}"/><text x="${mx+5}" y="${my-4}" text-anchor="middle">${r.short}${e.status === 'pending' ? ' ?' : ''}</text></g>`;
-    (e.fromAnchor||e.toAnchor?anchored:regular).push(html);
+    (from||to?anchored:regular).push(html);
   }
   edgeLayer.innerHTML=defs+`<g transform="translate(40000 40000)">${regular.join('')}</g>`;
   $('#anchor-edges').innerHTML=`<g transform="translate(40000 40000)">${anchored.join('')}</g>`;
