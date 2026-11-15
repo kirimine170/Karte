@@ -1,0 +1,10 @@
+{
+  "format_version": "0.1",
+  "root_resource_id": "DOC-000001",
+  "root_revision_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "blob": {
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "size": 512,
+    "media_type": "text/markdown"
+  }
+}
