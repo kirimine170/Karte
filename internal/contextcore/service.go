@@ -38,6 +38,7 @@ type Service struct {
 	dataRoot          string
 	contentRoot       string
 	decisionRecipient string
+	includeCanonicalWithRecipient bool
 }
 
 func NewService(dataDir string) (*Service, error) {
@@ -65,7 +66,7 @@ func (service *Service) Search(request Request, policy Policy) ([]SearchResult, 
 	}
 	var documents []indexedDocument
 	diagnostics := []Diagnostic{}
-	if !decisionlog.ValidAgent(service.decisionRecipient) {
+	if !decisionlog.ValidAgent(service.decisionRecipient) || service.includeCanonicalWithRecipient {
 		documents, diagnostics, err = service.scan()
 		if err != nil {
 			return nil, nil, "invalid", err
@@ -136,7 +137,7 @@ func (service *Service) Read(request Request, policy Policy) (*Document, []Diagn
 	diagnostics := []Diagnostic{}
 	if decisionlog.ValidID(*request.DocID) {
 		documents, err = service.decisionDocuments(request.Actor, effective)
-	} else if decisionlog.ValidAgent(service.decisionRecipient) {
+	} else if decisionlog.ValidAgent(service.decisionRecipient) && !service.includeCanonicalWithRecipient {
 		return nil, diagnostics, "denied", nil
 	} else {
 		documents, diagnostics, err = service.scan()
