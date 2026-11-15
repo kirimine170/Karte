@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -14,18 +18,20 @@ import (
 
 	"github.com/google/uuid"
 	boardpkg "karte/internal/board"
+	"karte/internal/canonical"
 	fm "karte/internal/frontmatter"
 )
 
 // ResearchResource contains managed references only．Media bytes stay in Karte's data directory．
 type ResearchResource struct {
-	Path     string `json:"path"`
-	Kind     string `json:"kind"`
-	Title    string `json:"title"`
-	Body     string `json:"body"`
-	URL      string `json:"url"`
-	Revision string `json:"revision"`
-	EditPath string `json:"editPath"`
+	Path           string `json:"path"`
+	Kind           string `json:"kind"`
+	Title          string `json:"title"`
+	Body           string `json:"body"`
+	URL            string `json:"url"`
+	Revision       string `json:"revision"`
+	LegacyRevision string `json:"legacyRevision,omitempty"`
+	EditPath       string `json:"editPath"`
 }
 
 func researchKind(path string) string {
@@ -172,8 +178,21 @@ func (a *App) LoadResearchResource(path string) (*ResearchResource, error) {
 		r.URL = (&url.URL{Path: "/image/" + path}).EscapedPath()
 		r.Body, _ = a.GetImageMetadata(path)
 	case "pdf":
-		r.URL = (&url.URL{Path: "/pdf/" + path}).EscapedPath()
+		file, err := os.Open(abs)
+		if err != nil {
+			return nil, err
+		}
+		defer file.Close()
+		digest, source, err := researchPDFDigest(file, nil)
+		if err != nil {
+			return nil, err
+		}
+		r.Revision = digest
+		r.LegacyRevision = fmt.Sprintf("%d:%d", source.ModTime().UnixNano(), source.Size())
+		mediaURL := url.URL{Path: "/pdf/" + path, RawQuery: url.Values{"v": {digest}}.Encode()}
+		r.URL = mediaURL.String()
 		r.EditPath = path
+		return r, nil
 	case "audio":
 		r.URL = (&url.URL{Path: "/audio/" + path}).EscapedPath()
 		r.EditPath = a.researchTranscript(path)
@@ -185,6 +204,81 @@ func (a *App) LoadResearchResource(path string) (*ResearchResource, error) {
 		r.Revision = fmt.Sprintf("%d:%d", current.ModTime().UnixNano(), current.Size())
 	}
 	return r, nil
+}
+
+var errResearchPDFChanged = errors.New("PDF source changed during verification")
+
+// researchPDFDigest optionally writes the hashed bytes to a private snapshot.
+// Limit the read to the observed size so concurrent appends cannot extend it.
+func researchPDFDigest(file *os.File, snapshot io.Writer) (string, fs.FileInfo, error) {
+	before, err := file.Stat()
+	if err != nil {
+		return "", nil, err
+	}
+	if !before.Mode().IsRegular() {
+		return "", nil, fmt.Errorf("PDF source is not a regular file")
+	}
+	digest := sha256.New()
+	var output io.Writer = digest
+	if snapshot != nil {
+		output = io.MultiWriter(digest, snapshot)
+	}
+	size, err := io.CopyN(output, file, before.Size())
+	if errors.Is(err, io.EOF) {
+		return "", nil, errResearchPDFChanged
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	after, err := os.Stat(file.Name())
+	if err != nil {
+		return "", nil, err
+	}
+	if !os.SameFile(before, after) || size != before.Size() || size != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+		return "", nil, errResearchPDFChanged
+	}
+	return fmt.Sprintf("sha256:%x", digest.Sum(nil)), after, nil
+}
+
+// serveResearchPDFRevision serves the exact bytes verified for the requested
+// revision. Range responses seek within the private spool, never the source.
+func serveResearchPDFRevision(w http.ResponseWriter, r *http.Request, source *os.File, version string) {
+	dir, err := os.MkdirTemp("", "karte-pdf-revision-*")
+	if err != nil {
+		http.Error(w, "PDF snapshot unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer os.Remove(dir)
+	if err := canonical.SecureDirectory(dir); err != nil {
+		http.Error(w, "PDF snapshot unavailable", http.StatusInternalServerError)
+		return
+	}
+	snapshot, err := os.CreateTemp(dir, "content-")
+	if err != nil {
+		http.Error(w, "PDF snapshot unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer os.Remove(snapshot.Name())
+	defer snapshot.Close()
+
+	digest, sourceInfo, err := researchPDFDigest(source, snapshot)
+	if errors.Is(err, errResearchPDFChanged) || errors.Is(err, os.ErrNotExist) || (err == nil && digest != version) {
+		http.Error(w, "PDF revision unavailable", http.StatusPreconditionFailed)
+		return
+	}
+	if err != nil || snapshot.Close() != nil {
+		http.Error(w, "PDF snapshot unavailable", http.StatusInternalServerError)
+		return
+	}
+	verified, err := os.Open(snapshot.Name())
+	if err != nil {
+		http.Error(w, "PDF snapshot unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer verified.Close()
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Cache-Control", "no-store")
+	http.ServeContent(w, r, filepath.Base(source.Name()), sourceInfo.ModTime(), verified)
 }
 
 // EditResearchResource opens the existing text editor for audio transcripts．An empty linked

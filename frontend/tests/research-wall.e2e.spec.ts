@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -70,13 +71,15 @@ test('opens the existing editor and refreshes the source without replacing card 
 test('imports a portable PDF reference and restores its page and highlight after reload', async ({ page }) => {
   const wall = await openBoard(page);
   const pdf = readFileSync(resolve(__dirname, '../../examples/crazy-wall/assets/warehouse-survey.pdf'));
+  const revision = 'sha256:' + createHash('sha256').update(pdf).digest('hex');
   const portable = {
     schema: 'karte-research-wall/1', title: 'PDF引用の検証',
     cards: [
       { id: 'report', kind: 'pdf', title: '調査PDF', filename: 'survey.pdf', body: '', cardBody: '入口の図を確認する．', attachment: `data:application/pdf;base64,${pdf.toString('base64')}`, pages: 2, page: 1, x: 100, y: 120, w: 280, h: 330 },
       { id: 'claim', kind: 'note', title: '検討事項', body: '北側入口の図を参照する．', x: 500, y: 120, w: 270, h: 230 },
     ],
-    edges: [{ id: 'reference', from: 'report', to: 'claim', relation: 'related_to', reason: '図で確認', status: 'reviewed', fromAnchor: { type: 'pdf-region', exact: '入口の図', page: 2, rects: [{ x: .1, y: .2, w: .3, h: .1 }] } }],
+    edges: [{ id: 'reference', from: 'report', to: 'claim', relation: 'related_to', reason: '図で確認', status: 'reviewed', fromAnchor: { type: 'pdf-region', exact: '入口の図', page: 2, rects: [{ x: .1, y: .2, w: .3, h: .1 }], revision } },
+      { id: 'old-reference', from: 'report', to: 'claim', relation: 'related_to', reason: '旧版', status: 'reviewed', fromAnchor: { type: 'pdf-region', exact: '旧版の図', page: 2, rects: [{ x: .1, y: .2, w: .3, h: .1 }], revision: 'sha256:' + '0'.repeat(64) } }],
   };
   await wall.locator('#board-input').setInputFiles({ name: 'research.wall.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(portable)) });
   await expect(wall.getByRole('textbox', { name: 'ボード名', exact: true })).toHaveValue(portable.title);
@@ -85,11 +88,16 @@ test('imports a portable PDF reference and restores its page and highlight after
 
   await page.reload();
   const restored = await openBoard(page, portable.title);
-  await restored.locator('.reference-chip').click();
+  await expect(restored.locator('.reference-chip.unresolved')).toContainText('旧版の図');
+  await restored.locator('.reference-chip').filter({ hasText: '入口の図' }).click();
   await expect(restored.locator('#page-label')).toHaveText('2 / 2');
   await expect(restored.locator('#viewer-body canvas')).toBeVisible();
   await expect(restored.locator('#viewer-body .reference-highlight')).toBeVisible();
   await expect(restored.locator('#viewer-body .textLayer')).not.toBeEmpty();
+  await restored.getByRole('button', { name: '資料を閉じる', exact: true }).click();
+  await restored.locator('.reference-chip.unresolved').click();
+  await expect(restored.locator('#page-label')).toHaveText('1 / 2');
+  await expect(restored.locator('#viewer-body .reference-highlight')).toHaveCount(0);
   await restored.getByRole('button', { name: '資料を閉じる', exact: true }).click();
   // Portable imports create another board，leaving the original analysis intact．
   await restored.getByRole('button', { name: 'ボードを開く', exact: true }).click();

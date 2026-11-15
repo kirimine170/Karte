@@ -1,4 +1,4 @@
-import { RELATIONS, KINDS, clamp, classifyFile, connectionPoints, fitViewport, validateBoard, makeEdge, markdownHTML, textQuote, resolveTextQuote, pdfPreviewLayout, projectPdfRect, resourcePatch, anchorIsCurrent } from './model.mjs';
+import { RELATIONS, KINDS, clamp, classifyFile, connectionPoints, fitViewport, validateBoard, makeEdge, markdownHTML, textQuote, resolveTextQuote, pdfPreviewLayout, projectPdfRect, resourcePatch, anchorIsCurrent, isPDFRevision, pdfRevision } from './model.mjs';
 import { createSample } from './sample.mjs';
 
 const host = window.karteResearchHost;
@@ -109,7 +109,7 @@ function paintBoardHighlights() {
   }
 }
 function referenceWorldPoint(key) {
-  const el=cardLayer.querySelector(`.reference-highlight[data-reference-key="${CSS.escape(key)}"]`)||cardLayer.querySelector(`.reference-chip[data-reference-key="${CSS.escape(key)}"]`);
+  const el=cardLayer.querySelector(`.reference-highlight[data-reference-key="${CSS.escape(key)}"]`)||cardLayer.querySelector(`.reference-chip:not(.unresolved)[data-reference-key="${CSS.escape(key)}"]`);
   if(!el)return null;const r=el.getBoundingClientRect(),v=viewport.getBoundingClientRect();
   return {x:(r.left+r.width/2-v.left-view.x)/view.zoom,y:(r.top+r.height/2-v.top-view.y)/view.zoom};
 }
@@ -205,7 +205,7 @@ function renderEdges() {
     const d = `M${p.x1} ${p.y1} Q${mx+8} ${my+13} ${p.x2} ${p.y2}`;
     const dimmed = selected?.type === 'card' && e.from !== selected.id && e.to !== selected.id;
     const html=`<g class="edge${active ? ' selected' : ''}${dimmed ? ' dimmed' : ''}" data-edge="${esc(e.id)}"><path class="thread" d="${d}" stroke="${r.color}" ${e.status === 'pending' ? 'stroke-dasharray="5 4"' : ''} marker-end="url(#arrow-${e.relation})"/><path class="edge-hit" tabindex="0" role="button" aria-label="${esc(a.title + 'から' + b.title + 'への関係：' + r.short)}" data-edge="${esc(e.id)}" d="${d}"/><circle cx="${p.x1}" cy="${p.y1}" r="3.5" stroke="${r.color}"/><text x="${mx+5}" y="${my-4}" text-anchor="middle">${r.short}${e.status === 'pending' ? ' ?' : ''}</text></g>`;
-    (e.fromAnchor||e.toAnchor?anchored:regular).push(html);
+    (from||to?anchored:regular).push(html);
   }
   edgeLayer.innerHTML=defs+`<g transform="translate(40000 40000)">${regular.join('')}</g>`;
   $('#anchor-edges').innerHTML=`<g transform="translate(40000 40000)">${anchored.join('')}</g>`;
@@ -385,15 +385,41 @@ document.addEventListener('keyup',event=>{if(event.code==='Space')spaceHeld=fals
 
 async function pdfLibrary(){if(host)return host.pdf;const standalonePdfURL='/vendor/pdfjs/build/pdf.mjs';const pdf=await import(/* @vite-ignore */ standalonePdfURL);pdf.GlobalWorkerOptions.workerSrc='/vendor/pdfjs/build/pdf.worker.mjs';return pdf;}
 async function pdfDocument(c){
-  if(!pdfDocs.has(c.id))pdfDocs.set(c.id,(async()=>{const pdf=await pdfLibrary();return pdf.getDocument({url:sourceURL(c),isEvalSupported:false,wasmUrl:'/vendor/pdfjs/wasm/',standardFontDataUrl:'/vendor/pdfjs/standard_fonts/',cMapUrl:'/vendor/pdfjs/cmaps/',cMapPacked:true,...host?.pdfOptions}).promise;})());
-  try{return await pdfDocs.get(c.id);}catch(error){pdfDocs.delete(c.id);throw error;}
+  const url = sourceURL(c), revision = c.revision;
+  let pending = pdfDocs.get(c.id);
+  if (!pending) {
+    pending = (async () => {
+      const pdf = await pdfLibrary();
+      const loading = pdf.getDocument({url,isEvalSupported:false,wasmUrl:'/vendor/pdfjs/wasm/',standardFontDataUrl:'/vendor/pdfjs/standard_fonts/',cMapUrl:'/vendor/pdfjs/cmaps/',cMapPacked:true,...host?.pdfOptions});
+      try {
+        const document = await loading.promise;
+        const digest = crypto.subtle ? await pdfRevision(await document.getData()) : revision;
+        if (isPDFRevision(revision) && revision !== digest && host && c.source) {
+          throw new Error('PDF が変更されました。資料を再読込してください。');
+        }
+        if (sourceURL(c) !== url || c.revision !== revision) throw new Error('PDF が変更されました。');
+        c.revision = digest;
+        return document;
+      } catch (error) {
+        await loading.destroy().catch(() => {});
+        throw error;
+      }
+    })();
+    pdfDocs.set(c.id, pending);
+  }
+  try {
+    return await pending;
+  } catch (error) {
+    if (pdfDocs.get(c.id) === pending) pdfDocs.delete(c.id);
+    throw error;
+  }
 }
 async function ensureThumbnail(c){
   const pageNum=displayPdfPage(c),key=`${c.id}:${pageNum}`;
   if(thumbnails.has(key)||!sourceURL(c))return;
-  const originalSource=sourceURL(c),originalRevision=c.revision;thumbnails.set(key,'');
+  const originalSource=sourceURL(c);thumbnails.set(key,'');
   try{
-    const doc=await pdfDocument(c);if(c.pages!==doc.numPages){c.pages=doc.numPages;renderLibrary();}const page=await doc.getPage(pageNum),vp=page.getViewport({scale:1.25});const canvas=document.createElement('canvas');canvas.width=vp.width;canvas.height=vp.height;
+    const doc=await pdfDocument(c),originalRevision=c.revision;if(c.pages!==doc.numPages){c.pages=doc.numPages;renderLibrary();}const page=await doc.getPage(pageNum),vp=page.getViewport({scale:1.25});const canvas=document.createElement('canvas');canvas.width=vp.width;canvas.height=vp.height;
     await page.render({canvasContext:canvas.getContext('2d'),viewport:vp}).promise;if(!board.cards.includes(c)||sourceURL(c)!==originalSource||c.revision!==originalRevision)return;thumbnails.set(key,canvas.toDataURL('image/jpeg',.8));thumbnailSizes.set(key,{w:vp.width,h:vp.height});
     const paper=cardLayer.querySelector(`[data-id="${CSS.escape(c.id)}"] .pdf-paper`);
     if(paper&&Number(paper.dataset.page)===pageNum){paper.innerHTML=`<img class="pdf-thumb" src="${thumbnails.get(key)}" alt="PDF ${pageNum}ページのプレビュー"><span class="page-stamp">${pageNum} / ${doc.numPages}</span>`;paintPdfThumbnail(c);renderEdges();}
@@ -431,6 +457,10 @@ async function renderPdfViewer(c,session){
   $('#reference-selection').hidden=true;
   $('#viewer-body').innerHTML='<p class="loading">PDFのページを読み込んでいます…</p>';
   const doc=await pdfDocument(c);if(session!==viewerSession||revision!==pdfRenderSequence)return;
+  if (viewerFocus?.type?.startsWith('pdf-') && !anchorIsCurrent(viewerFocus, c)) {
+    viewerFocus = null;
+    viewerPage = c.page || 1;
+  }
   viewerPage=clamp(viewerPage,1,doc.numPages);const page=await doc.getPage(viewerPage);if(session!==viewerSession||revision!==pdfRenderSequence)return;
   const base=page.getViewport({scale:1}),scale=Math.min(1.15,($('#viewer-body').clientWidth-50)/base.width),vp=page.getViewport({scale}),dpr=Math.min(window.devicePixelRatio||1,2);
   const stage=document.createElement('div');stage.className='pdf-page';stage.style.cssText=`width:${vp.width}px;height:${vp.height}px;--total-scale-factor:${vp.scale*(vp.userUnit||1)};--scale-round-x:1px;--scale-round-y:1px;`;stage.dataset.page=viewerPage;
@@ -509,7 +539,7 @@ window.addEventListener('dragover',event=>event.preventDefault());window.addEven
 $('#export-board').onclick=async()=>{
   const button=$('#export-board');button.disabled=true;button.textContent='書き出し中…';
   try{
-    const exported=snapshot();for(const c of exported.cards){if(host&&c.source){const r=await host.call('resource',c.source);if(c.kind==='markdown')c.body=r.body;if(c.kind==='image')c.metadata=r.body;if(c.kind==='audio')c.transcript=resourcePatch(r).body;}if(sourceURL(c)&&!c.attachment&&c.kind!=='markdown'){const response=await fetch(sourceURL(c));if(!response.ok)throw new Error('資料を読み込めません．');c.attachment=await readDataURL(await response.blob());delete c.asset;}if(host){delete c.source;delete c.resourceURL;delete c.editPath;delete c.revision;delete c.sourceError;}}delete exported.managedPath;
+    const exported=snapshot();for(const c of exported.cards){if(host&&c.source){const r=await host.call('resource',c.source);if(c.kind==='markdown')c.body=r.body;if(c.kind==='image')c.metadata=r.body;if(c.kind==='audio')c.transcript=resourcePatch(r).body;}if(sourceURL(c)&&!c.attachment&&c.kind!=='markdown'){const response=await fetch(sourceURL(c));if(!response.ok)throw new Error('資料を読み込めません．');c.attachment=await readDataURL(await response.blob());delete c.asset;}if(host){delete c.source;delete c.resourceURL;delete c.editPath;delete c.revision;delete c.legacyRevision;delete c.sourceError;}}delete exported.managedPath;
     const filename=`${board.title.replace(/[\\/:*?"<>|]/g,'_')}.wall.json`;
     if(host){const path=await host.call('export',{filename,content:JSON.stringify(exported,null,2)});if(path)toast('資料本体を含むJSONを書き出しました．');return;}
     const blob=new Blob([JSON.stringify(exported,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`${board.title.replace(/[\\/:*?"<>|]/g,'_')}.wall.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('資料本体を含めて書き出しました．JSONを開くと復元できます．');
@@ -561,7 +591,6 @@ async function materializeBoard(data){
     }
     const resource=await hostImport(file,{...(typeof c.metadata==='string'?{metadata:c.metadata}:{}),...(typeof c.transcript==='string'?{transcript:c.transcript}:{})});Object.assign(c,resourcePatch(resource));delete c.attachment;delete c.asset;delete c.metadata;delete c.transcript;
   }
-  for(const e of copy.edges)for(const side of ['from','to']){const a=e[`${side}Anchor`],c=copy.cards.find(c=>c.id===e[side]);if(a?.type?.startsWith('pdf-')&&c?.revision)a.revision=c.revision;}
   return copy;
 }
 function replaceNativeBoard(data){
@@ -604,8 +633,14 @@ function setupNative(){
     if(operation==='resources'){
       let changed=false;
       for(const c of board.cards){if(!c.source)continue;const fresh=value.find(x=>x.id===c.id&&x.source===c.source);if(!fresh)continue;
-        if(c.revision!==fresh.revision||c.body!==fresh.body||c.sourceError!==fresh.sourceError||c.editPath!==fresh.editPath){
-          const patch={body:fresh.body,resourceURL:fresh.resourceURL,revision:fresh.revision,editPath:fresh.editPath,sourceError:fresh.sourceError};Object.assign(c,patch);changed=true;
+        if(c.revision!==fresh.revision||c.legacyRevision!==fresh.legacyRevision||c.body!==fresh.body||c.sourceError!==fresh.sourceError||c.editPath!==fresh.editPath){
+          if(c.kind==='pdf' && c.revision!==fresh.revision){
+            if(viewerCardId===c.id && $('#viewer').open){
+              viewerSession++;$('#viewer').close();toast('原資料が変更されました。PDFを開き直してください。',true);
+            }
+            if(linkFrom===c.id && linkAnchor) setTool('select');
+          }
+          const patch={body:fresh.body,resourceURL:fresh.resourceURL,revision:fresh.revision,legacyRevision:fresh.legacyRevision,editPath:fresh.editPath,sourceError:fresh.sourceError};Object.assign(c,patch);changed=true;
           for(const [key]of thumbnails)if(key.startsWith(`${c.id}:`))thumbnails.delete(key);pdfDocs.delete(c.id);audioPlayers.get(c.id)?.pause();audioPlayers.delete(c.id);
         }
       }

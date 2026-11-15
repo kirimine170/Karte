@@ -125,9 +125,24 @@ export function fromKarteBoard(doc, resources=[]) {
     edges:(doc.edges||[]).map(e=>({id:e.id,from:e.from,to:e.to,relation:Object.hasOwn(RELATIONS,e.relation)?e.relation:'related_to',reason:e.description||e.label||'',status:e.meta?.researchWall?.status||'pending',...e.meta?.researchWall,
       ...(Object.hasOwn(RELATIONS,e.relation)?{}:{nativeRelation:e.relation})}))};
 }
-export function anchorIsCurrent(anchor,card){return !card.sourceError&&(!anchor.revision||!card.revision||anchor.revision===card.revision);}
+export function isPDFRevision(value) {
+  return typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.test(value);
+}
+export async function pdfRevision(bytes) {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  return 'sha256:' + Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+export function anchorIsCurrent(anchor,card) {
+  if (card.sourceError) return false;
+  if (anchor.type?.startsWith('pdf-') && anchor.revision) {
+    return isPDFRevision(anchor.revision)
+      ? anchor.revision === card.revision
+      : anchor.revision === (card.legacyRevision || card.revision);
+  }
+  return !anchor.revision || !card.revision || anchor.revision === card.revision;
+}
 export function resourcePatch(r) {
-  return {kind:r.kind,body:['markdown','audio'].includes(r.kind)?(r.body||'').replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/,''):r.body||'',source:r.path,resourceURL:r.url||'',revision:r.revision,editPath:r.editPath,sourceError:undefined};
+  return {kind:r.kind,body:['markdown','audio'].includes(r.kind)?(r.body||'').replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/,''):r.body||'',source:r.path,resourceURL:r.url||'',revision:r.revision,legacyRevision:r.legacyRevision,editPath:r.editPath,sourceError:undefined};
 }
 export function toKarteBoard(wall,original) {
   validateBoard(wall);

@@ -2,9 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"karte/internal/contextcore"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,6 +63,138 @@ func TestResearchResourcesResolveOnlyManagedFiles(t *testing.T) {
 		}
 	}
 }
+func TestResearchPDFRevisionFollowsBytes(t *testing.T) {
+	app := researchTestApp(t)
+	original := []byte("%PDF-1.7\nsynthetic-A\n")
+	const path = "content/根拠 #1.pdf"
+	absolute := filepath.Join(app.dataDir, filepath.FromSlash(path))
+	if err := os.WriteFile(absolute, original, 0644); err != nil {
+		t.Fatal(err)
+	}
+	firstTime := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	if err := os.Chtimes(absolute, firstTime, firstTime); err != nil {
+		t.Fatal(err)
+	}
+	first, err := app.LoadResearchResource(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("sha256:%x", sha256.Sum256(original))
+	mediaURL, err := url.Parse(first.URL)
+	if first.Revision != want || err != nil || mediaURL.Path != "/pdf/"+path || mediaURL.Query().Get("v") != want {
+		t.Fatalf("PDF URL and reference must identify the same bytes: %+v, %v", first, err)
+	}
+	const copiedPath = "content/copy.pdf"
+	if err := os.WriteFile(filepath.Join(app.dataDir, filepath.FromSlash(copiedPath)), original, 0644); err != nil {
+		t.Fatal(err)
+	}
+	copyResource, err := app.LoadResearchResource(copiedPath)
+	if err != nil || copyResource.Revision != first.Revision {
+		t.Fatalf("byte-for-byte copy must retain the revision: %+v, %v", copyResource, err)
+	}
+	served := httptest.NewRecorder()
+	app.createAssetHandler().ServeHTTP(served, httptest.NewRequest(http.MethodGet, first.URL, nil))
+	if served.Code != http.StatusOK || served.Body.String() != string(original) {
+		t.Fatalf("original revision was not served: HTTP %d", served.Code)
+	}
+	if err := os.WriteFile(absolute, []byte("%PDF-1.7\nsynthetic-B\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(absolute, firstTime, firstTime); err != nil {
+		t.Fatal(err)
+	}
+	stale := httptest.NewRecorder()
+	app.createAssetHandler().ServeHTTP(stale, httptest.NewRequest(http.MethodGet, first.URL, nil))
+	if stale.Code != http.StatusPreconditionFailed {
+		t.Fatalf("stale revision URL disclosed different bytes: HTTP %d", stale.Code)
+	}
+	changed, err := app.LoadResearchResource(path)
+	if err != nil || changed.Revision == first.Revision || changed.LegacyRevision != first.LegacyRevision {
+		t.Fatalf("same-size replacement with unchanged timestamp must change PDF revision: %+v, %v", changed, err)
+	}
+}
+
+func TestResearchPDFResponseUsesVerifiedSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		byteRange string
+		onWrite   bool
+	}{
+		{name: "at headers"},
+		{name: "at range headers", byteRange: "bytes=9-42"},
+		{name: "after first chunk", onWrite: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := researchTestApp(t)
+			scratch := t.TempDir()
+			for _, name := range []string{"TMP", "TEMP", "TMPDIR"} {
+				t.Setenv(name, scratch)
+			}
+			const path = "content/source.pdf"
+			absolute := filepath.Join(app.dataDir, filepath.FromSlash(path))
+			original := []byte("%PDF-1.7\n" + strings.Repeat("A", 128*1024))
+			replacement := []byte("%PDF-1.7\n" + strings.Repeat("B", 128*1024))
+			if err := os.WriteFile(absolute, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			resource, err := app.LoadResearchResource(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writer := &researchPDFOverwriteWriter{
+				ResponseRecorder: httptest.NewRecorder(), onWrite: tc.onWrite,
+				overwrite: func() {
+					if err := os.WriteFile(absolute, replacement, 0600); err != nil {
+						t.Fatal(err)
+					}
+				},
+			}
+			request := httptest.NewRequest(http.MethodGet, resource.URL, nil)
+			want, status := original, http.StatusOK
+			if tc.byteRange != "" {
+				request.Header.Set("Range", tc.byteRange)
+				want, status = original[9:43], http.StatusPartialContent
+			}
+			app.createAssetHandler().ServeHTTP(writer, request)
+			if !writer.triggered || writer.Code != status || writer.Body.String() != string(want) {
+				t.Fatalf("verified response changed: overwrite=%v status=%d length=%d", writer.triggered, writer.Code, writer.Body.Len())
+			}
+			if entries, err := os.ReadDir(scratch); err != nil || len(entries) != 0 {
+				t.Fatalf("snapshot scratch files remain: %v, %v", entries, err)
+			}
+		})
+	}
+}
+
+type researchPDFOverwriteWriter struct {
+	*httptest.ResponseRecorder
+	overwrite func()
+	onWrite   bool
+	triggered bool
+}
+
+func (w *researchPDFOverwriteWriter) WriteHeader(status int) {
+	w.ResponseRecorder.WriteHeader(status)
+	if !w.onWrite {
+		w.changeSource()
+	}
+}
+
+func (w *researchPDFOverwriteWriter) Write(data []byte) (int, error) {
+	n, err := w.ResponseRecorder.Write(data)
+	if w.onWrite {
+		w.changeSource()
+	}
+	return n, err
+}
+
+func (w *researchPDFOverwriteWriter) changeSource() {
+	if !w.triggered {
+		w.triggered = true
+		w.overwrite()
+	}
+}
+
 func TestResearchTranscriptUsesCanonicalDocument(t *testing.T) {
 	app := researchTestApp(t)
 	audio := "data/audio/test.wav"

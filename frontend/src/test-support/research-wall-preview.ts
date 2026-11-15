@@ -1,3 +1,6 @@
+// @ts-ignore This model is shared with the standalone research wall.
+import { pdfRevision } from '../../../examples/crazy-wall/model.mjs';
+
 // Browser-only virtual workspace for developing the native host UI．It never accesses
 // the real Karte data directory．Native builds call the Go APIs instead．
 export function researchWallPreview(api: any): any {
@@ -48,7 +51,7 @@ export function researchWallPreview(api: any): any {
             await api.SaveFile(path, body); return api.LoadResearchResource(path);
         }
         const mime = kind === 'pdf'?'application/pdf':kind === 'image'?`image/${ext === 'jpg'?'jpeg':ext}`:`audio/${ext === 'mp3'?'mpeg':ext}`;
-        state.media[path] = {path,title:filename,kind,body:'',url:`data:${mime};base64,${encoded}`,editPath:'',revision:crypto.randomUUID()}; persist(); return state.media[path];
+        state.media[path] = {path,title:filename,kind,body:'',url:`data:${mime};base64,${encoded}`,editPath:'',revision:kind === 'pdf' ? await pdfRevision(Uint8Array.from(atob(encoded), char => char.charCodeAt(0))) : crypto.randomUUID()}; persist(); return state.media[path];
     };
     api.EditResearchResource = async (path: string) => {
         if (state.media[path]?.kind === 'audio') {

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateBoard, makeEdge, connectionPoints, fitViewport, markdownHTML, classifyFile, textQuote, resolveTextQuote, pdfPreviewLayout, projectPdfRect } from '../model.mjs';
+import { validateBoard, makeEdge, connectionPoints, fitViewport, markdownHTML, classifyFile, textQuote, resolveTextQuote, pdfPreviewLayout, projectPdfRect, anchorIsCurrent, pdfRevision } from '../model.mjs';
 import { createSample } from '../sample.mjs';
 
 test('portable board round trip preserves source anchors and judgments', () => {
@@ -58,6 +58,16 @@ test('PDF text and image regions survive serialization with page and normalized 
   board.edges.push(makeEdge('report','plan',board.edges,'pdf-region',{type:'pdf-region',page:1,exact:'図の一部',rects:[{x:.25,y:.35,w:.5,h:.2}]}));
   const restored=validateBoard(JSON.parse(JSON.stringify(board)));
   assert.deepEqual(restored.edges.at(-2).fromAnchor,quote);assert.equal(restored.edges.at(-1).fromAnchor.rects[0].x,.25);
+});
+test('PDF citations match content digests and can still read legacy references',async()=>{
+  const revision=await pdfRevision(new TextEncoder().encode('abc'));
+  assert.equal(revision,'sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+  const card={revision,legacyRevision:'1000:42'};
+  assert.equal(anchorIsCurrent({type:'pdf-region',revision},card),true);
+  assert.equal(anchorIsCurrent({type:'pdf-region',revision},{}),false);
+  assert.equal(anchorIsCurrent({type:'pdf-text',revision:'sha256:'+'0'.repeat(64)},card),false);
+  assert.equal(anchorIsCurrent({type:'pdf-text',revision:'1000:42'},card),true);
+  assert.equal(anchorIsCurrent({type:'pdf-region',revision:'1001:42'},card),false);
 });
 test('invalid source anchors cannot be loaded as valid research references',()=>{
   const valid={...textQuote('North access',0,12),type:'pdf-text',page:1,rects:[{x:.1,y:.2,w:.4,h:.02}]};
