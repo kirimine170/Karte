@@ -16,6 +16,16 @@ func (service *Service) WithDecisionRecipient(recipient string) *Service {
 	return &bound
 }
 
+// WithSharedContextRecipient retains the decision visibility filter while
+// also enabling ordinary canonical Markdown for an explicitly authenticated
+// agent. The caller must still authorize every search/read with live policy.
+// WithDecisionRecipient remains decision-only for backward compatibility.
+func (service *Service) WithSharedContextRecipient(recipient string) *Service {
+	bound := service.WithDecisionRecipient(recipient)
+	bound.includeCanonicalWithRecipient = true
+	return bound
+}
+
 func (service *Service) decisionDocuments(actor Actor, scope EffectiveScope) ([]indexedDocument, error) {
 	localHuman := actor.Type == "human" && actor.ID == "local-human"
 	var tags []string
