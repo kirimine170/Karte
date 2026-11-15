@@ -13,6 +13,8 @@ const mockApi = {
     LoadFile: vi.fn(),
     PreviewMarkdown: vi.fn(),
     ExportPDF: vi.fn(),
+    ExportPortablePackage: vi.fn(),
+    ImportPortablePackage: vi.fn(),
     GetCustomCSS: vi.fn(),
     SetCustomCSS: vi.fn(),
 } as any;
@@ -65,6 +67,8 @@ describe('Topbar', () => {
                 <input id="hardwrap" type="checkbox" />
                 <button id="saveBtn">保存</button>
                 <button id="webClipBtn">Web Clip</button>
+                <button id="exportPackageBtn">パッケージ保存</button>
+                <button id="importPackageBtn">パッケージ取込</button>
                 <div id="status"></div>
             </div>
         `;
@@ -76,6 +80,38 @@ describe('Topbar', () => {
 
         const sidebarBtn = document.getElementById('sidebarToggle');
         expect(sidebarBtn).toBeTruthy();
+    });
+
+    it('exports the selected saved Markdown and keeps both actions disabled during the dialog', async () => {
+        let finish!: (saved: boolean) => void;
+        mockApi.ExportPortablePackage.mockReturnValue(new Promise<boolean>((resolve) => { finish = resolve; }));
+        const topbar = new Topbar(mockApi);
+        topbar.init();
+        const save = document.querySelector<HTMLButtonElement>('#exportPackageBtn')!;
+        const open = document.querySelector<HTMLButtonElement>('#importPackageBtn')!;
+        useDocStore.setState({ hasUnsavedChanges: true });
+        save.click();
+        expect(mockApi.ExportPortablePackage).not.toHaveBeenCalled();
+        useDocStore.setState({ hasUnsavedChanges: false });
+        save.click();
+        expect(mockApi.ExportPortablePackage).toHaveBeenCalledWith(useDocStore.getState().currentPath);
+        expect(open.disabled).toBe(true);
+        finish(true);
+        await vi.waitFor(() => expect(open.disabled).toBe(false));
+        expect(useUIStore.getState().statusMessage).toBe('パッケージを書き出しました');
+        topbar.destroy();
+    });
+
+    it('imports without discarding edits in the current document', async () => {
+        mockApi.ImportPortablePackage.mockResolvedValue(true);
+        const topbar = new Topbar(mockApi);
+        topbar.init();
+        useDocStore.setState({ hasUnsavedChanges: true });
+        document.querySelector<HTMLButtonElement>('#importPackageBtn')!.click();
+        await vi.waitFor(() => expect(useUIStore.getState().statusMessage).toContain('文書を取り込みました'));
+        expect(useDocStore.getState().hasUnsavedChanges).toBe(true);
+        expect(mockApi.SaveFile).not.toHaveBeenCalled();
+        topbar.destroy();
     });
 
     it('should toggle sidebar visibility on button click', () => {

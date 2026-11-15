@@ -18,6 +18,9 @@ export class Topbar extends BaseComponent {
     private newBtn: HTMLButtonElement | null = null;
     private webClipBtn: HTMLButtonElement | null = null;
     private exportPdfBtn: HTMLButtonElement | null = null;
+    private exportPackageBtn: HTMLButtonElement | null = null;
+    private importPackageBtn: HTMLButtonElement | null = null;
+    private packageBusy = false;
     private customCssBtn: HTMLButtonElement | null = null;
     private customCssStatus: HTMLElement | null = null;
 
@@ -47,6 +50,8 @@ export class Topbar extends BaseComponent {
         this.newBtn = document.getElementById('newBtn') as HTMLButtonElement;
         this.webClipBtn = document.getElementById('webClipBtn') as HTMLButtonElement;
         this.exportPdfBtn = document.getElementById('exportPdfBtn') as HTMLButtonElement;
+        this.exportPackageBtn = document.querySelector<HTMLButtonElement>('#exportPackageBtn');
+        this.importPackageBtn = document.querySelector<HTMLButtonElement>('#importPackageBtn');
         this.customCssBtn = document.getElementById('customCssBtn') as HTMLButtonElement;
         this.customCssStatus = document.getElementById('customCssStatus');
 
@@ -254,6 +259,23 @@ export class Topbar extends BaseComponent {
         }
 
         // カスタムCSSボタン
+        if (this.exportPackageBtn) {
+            this.unsubscribe.push(this.addEventListener(this.exportPackageBtn, 'click', () => {
+                const { currentPath, hasUnsavedChanges } = useDocStore.getState();
+                if (hasUnsavedChanges) {
+                    useUIStore.getState().setStatusMessage('文書を保存してからパッケージを書き出してください', 4500);
+                    return;
+                }
+                void this.runPackageAction(() => this.api.ExportPortablePackage(currentPath), 'パッケージを書き出しました');
+            }));
+        }
+        if (this.importPackageBtn) {
+            this.unsubscribe.push(this.addEventListener(this.importPackageBtn, 'click', () => {
+                void this.runPackageAction(() => this.api.ImportPortablePackage(), '文書を取り込みました。ファイル一覧で確認できます');
+            }));
+        }
+
+        // カスタムCSSボタン
         if (this.customCssBtn) {
             this.unsubscribe.push(
                 this.addEventListener(this.customCssBtn, 'click', async () => {
@@ -317,6 +339,7 @@ export class Topbar extends BaseComponent {
                 if (this.saveBtn) {
                     this.toggleClass(this.saveBtn, 'unsaved', state.hasUnsavedChanges);
                 }
+                this.updatePackageButtons();
             })
         );
 
@@ -342,6 +365,7 @@ export class Topbar extends BaseComponent {
             this.toggleClass(this.saveBtn, 'unsaved', docStore.hasUnsavedChanges);
         }
         this.updateCustomCssStatus(useCustomCssStore.getState().customCss);
+        this.updatePackageButtons();
 
         // ボタンの初期状態を反映
         if (this.sidebarToggleBtn) {
@@ -374,6 +398,34 @@ export class Topbar extends BaseComponent {
             return;
         }
         this.customCssStatus.textContent = css ? 'Custom CSS active' : '';
+    }
+
+    private updatePackageButtons(): void {
+        const path = useDocStore.getState().currentPath.toLowerCase();
+        if (this.exportPackageBtn) {
+            this.exportPackageBtn.disabled = this.packageBusy || !this.api.ExportPortablePackage ||
+                !path.endsWith('.md') || path.endsWith('.board.md');
+        }
+        if (this.importPackageBtn) {
+            this.importPackageBtn.disabled = this.packageBusy || !this.api.ImportPortablePackage;
+        }
+    }
+
+    private async runPackageAction(action: () => Promise<boolean>, successMessage: string): Promise<void> {
+        if (this.packageBusy) return;
+        this.packageBusy = true;
+        this.updatePackageButtons();
+        try {
+            if (await action()) {
+                useUIStore.getState().setStatusMessage(successMessage, 4500);
+            }
+        } catch (error) {
+            const message = typeof error === 'string' ? error : error instanceof Error ? error.message : '';
+            useUIStore.getState().setStatusMessage(message || 'パッケージの処理に失敗しました', 6000);
+        } finally {
+            this.packageBusy = false;
+            this.updatePackageButtons();
+        }
     }
 
 

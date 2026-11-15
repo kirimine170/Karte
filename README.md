@@ -11,6 +11,7 @@ Karteは、Wailsフレームワークを使用して開発されたクロスプ�
 - **Instagram Post lab**: 画像とキャプションを端末条件ごとに比較し，トリミング・JPEG出力・下書きJSONの保存に対応します．描画とCLI出力はKarte_rendererが担当します．[構成とCLI連携](architecture/INSTAGRAM_POST_LAB.md)を参照してください．
 
 - **ライブプレビュー**: Markdownの編集と同時にリアルタイムでプレビューを表示
+- **Karte パッケージ**: 保存済みの単体 Markdown を、ツールバーの「パッケージ保存」で自分の別端末へ持ち運べます。別端末では「パッケージ取込」から `.karte` を選ぶと、ファイル一覧で開けます。旧 `.kartepack` も取り込めます。画像、外部リンク、埋め込みを含む文書への対応は後続です。[パッケージ形式と対応範囲](architecture/adr/ADR-0006-hybrid-sharing-resource-graph.md)
 - **CSVインポート**: `@import`ディレクティブを使用してCSVファイルをMarkdownに取り込み
 - **テーマ対応**: Light、Dark、High Contrastの3つのテーマをサポート
 - **ファイル管理**: content/ディレクトリ内のMarkdownファイルをサイドバーで管理

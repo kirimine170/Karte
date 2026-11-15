@@ -263,6 +263,8 @@ export interface WailsAppAPI {
     GetGraphData(): Promise<GraphData>;
     CreateNewFile(filename: string): Promise<boolean>;
     ExportPDF(relativePath: string): Promise<string>;
+    ExportPortablePackage(relativePath: string): Promise<boolean>;
+    ImportPortablePackage(): Promise<boolean>;
     ExportPreviewHTML(relativePath: string): Promise<string>;
     GetCustomCSS(): Promise<string>;
     SetCustomCSS(css: string): Promise<boolean>;

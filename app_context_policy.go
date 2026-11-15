@@ -125,6 +125,10 @@ func applyAppendPolicyPatch(resource *contextcore.Resource, patch map[string]any
 }
 
 func (a *App) recordPolicyDecision(policy contextcore.Policy, correlation string, actor contextcore.Actor, capability contextcore.Capability, resource contextcore.Resource) (contextcore.AuthorizationDecision, error) {
+	return a.authorizeAndAudit(policy, "proposal:"+correlation, actor, capability, resource)
+}
+
+func (a *App) authorizeAndAudit(policy contextcore.Policy, correlation string, actor contextcore.Actor, capability contextcore.Capability, resource contextcore.Resource) (contextcore.AuthorizationDecision, error) {
 	decision, err := policy.Authorize(actor, capability, resource)
 	if err != nil {
 		return decision, err
@@ -133,7 +137,7 @@ func (a *App) recordPolicyDecision(policy contextcore.Policy, correlation string
 	if decision.Allowed {
 		status = "allowed"
 	}
-	if err := contextcore.RecordAudit(a.dataDir, "proposal:"+correlation+":"+string(capability), actor, string(capability), status, 0, decision.ReasonCode); err != nil {
+	if err := contextcore.RecordAudit(a.dataDir, correlation+":"+string(capability), actor, string(capability), status, 0, decision.ReasonCode); err != nil {
 		return decision, err
 	}
 	return decision, nil
@@ -209,34 +213,32 @@ func (a *App) authorizeDocumentExport(relativePath string) error {
 }
 
 func (a *App) authorizedDocumentExportSHA(relativePath string) (string, error) {
+	resource, err := a.authorizedExportResource(relativePath)
+	return resource.SHA256, err
+}
+
+func (a *App) authorizedExportResource(relativePath string) (contextcore.Resource, error) {
 	service, err := contextcore.NewService(a.dataDir)
 	if err != nil {
-		return "", err
+		return contextcore.Resource{}, err
 	}
 	resource, err := service.ResourceByRelativePath(relativePath)
 	if err != nil {
-		return "", fmt.Errorf("document export is not authorized")
+		return contextcore.Resource{}, fmt.Errorf("document export is not authorized")
 	}
 	policy, err := contextcore.LoadPolicy(a.dataDir)
 	if err != nil {
-		return "", err
-	}
-	decision, err := policy.Authorize(localHumanActor, contextcore.CapabilityExport, resource)
-	if err != nil {
-		return "", err
-	}
-	status := "denied"
-	if decision.Allowed {
-		status = "allowed"
+		return contextcore.Resource{}, err
 	}
 	correlation := strings.Join([]string{"export", relativePath, time.Now().UTC().Format(time.RFC3339Nano)}, ":")
-	if err := contextcore.RecordAudit(a.dataDir, correlation, localHumanActor, string(contextcore.CapabilityExport), status, 0, decision.ReasonCode); err != nil {
-		return "", err
+	decision, err := a.authorizeAndAudit(policy, correlation, localHumanActor, contextcore.CapabilityExport, resource)
+	if err != nil {
+		return contextcore.Resource{}, err
 	}
 	if !decision.Allowed {
-		return "", fmt.Errorf("document export is not authorized")
+		return contextcore.Resource{}, fmt.Errorf("document export is not authorized")
 	}
-	return resource.SHA256, nil
+	return resource, nil
 }
 
 func (a *App) renderAuthorizedDocumentForExport(relativePath string) (string, error) {

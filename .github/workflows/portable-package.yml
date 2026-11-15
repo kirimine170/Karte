@@ -1,0 +1,41 @@
+name: Portable Package Contract
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: &contract_paths
+      - '.github/workflows/portable-package.yml'
+      - 'schemas/hybrid-sharing/**'
+      - 'internal/portablepackage/**'
+      - 'testdata/hybrid-sharing/id-compatibility.json'
+      - 'scripts/verify_portable_package_fixtures.py'
+      - 'go.mod'
+      - 'go.sum'
+  pull_request:
+    branches: [main]
+    paths: *contract_paths
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      GOFLAGS: -buildvcs=false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'jsonschema>=4.23,<5'
+      - run: python scripts/verify_portable_package_fixtures.py
+      - run: go test -count=1 ./internal/portablepackage
