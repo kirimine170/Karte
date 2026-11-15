@@ -12,4 +12,11 @@ validator.validate(json.loads((directory / "fixtures" / "valid.json").read_text(
 for path in sorted((directory / "fixtures").glob("invalid-*.json")):
     if validator.is_valid(json.loads(path.read_text(encoding="utf-8"))):
         raise SystemExit(f"{path.name} unexpectedly passed schema validation")
-print("Portable package manifest fixtures passed")
+compatibility_fixture = Path(__file__).resolve().parents[1] / "testdata" / "hybrid-sharing" / "id-compatibility.json"
+compatibility = json.loads(compatibility_fixture.read_text(encoding="utf-8"))
+validator.validate(compatibility["manifest"])
+for case in compatibility["cases"]:
+    manifest = dict(compatibility["manifest"], root_resource_id=case["doc_id"])
+    if validator.is_valid(manifest) != case["portable"]:
+        raise SystemExit(f"{case['name']}: unexpected manifest acceptance")
+print("Portable package manifest and legacy identity fixtures passed")

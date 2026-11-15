@@ -8,6 +8,7 @@ on:
       - '.github/workflows/portable-package.yml'
       - 'schemas/hybrid-sharing/**'
       - 'internal/portablepackage/**'
+      - 'testdata/hybrid-sharing/id-compatibility.json'
       - 'scripts/verify_portable_package_fixtures.py'
       - 'go.mod'
       - 'go.sum'

@@ -23,6 +23,8 @@ Proposed。単体 Markdown の個人向け転送を先行実装。
 | WebP の KART/KMTD、CSV、PDF、音声 | 次段階では、専用の資料 ID と出典を持つ別 Blob として扱う。WebP 全体のハッシュは外部に保持する。 |
 | Board、決定ログ、Ephy v2 | それぞれ固有の素材参照、権限、台帳を持つ。現行の経路を引き続き使用する。 |
 
+単体パッケージ v0.1 の Resource ID は既存 `doc_id` の ASCII 部分集合。Context が読めるコロンや Unicode を含む ID はこの形式では書き出せない。拒否時は ID を変更しない。G0（PR #350）は既存 ID を `legacy_doc_id` に保持し、別に発行した不透明な Resource／Revision ID を使う。`.karte` の Root Revision は投影後の SHA-256 なので、そのまま G0 の Revision ID に転用しない。Manifest と G0 の投影は別の形式として扱う。
+
 ## PDF の参照データ（提案）
 
 受領した PDF の原本はバイト列のまま保持する。Karte 側ではリソース ID、版、ページ番号、ページ内の範囲を保存し、原本と参照データを `.karte` に同梱する。PDF 単体で渡す必要がある場合は、Karte が生成する `.pdf` のコピーに配布を許可された参照データを Associated Files の JSON として添付する。小さな識別子を XMP に記録する案もある。埋め込んだ参照情報に認可の効力は持たせない。
