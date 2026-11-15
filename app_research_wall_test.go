@@ -114,6 +114,87 @@ func TestResearchPDFRevisionFollowsBytes(t *testing.T) {
 	}
 }
 
+func TestResearchPDFResponseUsesVerifiedSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		byteRange string
+		onWrite   bool
+	}{
+		{name: "at headers"},
+		{name: "at range headers", byteRange: "bytes=9-42"},
+		{name: "after first chunk", onWrite: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := researchTestApp(t)
+			scratch := t.TempDir()
+			for _, name := range []string{"TMP", "TEMP", "TMPDIR"} {
+				t.Setenv(name, scratch)
+			}
+			const path = "content/source.pdf"
+			absolute := filepath.Join(app.dataDir, filepath.FromSlash(path))
+			original := []byte("%PDF-1.7\n" + strings.Repeat("A", 128*1024))
+			replacement := []byte("%PDF-1.7\n" + strings.Repeat("B", 128*1024))
+			if err := os.WriteFile(absolute, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			resource, err := app.LoadResearchResource(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writer := &researchPDFOverwriteWriter{
+				ResponseRecorder: httptest.NewRecorder(), onWrite: tc.onWrite,
+				overwrite: func() {
+					if err := os.WriteFile(absolute, replacement, 0600); err != nil {
+						t.Fatal(err)
+					}
+				},
+			}
+			request := httptest.NewRequest(http.MethodGet, resource.URL, nil)
+			want, status := original, http.StatusOK
+			if tc.byteRange != "" {
+				request.Header.Set("Range", tc.byteRange)
+				want, status = original[9:43], http.StatusPartialContent
+			}
+			app.createAssetHandler().ServeHTTP(writer, request)
+			if !writer.triggered || writer.Code != status || writer.Body.String() != string(want) {
+				t.Fatalf("verified response changed: overwrite=%v status=%d length=%d", writer.triggered, writer.Code, writer.Body.Len())
+			}
+			if entries, err := os.ReadDir(scratch); err != nil || len(entries) != 0 {
+				t.Fatalf("snapshot scratch files remain: %v, %v", entries, err)
+			}
+		})
+	}
+}
+
+type researchPDFOverwriteWriter struct {
+	*httptest.ResponseRecorder
+	overwrite func()
+	onWrite   bool
+	triggered bool
+}
+
+func (w *researchPDFOverwriteWriter) WriteHeader(status int) {
+	w.ResponseRecorder.WriteHeader(status)
+	if !w.onWrite {
+		w.changeSource()
+	}
+}
+
+func (w *researchPDFOverwriteWriter) Write(data []byte) (int, error) {
+	n, err := w.ResponseRecorder.Write(data)
+	if w.onWrite {
+		w.changeSource()
+	}
+	return n, err
+}
+
+func (w *researchPDFOverwriteWriter) changeSource() {
+	if !w.triggered {
+		w.triggered = true
+		w.overwrite()
+	}
+}
+
 func TestResearchTranscriptUsesCanonicalDocument(t *testing.T) {
 	app := researchTestApp(t)
 	audio := "data/audio/test.wav"

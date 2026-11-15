@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	boardpkg "karte/internal/board"
+	"karte/internal/canonical"
 	fm "karte/internal/frontmatter"
 )
 
@@ -180,7 +183,7 @@ func (a *App) LoadResearchResource(path string) (*ResearchResource, error) {
 			return nil, err
 		}
 		defer file.Close()
-		digest, source, err := researchPDFDigest(file)
+		digest, source, err := researchPDFDigest(file, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -203,9 +206,11 @@ func (a *App) LoadResearchResource(path string) (*ResearchResource, error) {
 	return r, nil
 }
 
-// researchPDFDigest identifies the original bytes independently of timestamps
-// and file names. Refuse a result if the source changes while it is read.
-func researchPDFDigest(file *os.File) (string, fs.FileInfo, error) {
+var errResearchPDFChanged = errors.New("PDF source changed during verification")
+
+// researchPDFDigest optionally writes the hashed bytes to a private snapshot.
+// Limit the read to the observed size so concurrent appends cannot extend it.
+func researchPDFDigest(file *os.File, snapshot io.Writer) (string, fs.FileInfo, error) {
 	before, err := file.Stat()
 	if err != nil {
 		return "", nil, err
@@ -214,7 +219,14 @@ func researchPDFDigest(file *os.File) (string, fs.FileInfo, error) {
 		return "", nil, fmt.Errorf("PDF source is not a regular file")
 	}
 	digest := sha256.New()
-	size, err := io.Copy(digest, file)
+	var output io.Writer = digest
+	if snapshot != nil {
+		output = io.MultiWriter(digest, snapshot)
+	}
+	size, err := io.CopyN(output, file, before.Size())
+	if errors.Is(err, io.EOF) {
+		return "", nil, errResearchPDFChanged
+	}
 	if err != nil {
 		return "", nil, err
 	}
@@ -223,9 +235,50 @@ func researchPDFDigest(file *os.File) (string, fs.FileInfo, error) {
 		return "", nil, err
 	}
 	if !os.SameFile(before, after) || size != before.Size() || size != after.Size() || !before.ModTime().Equal(after.ModTime()) {
-		return "", nil, fmt.Errorf("PDF source changed during verification")
+		return "", nil, errResearchPDFChanged
 	}
 	return fmt.Sprintf("sha256:%x", digest.Sum(nil)), after, nil
+}
+
+// serveResearchPDFRevision serves the exact bytes verified for the requested
+// revision. Range responses seek within the private spool, never the source.
+func serveResearchPDFRevision(w http.ResponseWriter, r *http.Request, source *os.File, version string) {
+	dir, err := os.MkdirTemp("", "karte-pdf-revision-*")
+	if err != nil {
+		http.Error(w, "PDF snapshot unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer os.Remove(dir)
+	if err := canonical.SecureDirectory(dir); err != nil {
+		http.Error(w, "PDF snapshot unavailable", http.StatusInternalServerError)
+		return
+	}
+	snapshot, err := os.CreateTemp(dir, "content-")
+	if err != nil {
+		http.Error(w, "PDF snapshot unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer os.Remove(snapshot.Name())
+	defer snapshot.Close()
+
+	digest, sourceInfo, err := researchPDFDigest(source, snapshot)
+	if errors.Is(err, errResearchPDFChanged) || errors.Is(err, os.ErrNotExist) || (err == nil && digest != version) {
+		http.Error(w, "PDF revision unavailable", http.StatusPreconditionFailed)
+		return
+	}
+	if err != nil || snapshot.Close() != nil {
+		http.Error(w, "PDF snapshot unavailable", http.StatusInternalServerError)
+		return
+	}
+	verified, err := os.Open(snapshot.Name())
+	if err != nil {
+		http.Error(w, "PDF snapshot unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer verified.Close()
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Cache-Control", "no-store")
+	http.ServeContent(w, r, filepath.Base(source.Name()), sourceInfo.ModTime(), verified)
 }
 
 // EditResearchResource opens the existing text editor for audio transcripts．An empty linked

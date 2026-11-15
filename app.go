@@ -6352,17 +6352,8 @@ func (a *App) serveMediaFile(w http.ResponseWriter, r *http.Request, prefix, med
 	}
 	defer file.Close()
 	if mediaType == "pdf" && version != "" {
-		digest, current, err := researchPDFDigest(file)
-		if err != nil || digest != version {
-			http.Error(w, "PDF revision unavailable", http.StatusPreconditionFailed)
-			return true
-		}
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			http.Error(w, "PDF revision unavailable", http.StatusInternalServerError)
-			return true
-		}
-		info = current
-		w.Header().Set("Cache-Control", "no-store")
+		serveResearchPDFRevision(w, r, file, version)
+		return true
 	}
 
 	ext := strings.ToLower(filepath.Ext(absPath))
