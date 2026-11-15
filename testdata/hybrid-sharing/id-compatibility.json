@@ -1,0 +1,50 @@
+{
+  "manifest": {
+    "format_version": "0.1",
+    "root_resource_id": "DOC-000001",
+    "root_revision_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "blob": {
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size": 256,
+      "media_type": "text/markdown"
+    }
+  },
+  "cases": [
+    {
+      "name": "generated-hex",
+      "doc_id": "2222222222222222222222222222222222222222222222222222222222222222",
+      "portable": true,
+      "graph_alias": true
+    },
+    {
+      "name": "legacy-uppercase",
+      "doc_id": "DOC_legacy.v1-7",
+      "portable": true,
+      "graph_alias": true
+    },
+    {
+      "name": "legacy-lowercase",
+      "doc_id": "doc_legacy.v1-7",
+      "portable": true,
+      "graph_alias": true
+    },
+    {
+      "name": "symbols",
+      "doc_id": "doc:board#part+1",
+      "portable": false,
+      "graph_alias": true
+    },
+    {
+      "name": "unicode-nfc",
+      "doc_id": "doc:資料-が📝",
+      "portable": false,
+      "graph_alias": true
+    },
+    {
+      "name": "unicode-nfd",
+      "doc_id": "doc:資料-が📝",
+      "portable": false,
+      "graph_alias": true
+    }
+  ]
+}

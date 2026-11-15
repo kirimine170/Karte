@@ -37,6 +37,21 @@ def main():
             raise SystemExit(f"{path.name}: {error.message}")
     print(f"{len(fixtures)} Resource Graph fixture shapes verified")
 
+    compatibility = read_json(root.parents[2] / "testdata" / "hybrid-sharing" / "id-compatibility.json")
+    if validator.is_valid(compatibility["manifest"]):
+        raise SystemExit("legacy portable manifest unexpectedly accepted as a G0 record")
+    for index, case in enumerate(compatibility["cases"]):
+        graph = {
+            "type": "resource_graph", "schema_version": "0.1", "workspace_id": "fixture-workspace",
+            "resources": [{
+                "resource_id": f"local-{index}", "kind": "markdown", "legacy_doc_id": case["doc_id"],
+            }],
+            "revisions": [], "relations": [], "change_events": [],
+        }
+        if validator.is_valid(graph) != case["graph_alias"]:
+            raise SystemExit(f"{case['name']}: unexpected G0 alias acceptance")
+    print("Resource Graph and portable manifest identity boundaries verified")
+
 
 if __name__ == "__main__":
     main()
