@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/url"
 	"os"
@@ -19,13 +21,14 @@ import (
 
 // ResearchResource contains managed references only．Media bytes stay in Karte's data directory．
 type ResearchResource struct {
-	Path     string `json:"path"`
-	Kind     string `json:"kind"`
-	Title    string `json:"title"`
-	Body     string `json:"body"`
-	URL      string `json:"url"`
-	Revision string `json:"revision"`
-	EditPath string `json:"editPath"`
+	Path           string `json:"path"`
+	Kind           string `json:"kind"`
+	Title          string `json:"title"`
+	Body           string `json:"body"`
+	URL            string `json:"url"`
+	Revision       string `json:"revision"`
+	LegacyRevision string `json:"legacyRevision,omitempty"`
+	EditPath       string `json:"editPath"`
 }
 
 func researchKind(path string) string {
@@ -172,8 +175,21 @@ func (a *App) LoadResearchResource(path string) (*ResearchResource, error) {
 		r.URL = (&url.URL{Path: "/image/" + path}).EscapedPath()
 		r.Body, _ = a.GetImageMetadata(path)
 	case "pdf":
-		r.URL = (&url.URL{Path: "/pdf/" + path}).EscapedPath()
+		file, err := os.Open(abs)
+		if err != nil {
+			return nil, err
+		}
+		defer file.Close()
+		digest, source, err := researchPDFDigest(file)
+		if err != nil {
+			return nil, err
+		}
+		r.Revision = digest
+		r.LegacyRevision = fmt.Sprintf("%d:%d", source.ModTime().UnixNano(), source.Size())
+		mediaURL := url.URL{Path: "/pdf/" + path, RawQuery: url.Values{"v": {digest}}.Encode()}
+		r.URL = mediaURL.String()
 		r.EditPath = path
+		return r, nil
 	case "audio":
 		r.URL = (&url.URL{Path: "/audio/" + path}).EscapedPath()
 		r.EditPath = a.researchTranscript(path)
@@ -185,6 +201,31 @@ func (a *App) LoadResearchResource(path string) (*ResearchResource, error) {
 		r.Revision = fmt.Sprintf("%d:%d", current.ModTime().UnixNano(), current.Size())
 	}
 	return r, nil
+}
+
+// researchPDFDigest identifies the original bytes independently of timestamps
+// and file names. Refuse a result if the source changes while it is read.
+func researchPDFDigest(file *os.File) (string, fs.FileInfo, error) {
+	before, err := file.Stat()
+	if err != nil {
+		return "", nil, err
+	}
+	if !before.Mode().IsRegular() {
+		return "", nil, fmt.Errorf("PDF source is not a regular file")
+	}
+	digest := sha256.New()
+	size, err := io.Copy(digest, file)
+	if err != nil {
+		return "", nil, err
+	}
+	after, err := os.Stat(file.Name())
+	if err != nil {
+		return "", nil, err
+	}
+	if !os.SameFile(before, after) || size != before.Size() || size != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+		return "", nil, fmt.Errorf("PDF source changed during verification")
+	}
+	return fmt.Sprintf("sha256:%x", digest.Sum(nil)), after, nil
 }
 
 // EditResearchResource opens the existing text editor for audio transcripts．An empty linked

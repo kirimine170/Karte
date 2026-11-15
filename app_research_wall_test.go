@@ -2,9 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"karte/internal/contextcore"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,6 +63,57 @@ func TestResearchResourcesResolveOnlyManagedFiles(t *testing.T) {
 		}
 	}
 }
+func TestResearchPDFRevisionFollowsBytes(t *testing.T) {
+	app := researchTestApp(t)
+	original := []byte("%PDF-1.7\nsynthetic-A\n")
+	const path = "content/根拠 #1.pdf"
+	absolute := filepath.Join(app.dataDir, filepath.FromSlash(path))
+	if err := os.WriteFile(absolute, original, 0644); err != nil {
+		t.Fatal(err)
+	}
+	firstTime := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	if err := os.Chtimes(absolute, firstTime, firstTime); err != nil {
+		t.Fatal(err)
+	}
+	first, err := app.LoadResearchResource(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("sha256:%x", sha256.Sum256(original))
+	mediaURL, err := url.Parse(first.URL)
+	if first.Revision != want || err != nil || mediaURL.Path != "/pdf/"+path || mediaURL.Query().Get("v") != want {
+		t.Fatalf("PDF URL and reference must identify the same bytes: %+v, %v", first, err)
+	}
+	const copiedPath = "content/copy.pdf"
+	if err := os.WriteFile(filepath.Join(app.dataDir, filepath.FromSlash(copiedPath)), original, 0644); err != nil {
+		t.Fatal(err)
+	}
+	copyResource, err := app.LoadResearchResource(copiedPath)
+	if err != nil || copyResource.Revision != first.Revision {
+		t.Fatalf("byte-for-byte copy must retain the revision: %+v, %v", copyResource, err)
+	}
+	served := httptest.NewRecorder()
+	app.createAssetHandler().ServeHTTP(served, httptest.NewRequest(http.MethodGet, first.URL, nil))
+	if served.Code != http.StatusOK || served.Body.String() != string(original) {
+		t.Fatalf("original revision was not served: HTTP %d", served.Code)
+	}
+	if err := os.WriteFile(absolute, []byte("%PDF-1.7\nsynthetic-B\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(absolute, firstTime, firstTime); err != nil {
+		t.Fatal(err)
+	}
+	stale := httptest.NewRecorder()
+	app.createAssetHandler().ServeHTTP(stale, httptest.NewRequest(http.MethodGet, first.URL, nil))
+	if stale.Code != http.StatusPreconditionFailed {
+		t.Fatalf("stale revision URL disclosed different bytes: HTTP %d", stale.Code)
+	}
+	changed, err := app.LoadResearchResource(path)
+	if err != nil || changed.Revision == first.Revision || changed.LegacyRevision != first.LegacyRevision {
+		t.Fatalf("same-size replacement with unchanged timestamp must change PDF revision: %+v, %v", changed, err)
+	}
+}
+
 func TestResearchTranscriptUsesCanonicalDocument(t *testing.T) {
 	app := researchTestApp(t)
 	audio := "data/audio/test.wav"

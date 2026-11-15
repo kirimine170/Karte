@@ -239,6 +239,7 @@ export interface ResearchResource {
     body: string;
     url: string;
     revision: string;
+    legacyRevision?: string;
     editPath: string;
 }
 

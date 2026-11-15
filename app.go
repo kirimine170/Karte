@@ -6312,7 +6312,15 @@ func (a *App) serveMediaFile(w http.ResponseWriter, r *http.Request, prefix, med
 	relPath := strings.TrimPrefix(r.URL.Path, prefix)
 
 	var absPath string
-	if filepath.IsAbs(relPath) {
+	version := r.URL.Query().Get("v")
+	if mediaType == "pdf" && version != "" {
+		managedPath, err := a.resolveResearchResource(relPath)
+		if err != nil || researchKind(relPath) != "pdf" {
+			http.NotFound(w, r)
+			return true
+		}
+		absPath = managedPath
+	} else if filepath.IsAbs(relPath) {
 		absPath = relPath
 	} else {
 		absPath = filepath.Join(a.dataDir, filepath.FromSlash(relPath))
@@ -6343,6 +6351,19 @@ func (a *App) serveMediaFile(w http.ResponseWriter, r *http.Request, prefix, med
 		return true
 	}
 	defer file.Close()
+	if mediaType == "pdf" && version != "" {
+		digest, current, err := researchPDFDigest(file)
+		if err != nil || digest != version {
+			http.Error(w, "PDF revision unavailable", http.StatusPreconditionFailed)
+			return true
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			http.Error(w, "PDF revision unavailable", http.StatusInternalServerError)
+			return true
+		}
+		info = current
+		w.Header().Set("Cache-Control", "no-store")
+	}
 
 	ext := strings.ToLower(filepath.Ext(absPath))
 	var mimeType string
