@@ -263,6 +263,7 @@ func (s *Server) dispatch(encoder *json.Encoder, line string) error {
 		tools := []map[string]any{
 			{
 				"name":        "karte_search",
+				"annotations": map[string]any{"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false},
 				"description": "Search the dedicated Karte data root for Markdown documents. Honors project scope, tag scope, and the policy's sensitivity ceiling. Returns doc_id, relative path, SHA-256, tags, and snippet for each match.",
 				"inputSchema": map[string]any{
 					"type": "object",
@@ -279,6 +280,7 @@ func (s *Server) dispatch(encoder *json.Encoder, line string) error {
 			},
 			{
 				"name":        "karte_read",
+				"annotations": map[string]any{"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false},
 				"description": "Read a single document by its stable doc_id. The response carries the canonical body, relative path, SHA-256, and frontmatter metadata.",
 				"inputSchema": map[string]any{
 					"type": "object",
