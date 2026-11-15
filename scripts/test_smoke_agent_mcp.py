@@ -1,8 +1,8 @@
 """Regression tests for the bearer-safe Karte MCP smoke client."""
 
-import json
 import contextlib
 import io
+import json
 import sys
 import threading
 import unittest
@@ -67,8 +67,12 @@ class TestSmokeAgentMCP(unittest.TestCase):
 
         class Redirector(QuietHandler):
             def do_POST(self):
+                # Drain the synthetic POST before closing. Winsock can reset a
+                # connection with unread input before the client sees the 3xx.
+                self.rfile.read(int(self.headers["Content-Length"]))
                 self.send_response(int(self.path.rsplit("/", 1)[1]))
                 self.send_header("Location", redirected_to)
+                self.send_header("Content-Length", "0")
                 self.end_headers()
 
         origin = self.serve(Redirector)
@@ -136,6 +140,12 @@ class TestSmokeAgentMCP(unittest.TestCase):
     def test_http_nonloopback_rejected_before_credentials(self):
         with self.assertRaises(SystemExit):
             smoke_agent_mcp.main(["--url", "http://example.com/mcp", "--query", "safe"])
+
+    def test_disconnect_reports_only_a_generic_error(self):
+        with patch.object(smoke_agent_mcp._MCP_OPENER, "open",
+                          side_effect=ConnectionAbortedError("synthetic transport detail")):
+            with self.assertRaisesRegex(RuntimeError, "^MCP endpoint unavailable$"):
+                smoke_agent_mcp.rpc("http://127.0.0.1:8791/mcp", "synthetic-token", 1, "initialize", {})
 
 
 if __name__ == "__main__":

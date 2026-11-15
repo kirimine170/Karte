@@ -6,6 +6,7 @@ content. Use synthetic data initially. HTTP is permitted only on loopback.
 """
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -59,7 +60,7 @@ def rpc(url, token, number, method, params):
             result = json.load(response)
     except urllib.error.HTTPError as exc:
         raise RuntimeError("MCP request rejected (HTTP {})".format(exc.code)) from None
-    except urllib.error.URLError:
+    except (OSError, http.client.HTTPException):
         raise RuntimeError("MCP endpoint unavailable") from None
     if (not isinstance(result, dict) or result.get("jsonrpc") != "2.0"
             or result.get("id") != number or "error" in result or "result" not in result):
