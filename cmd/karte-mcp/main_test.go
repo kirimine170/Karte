@@ -33,3 +33,13 @@ func TestSharedContextDoesNotIssueTokensInServingMode(t *testing.T) {
 		t.Fatalf("token issuance must be separate: %d %q", code, stderr.String())
 	}
 }
+
+func TestAcceptDecisionRequiresSeparateLocalCommand(t *testing.T) {
+	t.Setenv("KARTE_DATA_DIR", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"--accept-decision", "decision-" + strings.Repeat("a", 64), "--agent-http", "127.0.0.1:8877"},
+		strings.NewReader(""), &stdout, &stderr)
+	if code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "separately") {
+		t.Fatalf("decision acceptance must be a separate local command: %d %q", code, stderr.String())
+	}
+}

@@ -155,6 +155,7 @@ Karteでactor別Bearerを引き続き検証する．
 クライアントは各リクエストで`Authorization: Bearer <agent:grok token>`を送信する．
 TLSを使い，接続元の制限と，Authorization・要求本文・応答本文を保存しないプロキシ設定を確認する．
 未認証の `POST /mcp` はHTTP 401で拒否する．停止時は承認済み公開経路を先に停止し，KarteのHTTPを端末のCtrl+Cで止める．
+試験を繰り返す場合は固定HTTPS URLのトンネルを使うと，再起動のたびにGrok Botの登録先を入れ直す必要がなくなる．
 
 公式：
 - [Grok Botのカスタムコネクター設定](https://docs.x.ai/grok-bot/computer-and-apps#connect-an-app)
@@ -245,6 +246,19 @@ tunnel-client doctor --profile karte-stdio --explain
    そのAIで決定を検索して同じ決定IDと出典を確認する．対応プランが読み取り専用の場合は，投稿できる側で実施する．
 5. 別の合成資料で権限を撤回し，同じクライアントから再検索・再読取して結果を確認する．
    記録は実施日時・KarteのSHA・各チェックの成否に絞る．
+
+### ローカル自動処理で決定を採用する
+
+ローカル実行権限を持つ自動処理は，`KARTE_DATA_DIR` に対象Workspaceを設定し，保留中の候補IDを指定して採用できる．
+候補IDは `.mdsys/ephy/outbox/pending/` のファイル名から取得できる．
+
+```powershell
+karte-mcp --accept-decision $CandidateId --share-decision-with agent:grok
+```
+
+コマンドは決定を正本に登録し，採用記録をJSONで返す．同じ候補IDを再実行すると元の採用記録を返す．
+`--share-decision-with` を省略すると候補の共有設定を引き継ぐ．共有先を指定した場合はWorkspaceの読取権限を確認する．
+MCPの `karte_propose_decision` は引き続き候補を登録する入口として使い，採用はローカルの自動処理から呼び出す．
 
 ## 4．セキュリティと現在の限界
 

@@ -367,16 +367,33 @@ func checkHandoff(t *testing.T, root string, sharedSource []byte, seedID string,
 		if len(before) != 1 || before[0].ID != seedID {
 			t.Fatal("agent requests changed the canonical decision log before review")
 		}
-		record.VisibilityTags = []string{decisionlog.AgentChatGPT, decisionlog.AgentGrok}
-		_, err = decisionlog.Accept(w, record)
-		return err
+		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := contextcore.AcceptPendingDecision(root, record.ID, decisionlog.AgentMuse); err == nil {
+		t.Fatal("local automation accepted a share for an agent without a policy grant")
+	}
+	if read(grok, record.ID).Status != "denied" {
+		t.Fatal("denied local acceptance wrote a canonical decision")
+	}
+	receipt, err := contextcore.AcceptPendingDecision(root, record.ID, decisionlog.AgentGrok)
+	if err != nil || receipt.Result != "accepted" || receipt.DocID == nil || *receipt.DocID != record.ID {
+		t.Fatalf("local acceptance did not record the decision, error: %v", err)
+	}
+	retry, err := contextcore.AcceptPendingDecision(root, record.ID, decisionlog.AgentGrok)
+	if err != nil || !reflect.DeepEqual(receipt, retry) {
+		t.Fatalf("retry did not return the original receipt, error: %v", err)
+	}
+	if read(chat, record.ID).Status != "denied" {
+		t.Fatal("the submitting actor read the Grok-only decision")
 	}
 	hit := search(grok, map[string]any{"query": proposal.Content}, record.ID)[0]
 	accepted := read(grok, record.ID)
 	if doc := accepted.Document; accepted.Status != "ok" || doc == nil || doc.DocID != record.ID ||
-		doc.SHA256 == "" || doc.SHA256 != hit.SHA256 || !strings.Contains(doc.Body, proposal.Content) ||
+		receipt.ResultingSHA256 == nil || doc.SHA256 != canonical.Hash([]byte(*receipt.ResultingSHA256+"\n"+doc.Body)) ||
+		doc.SHA256 != hit.SHA256 ||
+		!strings.Contains(doc.Body, "状態　決定") || !strings.Contains(doc.Body, proposal.Content) ||
 		len(doc.Provenance) != 1 || doc.Provenance[0].Reference != proposal.Source.URL ||
 		doc.Provenance[0].SHA256 != proposal.Source.SHA256 {
 		t.Fatal("recipient did not obtain the reviewed decision with its source")

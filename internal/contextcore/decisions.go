@@ -6,7 +6,62 @@ import (
 
 	"karte/internal/canonical"
 	"karte/internal/decisionlog"
+	"karte/internal/ephyoutbox"
 )
+
+func decisionPolicyResource(record decisionlog.Record) Resource {
+	tags := []string{"decision-log", "decision:" + record.Status}
+	if decisionIsHistory(record.Status) {
+		tags = append(tags, "decision:history")
+	}
+	return Resource{
+		Project: record.Business, Kind: "decision", Sensitivity: record.ContextSensitivity(),
+		Tags: tags, ProvenanceTypes: []string{"meeting-summary"},
+	}
+}
+
+// CheckDecisionPolicy applies the current Workspace policy to a local decision action.
+func CheckDecisionPolicy(policy Policy, record decisionlog.Record, capability Capability) error {
+	authorization, err := policy.Authorize(Actor{Type: "human", ID: "local-human"}, capability, decisionPolicyResource(record))
+	if err != nil {
+		return err
+	}
+	if !authorization.Allowed {
+		return fmt.Errorf("decision is unavailable under the active Personal Context policy")
+	}
+	return nil
+}
+
+// AcceptPendingDecision is the local, noninteractive counterpart of the review UI.
+func AcceptPendingDecision(root, candidateID, recipient string) (*ephyoutbox.Receipt, error) {
+	if !decisionlog.ValidID(candidateID) || (recipient != "" && !decisionlog.ValidAgent(recipient)) {
+		return nil, fmt.Errorf("invalid decision ID or share recipient")
+	}
+	policy, err := LoadPolicy(root)
+	if err != nil {
+		return nil, err
+	}
+	return decisionlog.FinishReview(root, candidateID, decisionlog.ReviewOptions{
+		Authorize: func(record decisionlog.Record) error {
+			return CheckDecisionPolicy(policy, record, CapabilityReview)
+		},
+		Edit: func(record decisionlog.Record) (decisionlog.Record, error) {
+			record.Status = decisionlog.Decided
+			if recipient != "" {
+				record.VisibilityTags = []string{recipient}
+				grant, err := policy.Authorize(Actor{Type: "tool", ID: recipient}, CapabilityRead, decisionPolicyResource(record))
+				if err != nil {
+					return decisionlog.Record{}, err
+				}
+				if !grant.Allowed || !record.VisibleTo([]string{recipient}) {
+					return decisionlog.Record{}, fmt.Errorf("decision cannot be shared with the requested recipient under the active policy")
+				}
+			}
+			return record, nil
+		},
+		AcceptMessage: "Accepted by local automation.",
+	})
+}
 
 // WithDecisionRecipient binds an authenticated transport to a decision
 // recipient. The file-backed Context request cannot set this value.
