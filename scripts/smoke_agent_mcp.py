@@ -14,6 +14,18 @@ import urllib.parse
 import urllib.request
 
 
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    """A redirect must never inherit an MCP Bearer token."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+# The default urllib opener can forward Authorization across redirects.
+# Use a dedicated opener that never follows even same-origin redirects.
+_MCP_OPENER = urllib.request.build_opener(_RejectRedirects())
+
+
 def rpc(url, token, number, method, params):
     body = json.dumps(
         {"jsonrpc": "2.0", "id": number, "method": method, "params": params},
@@ -31,7 +43,7 @@ def rpc(url, token, number, method, params):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
+        with _MCP_OPENER.open(request, timeout=15) as response:
             if response.status != 200:
                 raise RuntimeError("unexpected MCP HTTP status")
             result = json.load(response)
