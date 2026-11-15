@@ -1,0 +1,596 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Karte Hybrid Sharing Resource Graph G0",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/graph"
+    },
+    {
+      "$ref": "#/$defs/share_request"
+    },
+    {
+      "$ref": "#/$defs/share_snapshot"
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9_-]*$",
+      "not": {
+        "pattern": "[^a-z0-9_-]"
+      }
+    },
+    "digest": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "pattern": "[^a-f0-9]"
+      }
+    },
+    "legacy_doc_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^\\S(?:.*\\S)?$",
+      "not": {
+        "pattern": "[\\u0000-\\u001f\\u007f]"
+      }
+    },
+    "blob": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sha256",
+        "size",
+        "media_type"
+      ],
+      "properties": {
+        "sha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "media_type": {
+          "type": "string",
+          "maxLength": 127,
+          "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$",
+          "not": {
+            "pattern": "\\s"
+          }
+        }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resource_id",
+        "kind"
+      ],
+      "properties": {
+        "resource_id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "markdown",
+            "pdf",
+            "image",
+            "csv",
+            "audio"
+          ]
+        },
+        "legacy_doc_id": {
+          "$ref": "#/$defs/legacy_doc_id"
+        }
+      }
+    },
+    "revision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision_id",
+        "resource_id",
+        "parent_revision_ids",
+        "blob"
+      ],
+      "properties": {
+        "revision_id": {
+          "$ref": "#/$defs/id"
+        },
+        "resource_id": {
+          "$ref": "#/$defs/id"
+        },
+        "parent_revision_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "maxItems": 32,
+          "uniqueItems": true
+        },
+        "blob": {
+          "$ref": "#/$defs/blob"
+        },
+        "metadata_sha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "anchor": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "start",
+            "end"
+          ],
+          "properties": {
+            "kind": {
+              "const": "markdown_bytes"
+            },
+            "start": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "end": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "page"
+          ],
+          "properties": {
+            "kind": {
+              "const": "pdf_page"
+            },
+            "page": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            },
+            "rect": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "x",
+                "y",
+                "width",
+                "height"
+              ],
+              "properties": {
+                "x": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 999999
+                },
+                "y": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 999999
+                },
+                "width": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000
+                },
+                "height": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000000
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "start_row",
+            "end_row",
+            "start_column",
+            "end_column"
+          ],
+          "properties": {
+            "kind": {
+              "const": "csv_cells"
+            },
+            "start_row": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "end_row": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "start_column": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "end_column": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "start",
+            "end"
+          ],
+          "properties": {
+            "kind": {
+              "const": "audio_ms"
+            },
+            "start": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "end": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        }
+      ]
+    },
+    "fixed_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "resource_id",
+        "revision_id"
+      ],
+      "properties": {
+        "mode": {
+          "const": "fixed"
+        },
+        "resource_id": {
+          "$ref": "#/$defs/id"
+        },
+        "revision_id": {
+          "$ref": "#/$defs/id"
+        },
+        "anchor": {
+          "$ref": "#/$defs/anchor"
+        }
+      }
+    },
+    "live_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "resource_id"
+      ],
+      "properties": {
+        "mode": {
+          "const": "follow_head"
+        },
+        "resource_id": {
+          "$ref": "#/$defs/id"
+        }
+      }
+    },
+    "relation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "relation_id",
+            "kind",
+            "source_revision_id",
+            "target"
+          ],
+          "properties": {
+            "relation_id": {
+              "$ref": "#/$defs/id"
+            },
+            "kind": {
+              "enum": [
+                "embeds",
+                "cites",
+                "derived_from",
+                "related_to",
+                "supersedes"
+              ]
+            },
+            "source_revision_id": {
+              "$ref": "#/$defs/id"
+            },
+            "target": {
+              "$ref": "#/$defs/fixed_target"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "relation_id",
+            "kind",
+            "source_revision_id",
+            "target"
+          ],
+          "properties": {
+            "relation_id": {
+              "$ref": "#/$defs/id"
+            },
+            "kind": {
+              "enum": [
+                "embeds",
+                "related_to"
+              ]
+            },
+            "source_revision_id": {
+              "$ref": "#/$defs/id"
+            },
+            "target": {
+              "$ref": "#/$defs/live_target"
+            }
+          }
+        }
+      ]
+    },
+    "change_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "kind",
+        "revision_id"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "const": "revision_added"
+        },
+        "revision_id": {
+          "$ref": "#/$defs/id"
+        }
+      }
+    },
+    "graph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "schema_version",
+        "workspace_id",
+        "resources",
+        "revisions",
+        "relations",
+        "change_events"
+      ],
+      "properties": {
+        "type": {
+          "const": "resource_graph"
+        },
+        "schema_version": {
+          "const": "0.1"
+        },
+        "workspace_id": {
+          "$ref": "#/$defs/id"
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/resource"
+          },
+          "maxItems": 10000
+        },
+        "revisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/revision"
+          },
+          "maxItems": 50000
+        },
+        "relations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/relation"
+          },
+          "maxItems": 100000
+        },
+        "change_events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/change_event"
+          },
+          "maxItems": 50000
+        }
+      }
+    },
+    "grant_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority",
+        "policy_id",
+        "scope_id"
+      ],
+      "properties": {
+        "authority": {
+          "const": "ephy_v2"
+        },
+        "policy_id": {
+          "$ref": "#/$defs/grant_uuid"
+        },
+        "scope_id": {
+          "$ref": "#/$defs/grant_uuid"
+        }
+      }
+    },
+    "share_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "schema_version",
+        "workspace_id",
+        "root_revision_id"
+      ],
+      "properties": {
+        "type": {
+          "const": "share_request"
+        },
+        "schema_version": {
+          "const": "0.1"
+        },
+        "workspace_id": {
+          "$ref": "#/$defs/id"
+        },
+        "root_revision_id": {
+          "$ref": "#/$defs/id"
+        },
+        "grant_ref": {
+          "$ref": "#/$defs/grant_ref"
+        }
+      }
+    },
+    "item_id": {
+      "type": "string",
+      "pattern": "^item-[1-9][0-9]{0,5}$",
+      "not": {
+        "pattern": "\\s"
+      }
+    },
+    "share_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "schema_version",
+        "root_item_id",
+        "items",
+        "relations",
+        "placeholders"
+      ],
+      "properties": {
+        "type": {
+          "const": "share_snapshot"
+        },
+        "schema_version": {
+          "const": "0.1"
+        },
+        "root_item_id": {
+          "$ref": "#/$defs/item_id"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "item_id",
+              "blob"
+            ],
+            "properties": {
+              "item_id": {
+                "$ref": "#/$defs/item_id"
+              },
+              "blob": {
+                "$ref": "#/$defs/blob"
+              }
+            }
+          },
+          "maxItems": 10000,
+          "minItems": 1
+        },
+        "relations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "source_item_id",
+              "target_item_id"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "embeds",
+                  "cites"
+                ]
+              },
+              "source_item_id": {
+                "$ref": "#/$defs/item_id"
+              },
+              "target_item_id": {
+                "$ref": "#/$defs/item_id"
+              }
+            }
+          },
+          "maxItems": 100000
+        },
+        "placeholders": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "source_item_id",
+              "status"
+            ],
+            "properties": {
+              "kind": {
+                "const": "embeds"
+              },
+              "source_item_id": {
+                "$ref": "#/$defs/item_id"
+              },
+              "status": {
+                "const": "restricted"
+              }
+            }
+          },
+          "maxItems": 10000
+        }
+      }
+    },
+    "grant_uuid": {
+      "type": "string",
+      "minLength": 36,
+      "maxLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      }
+    }
+  }
+}

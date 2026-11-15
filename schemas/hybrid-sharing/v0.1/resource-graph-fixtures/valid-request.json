@@ -1,0 +1,11 @@
+{
+  "type": "share_request",
+  "schema_version": "0.1",
+  "workspace_id": "fixture-workspace",
+  "root_revision_id": "note-windows",
+  "grant_ref": {
+    "authority": "ephy_v2",
+    "policy_id": "66666666-6666-4666-8666-666666666666",
+    "scope_id": "22222222-2222-4222-8222-222222222222"
+  }
+}

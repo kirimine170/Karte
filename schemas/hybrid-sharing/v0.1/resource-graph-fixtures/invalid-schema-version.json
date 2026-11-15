@@ -1,0 +1,9 @@
+{
+  "type": "resource_graph",
+  "schema_version": "0.2",
+  "workspace_id": "fixture-workspace",
+  "resources": [],
+  "revisions": [],
+  "relations": [],
+  "change_events": []
+}

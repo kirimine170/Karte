@@ -1,0 +1,271 @@
+{
+  "type": "resource_graph",
+  "schema_version": "0.1",
+  "workspace_id": "fixture-workspace",
+  "resources": [
+    {
+      "resource_id": "notes",
+      "kind": "markdown",
+      "legacy_doc_id": "doc:会議📝"
+    },
+    {
+      "resource_id": "report",
+      "kind": "pdf"
+    },
+    {
+      "resource_id": "map",
+      "kind": "image"
+    },
+    {
+      "resource_id": "original",
+      "kind": "image"
+    },
+    {
+      "resource_id": "observations",
+      "kind": "csv"
+    },
+    {
+      "resource_id": "recording",
+      "kind": "audio"
+    }
+  ],
+  "revisions": [
+    {
+      "revision_id": "note-initial",
+      "resource_id": "notes",
+      "parent_revision_ids": [],
+      "blob": {
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "size": 160,
+        "media_type": "text/markdown"
+      }
+    },
+    {
+      "revision_id": "note-windows",
+      "resource_id": "notes",
+      "parent_revision_ids": [
+        "note-initial"
+      ],
+      "blob": {
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "size": 160,
+        "media_type": "text/markdown"
+      }
+    },
+    {
+      "revision_id": "note-mac",
+      "resource_id": "notes",
+      "parent_revision_ids": [
+        "note-initial"
+      ],
+      "blob": {
+        "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "size": 160,
+        "media_type": "text/markdown"
+      }
+    },
+    {
+      "revision_id": "report-v1",
+      "resource_id": "report",
+      "parent_revision_ids": [],
+      "blob": {
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "size": 2048,
+        "media_type": "application/pdf"
+      }
+    },
+    {
+      "revision_id": "map-v1",
+      "resource_id": "map",
+      "parent_revision_ids": [],
+      "blob": {
+        "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "size": 100,
+        "media_type": "image/webp"
+      }
+    },
+    {
+      "revision_id": "map-metadata",
+      "resource_id": "map",
+      "parent_revision_ids": [
+        "map-v1"
+      ],
+      "blob": {
+        "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "size": 110,
+        "media_type": "image/webp"
+      },
+      "metadata_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "revision_id": "original-v1",
+      "resource_id": "original",
+      "parent_revision_ids": [],
+      "blob": {
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "size": 190,
+        "media_type": "image/webp"
+      }
+    },
+    {
+      "revision_id": "table-v1",
+      "resource_id": "observations",
+      "parent_revision_ids": [],
+      "blob": {
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "size": 88,
+        "media_type": "text/csv"
+      }
+    },
+    {
+      "revision_id": "recording-v1",
+      "resource_id": "recording",
+      "parent_revision_ids": [],
+      "blob": {
+        "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "size": 300,
+        "media_type": "audio/wav"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "relation_id": "map-embed",
+      "kind": "embeds",
+      "source_revision_id": "note-windows",
+      "target": {
+        "mode": "fixed",
+        "resource_id": "map",
+        "revision_id": "map-metadata"
+      }
+    },
+    {
+      "relation_id": "map-origin",
+      "kind": "derived_from",
+      "source_revision_id": "map-metadata",
+      "target": {
+        "mode": "fixed",
+        "resource_id": "original",
+        "revision_id": "original-v1"
+      }
+    },
+    {
+      "relation_id": "pdf-citation",
+      "kind": "cites",
+      "source_revision_id": "note-windows",
+      "target": {
+        "mode": "fixed",
+        "resource_id": "report",
+        "revision_id": "report-v1",
+        "anchor": {
+          "kind": "pdf_page",
+          "page": 4,
+          "rect": {
+            "x": 720000,
+            "y": 120000,
+            "width": 200000,
+            "height": 160000
+          }
+        }
+      }
+    },
+    {
+      "relation_id": "md-citation",
+      "kind": "cites",
+      "source_revision_id": "report-v1",
+      "target": {
+        "mode": "fixed",
+        "resource_id": "notes",
+        "revision_id": "note-windows",
+        "anchor": {
+          "kind": "markdown_bytes",
+          "start": 0,
+          "end": 14
+        }
+      }
+    },
+    {
+      "relation_id": "csv-citation",
+      "kind": "cites",
+      "source_revision_id": "note-windows",
+      "target": {
+        "mode": "fixed",
+        "resource_id": "observations",
+        "revision_id": "table-v1",
+        "anchor": {
+          "kind": "csv_cells",
+          "start_row": 2,
+          "end_row": 5,
+          "start_column": 1,
+          "end_column": 1
+        }
+      }
+    },
+    {
+      "relation_id": "audio-citation",
+      "kind": "cites",
+      "source_revision_id": "note-mac",
+      "target": {
+        "mode": "fixed",
+        "resource_id": "recording",
+        "revision_id": "recording-v1",
+        "anchor": {
+          "kind": "audio_ms",
+          "start": 1400,
+          "end": 2700
+        }
+      }
+    },
+    {
+      "relation_id": "live-notes",
+      "kind": "related_to",
+      "source_revision_id": "report-v1",
+      "target": {
+        "mode": "follow_head",
+        "resource_id": "notes"
+      }
+    },
+    {
+      "relation_id": "report-embed",
+      "kind": "embeds",
+      "source_revision_id": "note-mac",
+      "target": {
+        "mode": "fixed",
+        "resource_id": "report",
+        "revision_id": "report-v1"
+      }
+    },
+    {
+      "relation_id": "note-embed",
+      "kind": "embeds",
+      "source_revision_id": "report-v1",
+      "target": {
+        "mode": "fixed",
+        "resource_id": "notes",
+        "revision_id": "note-mac"
+      }
+    },
+    {
+      "relation_id": "corrects",
+      "kind": "supersedes",
+      "source_revision_id": "note-windows",
+      "target": {
+        "mode": "fixed",
+        "resource_id": "notes",
+        "revision_id": "note-initial"
+      }
+    }
+  ],
+  "change_events": [
+    {
+      "operation_id": "windows-update",
+      "kind": "revision_added",
+      "revision_id": "note-windows"
+    },
+    {
+      "operation_id": "mac-update",
+      "kind": "revision_added",
+      "revision_id": "note-mac"
+    }
+  ]
+}
