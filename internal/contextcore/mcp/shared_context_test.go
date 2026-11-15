@@ -45,8 +45,8 @@ func sharedFixture(t *testing.T) (string, map[string]string) {
 		docs := map[string]string{
 			"content/projects/karte/note/2026-11/chatgpt.md": "---\ndoc_id: chatgpt-note\ntitle: ChatGPT permitted\nproject: karte\nkind: note\nsensitivity: internal\n---\n\nKARTE_VISIBLE_2717\n",
 			"content/projects/hacksick/note/2026-11/grok.md": "---\ndoc_id: grok-note\ntitle: Grok permitted\nproject: hacksick\nkind: note\nsensitivity: public\n---\n\nGROK_VISIBLE_2717\n",
-			"content/projects/karte/note/2026-11/secret.md": "---\ndoc_id: secret-note\ntitle: Private board\nproject: karte\nkind: note\nsensitivity: confidential\n---\n\nPRIVATE_2717\n",
-			"content/projects/karte/note/2026-11/broken.md": "---\ntitle: malformed\nproject: karte\n---\n\nUNINDEXED_2717\n",
+			"content/projects/karte/note/2026-11/secret.md":  "---\ndoc_id: secret-note\ntitle: Private board\nproject: karte\nkind: note\nsensitivity: confidential\n---\n\nPRIVATE_2717\n",
+			"content/projects/karte/note/2026-11/broken.md":  "---\ntitle: malformed\nproject: karte\n---\n\nUNINDEXED_2717\n",
 		}
 		for path, value := range docs {
 			if err := w.Write(path, []byte(value), 0600); err != nil {
@@ -169,6 +169,8 @@ func TestSharedContextPolicyAndTokenChangesTakeEffectImmediately(t *testing.T) {
 	handler := agentHTTPHandlerWithContext(root, true)
 	args := map[string]any{"name": "karte_read", "arguments": map[string]any{"doc_id": "chatgpt-note"}}
 	token := tokens[decisionlog.AgentChatGPT]
+	stdio := newSharedStdioClient(t, root, token)
+	stdio.initialize()
 	if got := sharedCall(t, handler, token, "tools/call", args); !strings.Contains(got.Body.String(), "KARTE_VISIBLE_2717") {
 		t.Fatal("fixture did not allow initial read")
 	}
@@ -192,6 +194,19 @@ func TestSharedContextPolicyAndTokenChangesTakeEffectImmediately(t *testing.T) {
 		strings.Contains(denied.Body.String(), "KARTE_VISIBLE_2717") {
 		t.Fatalf("live policy narrowing failed: %s", denied.Body.String())
 	}
+	search := sharedCall(t, handler, token, "tools/call", map[string]any{
+		"name": "karte_search", "arguments": map[string]any{"query": "KARTE_VISIBLE_2717"},
+	})
+	if search.Code != http.StatusOK || strings.Contains(search.Body.String(), "chatgpt-note") {
+		t.Fatal("live policy narrowing left the restricted note searchable")
+	}
+	var readAfterNarrowing ReadOutput
+	stdio.call("karte_read", map[string]string{"doc_id": "chatgpt-note"}, &readAfterNarrowing)
+	var searchAfterNarrowing SearchOutput
+	stdio.call("karte_search", map[string]string{"query": "KARTE_VISIBLE_2717"}, &searchAfterNarrowing)
+	if readAfterNarrowing.Status != "denied" || readAfterNarrowing.Document != nil || len(searchAfterNarrowing.Results) != 0 {
+		t.Fatal("STDIO retained access after live policy narrowing")
+	}
 	// Token rotation revokes the old credential.
 	next, err := decisionlog.IssueAgentToken(root, decisionlog.AgentChatGPT)
 	if err != nil {
@@ -200,6 +215,7 @@ func TestSharedContextPolicyAndTokenChangesTakeEffectImmediately(t *testing.T) {
 	if response := sharedCall(t, handler, token, "tools/list", map[string]any{}); response.Code != 401 {
 		t.Fatalf("old rotated token still valid: %d", response.Code)
 	}
+	stdio.call("karte_read", map[string]string{"doc_id": "chatgpt-note"}, nil)
 	if response := sharedCall(t, handler, next, "tools/list", map[string]any{}); response.Code != 200 {
 		t.Fatalf("new rotated token invalid: %d", response.Code)
 	}
@@ -209,5 +225,102 @@ func TestSharedContextPolicyAndTokenChangesTakeEffectImmediately(t *testing.T) {
 	}
 	if response := sharedCall(t, handler, next, "tools/list", map[string]any{}); response.Code != 401 {
 		t.Fatalf("missing policy did not fail closed: %d", response.Code)
+	}
+}
+
+func TestSharedContextHTTPRequiresPolicyAtStartup(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	root := t.TempDir()
+	if err := ServeSharedContextAgents(ctx, root, "127.0.0.1:0"); err == nil {
+		t.Fatal("shared HTTP accepted a workspace without an explicit policy")
+	}
+	writeSharedPolicy(t, root, contextcore.DefaultPolicy())
+	if err := ServeSharedContextAgents(ctx, root, "127.0.0.1:0"); err == nil {
+		t.Fatal("shared HTTP accepted a default policy without an explicit agent")
+	}
+	if err := ServeAgents(ctx, root, "127.0.0.1:0"); err != nil {
+		t.Fatal("legacy HTTP listener behavior changed")
+	}
+}
+
+func TestSharedContextCredentialIsBoundToWorkspace(t *testing.T) {
+	_, first := sharedFixture(t)
+	root, second := sharedFixture(t)
+	handler := agentHTTPHandlerWithContext(root, true)
+	actor := decisionlog.AgentChatGPT
+	for _, tc := range []struct {
+		token string
+		want  int
+	}{{first[actor], http.StatusUnauthorized}, {second[actor], http.StatusOK}} {
+		got := sharedCall(t, handler, tc.token, "tools/list", nil)
+		if got.Code != tc.want {
+			t.Fatalf("unexpected Workspace HTTP authorization: %d", got.Code)
+		}
+		_, err := NewSharedContextAgentServer(root, tc.token)
+		if (err == nil) != (tc.want == http.StatusOK) {
+			t.Fatal("unexpected Workspace STDIO authorization")
+		}
+	}
+}
+
+func TestSharedContextDiscoveryUsesLiveGrant(t *testing.T) {
+	root, tokens := sharedFixture(t)
+	handler := agentHTTPHandlerWithContext(root, true)
+	token := tokens[decisionlog.AgentGrok]
+	if response := sharedCall(t, handler, token, "tools/list", nil); response.Code != http.StatusOK ||
+		strings.Contains(response.Body.String(), "karte_propose_decision") {
+		t.Fatal("HTTP advertised a tool outside the actor's capability grant")
+	}
+	server, err := NewSharedContextAgentServer(root, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := contextcore.LoadPolicy(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := policy.Actors[decisionlog.AgentGrok]
+	grant.Capabilities = []contextcore.Capability{contextcore.CapabilityRead}
+	policy.Actors[decisionlog.AgentGrok] = grant
+	writeSharedPolicy(t, root, policy)
+	line := mcpLine(t, "discovery", "tools/list", nil)
+	var stdout bytes.Buffer
+	if err := server.Run(context.Background(), strings.NewReader(line), &stdout); err != nil ||
+		!strings.Contains(stdout.String(), "karte_read") ||
+		strings.Contains(stdout.String(), "karte_search") {
+		t.Fatal("STDIO advertised a revoked capability")
+	}
+	if _, err := decisionlog.IssueAgentToken(root, decisionlog.AgentGrok); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	if err := server.Run(context.Background(), strings.NewReader(line), &stdout); err != nil ||
+		!strings.Contains(stdout.String(), "error") || strings.Contains(stdout.String(), "karte_read") {
+		t.Fatal("STDIO still advertised tools after the token was rotated")
+	}
+}
+
+func TestSharedContextNegotiatesSupportedOlderMCPVersion(t *testing.T) {
+	root, tokens := sharedFixture(t)
+	handler := agentHTTPHandlerWithContext(root, true)
+	result := sharedCall(t, handler, tokens[decisionlog.AgentChatGPT], "initialize", map[string]string{
+		"protocolVersion": "2025-03-26",
+	})
+	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), "2025-03-26") {
+		t.Fatal("initialize did not honor the supported client protocol version")
+	}
+}
+
+func writeSharedPolicy(t *testing.T, root string, policy contextcore.Policy) {
+	t.Helper()
+	raw, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := canonical.WithWriter(root, func(w *canonical.Writer) error {
+		return w.Write(".mdsys/context/v1/policy.json", raw, 0600)
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

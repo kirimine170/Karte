@@ -37,6 +37,9 @@ $env:KARTE_DATA_DIR = 'C:\Karte-Test\karte_data'
 .\karte-mcp.exe --help
 ```
 
+ソースから試す場合はリポジトリのルートで `go build -o karte-mcp.exe ./cmd/karte-mcp` を実行する．
+macOS／Linux では `go build -o karte-mcp ./cmd/karte-mcp` として `./karte-mcp` を使う．
+
 ## 1．AIごとに最小権限のpolicyを設定する【利用者による設定】
 
 `$env:KARTE_DATA_DIR\.mdsys\context\v1\policy.json`の既存設定を**上書きせず**，
@@ -45,6 +48,8 @@ agent MCPは起動しない（fail closed）．
 
 次は，Karte案件にだけ両者の検索と読取を許可する**参考断片**．
 既存policyの`protocol_version`や他actorを維持し，対象プロジェクト・sensitivityを調整する．
+同じプロジェクト内でも，actorごとの `allowed_tags`／`denied_tags` で対象を絞れる．
+Workspaceを分ける場合は `KARTE_DATA_DIR` とそのルートで発行するトークンも分ける．
 
 ```json
 {
@@ -102,11 +107,24 @@ KARTE_DECISION_AGENT_TOKEN=<agent:chatgptのtoken>
 .\karte-mcp.exe --shared-context
 ```
 
-Tunnelクライアントではサーバー実行コマンドに
-`karte-mcp.exe --shared-context`を指定し，Secretを環境参照する．
-実際の設定キーは導入したTunnel Clientのバージョンに従い，
-`tunnel-client help quickstart`と`tunnel-client doctor`で確認する．
-その後，ChatGPT Plugins > Add custom MCP server > Tunnelで接続する．
+利用者がPlatformでTunnelを作成し，対象ChatGPT Workspaceを関連付ける．
+作成・変更にはTunnels Read + Manage，ランタイムキーとアプリでの利用にはTunnels Read + Useが必要．
+ChatGPTのWorkspaceでプライベートなカスタムMCPを追加できることも確認する．
+Tunnelのランタイムキーは `CONTROL_PLANE_API_KEY` に，Karteの `agent:chatgpt` トークンは子プロセスの
+`KARTE_DECISION_AGENT_TOKEN` に，それぞれ利用者のSecret管理から渡す．Karte側の認可はこの子プロセス内で行う．
+ChatGPTの標準認証設定はOAuth等を扱うため，静的なKarteトークンをChatGPTのUIから直接送る構成には依存しない．
+
+```powershell
+tunnel-client help quickstart
+tunnel-client init --sample sample_mcp_stdio_local --profile karte-stdio --tunnel-id '<利用者のTunnel ID>' --mcp-command 'C:\Karte-Test\karte-mcp.exe --shared-context'
+tunnel-client doctor --profile karte-stdio --explain
+tunnel-client run --profile karte-stdio
+```
+
+トンネルの準備完了を確認してから，ChatGPTの Plugins → Add custom MCP server → Tunnel で
+同じTunnelを選び，アプリをインストールする．この構成ではプラグイン利用者が同じ `agent:chatgpt` としてKarteを参照するため，
+合成試験用のプライベートアプリに限定する．アカウント単位のKarte認可が必要な共有構成では別途認証を設計する．
+終了時は `tunnel-client run` を実行中の端末で Ctrl+C．STDIOを単独で起動した場合は標準入力を閉じる．
 
 公式：
 - https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
@@ -118,12 +136,12 @@ ChatGPT API・Grokから接続する場合もサービスごとの課金・利�
 
 ### Grok Bot用：認証付きループバックHTTP
 
-既存のGrok Bot環境がローカルSTDIOからMCPを起動できる場合は
-上の方式を`agent:grok`のtokenで使う．
-
-GrokのCustom MCP ConnectorがリモートURLを必要とする場合は，
-Karte側は**ループバック専用**で起動し，HTTPSのトンネル／リバースプロキシで公開する．
-接続サービスが静的Bearer認証に対応するかはGrok Bot側の設定画面で確認する．
+Grok Botデスクトップの Connect apps → Add a custom connector → Remote HTTPS で，
+利用者が承認済みのHTTPS `/mcp` と `Authorization: Bearer <agent:grok token>` を登録する．
+Commandの実行先はBotの環境なので，手元のWindowsの `KARTE_DATA_DIR` に届く検証では Remote HTTPS を使う．
+組織のMCPポリシーや許可先リストの適用状況と，コネクターを利用できるBotの範囲を確認する．
+Karte自体はループバックだけで待ち受ける．承認済みのHTTPSトンネル／リバースプロキシを経由し，
+Karteでactor別Bearerを引き続き検証する．
 
 ```powershell
 .\karte-mcp.exe --agent-http 127.0.0.1:8791 --shared-context
@@ -132,12 +150,12 @@ Karte側は**ループバック専用**で起動し，HTTPSのトンネル／リ
 リモートMCPの接続先はHTTPSの`/mcp`．
 ループバックの`http://127.0.0.1:8791/mcp`を直接パブリックURLとして入力しない．
 クライアントは各リクエストで`Authorization: Bearer <agent:grok token>`を送信する．
-TLSの設定，接続元認証，リバースプロキシのログ抑止，token秘密管理を有効にする．
-未認証の`/mcp`アクセスはHTTP 401で拒否する．
+TLSを使い，接続元の制限と，Authorization・要求本文・応答本文を保存しないプロキシ設定を確認する．
+未認証の `POST /mcp` はHTTP 401で拒否する．停止時は承認済み公開経路を先に停止し，KarteのHTTPを端末のCtrl+Cで止める．
 
 公式：
-- https://docs.x.ai/grok/connectors
-- https://docs.x.ai/build/features/mcp-servers
+- [Grok Botのカスタムコネクター設定](https://docs.x.ai/grok-bot/computer-and-apps#connect-an-app)
+- [組織のMCPポリシー](https://docs.x.ai/grok-bot/teams-and-enterprises#connector-policy)
 
 ## 3．エージェント同士で利用する操作と評価
 
@@ -163,6 +181,9 @@ TLSの設定，接続元認証，リバースプロキシのログ抑止，token
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"karte-smoke","version":"0.1.0"},"capabilities":{}}}
 ```
 
+初期化応答の後に `{"jsonrpc":"2.0","method":"notifications/initialized"}` を送り，
+HTTPの後続リクエストには合意した `MCP-Protocol-Version` を付与する．
+
 ```json
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"karte_search","arguments":{"query":"Karte","top_k":5}}}
 ```
@@ -182,12 +203,45 @@ python scripts/smoke_agent_mcp.py --url http://127.0.0.1:8791/mcp --query Karte
 合成資料のIDを指定すれば読取・非開示の確認にも使用できる．
 
 ```powershell
-python scripts/smoke_agent_mcp.py --expect-doc-id <許可済み合成doc_id> --expect-denied-doc-id <非許可の合成doc_id>
+python scripts/smoke_agent_mcp.py --query '<合成資料にだけ含まれる語>' --expect-doc-id '<許可済み合成doc_id>' --expect-sha256 '<合成Markdownファイル全体のSHA-256>' --expect-denied-doc-id '<非許可の合成doc_id>' --no-expect-propose
 ```
 
 認証tokenの設定は利用者が行い，`--token-env`で参照する環境変数名を変更できる．
+候補投稿を許可されたactorのツール検出を確認する場合は `--expect-propose` に置き換える．
+SHA-256はMarkdownファイル全体のバイト列に対応し，読取に含まれる本文フィールドはフロントマターを除いた本文である．
+検索と読取で資料ID・出典・版が一致するかを診断スクリプトが確認する．
 この診断クライアントはBearer tokenの転送を避けるため，HTTP 301／302／307／308などの**リダイレクトを一切追跡しない**．接続先の変更はアカウント／トンネルの設定で明示的に行う．
+環境変数やOSのプロキシ設定を使わず，指定した接続先へ直接接続する．
 接続が失敗してもトークンや本文をGitHub Issues／チャットへ貼らない．
+
+PowerShellでの切り分け
+
+```powershell
+Test-NetConnection 127.0.0.1 -Port 8791
+Get-NetTCPConnection -LocalPort 8791 -State Listen | Select-Object LocalAddress, State
+tunnel-client doctor --profile karte-stdio --explain
+```
+
+| 症状 | 確認箇所 |
+| --- | --- |
+| ポートへの接続失敗 | 起動中のプロセス，指定ポート，`KARTE_DATA_DIR` と必須ポリシーファイル |
+| HTTP 401 | 対象Workspaceのactor grant，現在のトークン，プロキシでのBearer転送 |
+| HTTP 3xx | 正しいHTTPS URLと末尾の `/mcp`。認証付きリダイレクトを停止 |
+| HTTP 400／403 | 合意したMCPバージョンと `Origin`。ブラウザーからの直接リクエストは拒否される |
+| ツールは見えるが資料が出ない | `--shared-context`，project／tag／sensitivity／provenanceと検索語 |
+| トンネルは稼働しているがアプリに出ない | Platform組織とChatGPT Workspaceの関連付け，Tunnels Read + Use，Workspace権限 |
+
+### アカウント設定後の実サービス試験
+
+1. 同じ合成Workspaceに両者向け・ChatGPTのみ・Grok Botのみ・両者非公開のMarkdownと，人間が採用済みの決定を用意する．
+2. ChatGPTとGrok Botそれぞれで対象コネクターを選び，両者向けの資料を検索して `karte_read` を呼ぶ．
+   ツール出力で資料ID・SHA-256・出典が一致することを確認する．片方専用と非公開の合成IDを読取し，拒否されることも確認する．
+3. `propose` が許可された方から合成の決定候補を一件送る．Karteでレビュー待ちを確認し，
+   採用前にもう一方から検索・読取できないことを確認する．
+4. 人間がKarte上で候補の内容と共有範囲を確認して採用する．もう一方に共有を許可した場合は，
+   そのAIで決定を検索して同じ決定IDと出典を確認する．対応プランが読み取り専用の場合は，投稿できる側で実施する．
+5. 別の合成資料で権限を撤回し，同じクライアントから再検索・再読取して結果を確認する．
+   記録は実施日時・KarteのSHA・各チェックの成否に絞る．
 
 ## 4．セキュリティと現在の限界
 
@@ -197,7 +251,8 @@ python scripts/smoke_agent_mcp.py --expect-doc-id <許可済み合成doc_id> --e
 - 検索・読取で診断集計（非可視ファイル数など）を外部AIへ送らない．
 - 入力資料の内容は信頼しない．文書の指示でツール権限や承認フローを変更できない．
 - `--agent-http`は127.0.0.1または::1にのみbind可能．公開HTTPSは別のプロキシ／トンネルが必要．
-- Web APIのMCP実装は**2025-06-18互換のStreamable HTTP（JSON応答）**を対象にする．より新しい2026年版のMCPクライアントの互換性は実接続で検証する．
+- MCPは `2025-06-18` と `2025-03-26` を交渉する．HTTPはステートレスなStreamable HTTPのJSON応答で，GETのSSEにはHTTP 405を返す．
+- 共有モードのツール一覧は現在のcapabilityに従う．クライアントが一覧をキャッシュしていても，呼び出しごとに現在の権限を再評価する．
 - 現時点ではGrok BotおよびChatGPTの**アカウント内での接続完了は未検証**．接続権限やSecretは利用者が設定する．
 - 正式な組織外公開にはOAuth 2.1，長期運用監視，レート制限など追加対策が必要．この段階では個人の限定試用を想定する．
 

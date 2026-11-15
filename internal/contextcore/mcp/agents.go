@@ -48,7 +48,7 @@ func NewAgentServer(dataDir, token string) (*Server, error) {
 		service:  service.WithDecisionRecipient(agent),
 		dataRoot: dataDir, agentToken: token, scope: contextcore.MCPScope{Actor: agent},
 	}
-	policy, err := server.loadCurrentPolicy()
+	policy, err := loadCurrentPolicy(dataDir)
 	if err != nil {
 		return nil, decisionlog.ErrAgentUnauthorized
 	}
@@ -187,7 +187,7 @@ func agentHTTPHandlerWithContext(dataDir string, sharedContext bool) http.Handle
 			return
 		}
 		version := r.Header.Get("MCP-Protocol-Version")
-		if version != "" && version != protocolVersion && version != "2025-03-26" {
+		if version != "" && version != protocolVersion && version != earlierProtocolVersion {
 			http.Error(w, "Unsupported MCP protocol version", http.StatusBadRequest)
 			return
 		}
@@ -237,6 +237,11 @@ func serveAgents(ctx context.Context, dataDir, address string, sharedContext boo
 	if err != nil || ip == nil || !ip.IsLoopback() {
 		return fmt.Errorf("agent MCP requires an explicit loopback address")
 	}
+	if sharedContext {
+		if err := checkSharedAgentPolicy(dataDir); err != nil {
+			return err
+		}
+	}
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return err
@@ -260,4 +265,17 @@ func serveAgents(ctx context.Context, dataDir, address string, sharedContext boo
 		return nil
 	}
 	return err
+}
+
+func checkSharedAgentPolicy(dataDir string) error {
+	policy, err := loadCurrentPolicy(dataDir)
+	if err != nil {
+		return fmt.Errorf("shared context requires a valid Workspace Context Policy: %w", err)
+	}
+	for actor := range policy.Actors {
+		if decisionlog.ValidAgent(actor) {
+			return nil
+		}
+	}
+	return errors.New("shared context requires an explicit agent grant in the Workspace Context Policy")
 }
