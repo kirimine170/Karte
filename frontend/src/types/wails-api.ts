@@ -203,7 +203,7 @@ export interface EphyProposalReview {
     resolved_doc_id: string;
     resolved_relative_path: string;
     routing_reason: string;
-    placement_alternatives: string[];
+    placement_alternatives: string[] | null;
     content_warnings: string[];
 }
 

@@ -126,6 +126,28 @@ describe('EphyReview', () => {
         component.destroy();
     });
 
+    it('opens decision candidates whose review has no placement alternatives', async () => {
+        const decisionID = `decision-${'a'.repeat(64)}`;
+        const decisionBody = JSON.stringify({ decision_id: decisionID, visibility_tags: ['private'] });
+        api.ListEphyProposals.mockResolvedValue({
+            proposals: [{
+                ...proposalReview,
+                proposal: { ...proposalReview.proposal, candidate_id: decisionID, proposed_body: decisionBody },
+                placement_alternatives: null,
+            }],
+            errors: [],
+        });
+
+        const component = new EphyReview(api);
+        component.init();
+        await component.open();
+
+        expect((document.getElementById('ephyBodyEditor') as HTMLTextAreaElement).value).toBe(decisionBody);
+        expect((document.getElementById('ephyEditAcceptBtn') as HTMLButtonElement).disabled).toBe(false);
+        expect(api.AcceptEphyProposal).not.toHaveBeenCalled();
+        component.destroy();
+    });
+
     it('checks for new proposals while the review dialog is closed', async () => {
         vi.useFakeTimers();
         api.ListEphyProposals
