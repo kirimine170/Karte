@@ -23,7 +23,7 @@ func TestSnapshotRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	source[len(source)-1] = '!'
-	path := filepath.Join(t.TempDir(), "会議 📝.kartepack")
+	path := filepath.Join(t.TempDir(), "会議 📝.karte")
 	if err := Write(path, snapshot); err != nil {
 		t.Fatal(err)
 	}
@@ -46,6 +46,10 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	firstZip, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	legacy, err := Read(second)
+	if err != nil || legacy.Manifest != actual.Manifest || !bytes.Equal(legacy.Markdown, actual.Markdown) {
+		t.Fatalf("legacy extension must open the same snapshot: %v", err)
 	}
 	secondZip, err := os.ReadFile(second)
 	if err != nil || !bytes.Equal(firstZip, secondZip) {

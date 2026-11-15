@@ -20,7 +20,7 @@ func TestPortableSnapshotRoundTripAcrossWorkspaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(t.TempDir(), "資料.kartepack")
+	path := filepath.Join(t.TempDir(), "資料.karte")
 	if err := portablepackage.Write(path, snapshot); err != nil {
 		t.Fatal(err)
 	}

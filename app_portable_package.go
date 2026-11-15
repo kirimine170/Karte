@@ -18,7 +18,10 @@ import (
 	"karte/internal/portablepackage"
 )
 
-var portablePackageFilters = []runtime.FileFilter{{DisplayName: "Karte Package", Pattern: "*.kartepack"}}
+var (
+	portablePackageSaveFilters = []runtime.FileFilter{{DisplayName: "Karte Package", Pattern: "*" + portablepackage.Extension}}
+	portablePackageOpenFilters = []runtime.FileFilter{{DisplayName: "Karte Package", Pattern: "*" + portablepackage.Extension + ";*" + portablepackage.LegacyExtension}}
+)
 
 // ExportPortablePackage shares an authorized, saved snapshot for the local
 // user to move to another workspace under their control.
@@ -33,14 +36,14 @@ func (a *App) ExportPortablePackage(relativePath string) (bool, error) {
 	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
 		Title:           "自分の別端末用にパッケージを保存",
 		DefaultFilename: strings.TrimSuffix(filepath.Base(relativePath), filepath.Ext(relativePath)) + portablepackage.Extension,
-		Filters:         portablePackageFilters,
+		Filters:         portablePackageSaveFilters,
 	})
 	if err != nil || path == "" {
 		return false, err
 	}
 	// Follow the exact native-dialog destination and its overwrite confirmation.
 	if !strings.EqualFold(filepath.Ext(path), portablepackage.Extension) {
-		return false, fmt.Errorf("拡張子を .kartepack にしてください")
+		return false, fmt.Errorf("拡張子を %s にしてください", portablepackage.Extension)
 	}
 	latest, err := a.portablePackageSnapshot(relativePath)
 	if err != nil {
@@ -96,7 +99,7 @@ func (a *App) ImportPortablePackage() (bool, error) {
 		return false, fmt.Errorf("アプリの準備が完了していません")
 	}
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "Karte パッケージを選択", Filters: portablePackageFilters,
+		Title: "Karte パッケージを選択", Filters: portablePackageOpenFilters,
 	})
 	if err != nil || path == "" {
 		return false, err

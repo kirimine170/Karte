@@ -17,7 +17,8 @@ import (
 
 const (
 	Version          = "0.1"
-	Extension        = ".kartepack"
+	Extension        = ".karte"
+	LegacyExtension  = ".kartepack"
 	MaxMarkdownBytes = 2 << 20
 	maxManifestBytes = 4096
 	maxArchiveBytes  = MaxMarkdownBytes + maxManifestBytes + 4096
@@ -75,7 +76,7 @@ func Write(path string, snapshot Snapshot) error {
 	if err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".kartepack-*")
+	file, err := os.CreateTemp(filepath.Dir(path), ".karte-package-*")
 	if err != nil {
 		return err
 	}
