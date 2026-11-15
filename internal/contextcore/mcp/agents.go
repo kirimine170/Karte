@@ -77,6 +77,7 @@ func (s *Server) agentScope(policy contextcore.Policy) (contextcore.MCPScope, co
 func proposalTool() map[string]any {
 	return map[string]any{
 		"name":        "karte_propose_decision",
+		"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false},
 		"description": "Submit a private decision proposal for human review.",
 		"inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false,
