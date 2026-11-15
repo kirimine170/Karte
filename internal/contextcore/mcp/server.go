@@ -76,6 +76,7 @@ type Server struct {
 	scope      contextcore.MCPScope
 	dataRoot   string
 	agentToken string
+	sharedContext bool // explicit opt-in; legacy agent MCP remains decisions-only
 }
 
 // NewServer builds the adapter against dataDir. Every failure mode is fatal:
@@ -240,6 +241,9 @@ func (s *Server) dispatch(encoder *json.Encoder, line string) error {
 		instructions := "Read-only facade over a dedicated Karte data root. Tools: karte_search, karte_read."
 		if s.agentToken != "" {
 			instructions = "Decision log only. Search and read permitted decisions, or submit a private proposal for human review."
+			if s.sharedContext {
+				instructions = "Search and read authorized Workspace Markdown and recipient-visible decisions. Submit decision proposals for human review; never directly edit canonical data."
+			}
 		}
 		result := map[string]any{
 			"protocolVersion": protocolVersion,
@@ -289,6 +293,10 @@ func (s *Server) dispatch(encoder *json.Encoder, line string) error {
 		if s.agentToken != "" {
 			tools[0]["description"] = "Search decisions visible to the authenticated recipient."
 			tools[1]["description"] = "Read a visible decision by its stable decision ID."
+			if s.sharedContext {
+				tools[0]["description"] = "Search policy-authorized Workspace Markdown and decisions visible to this agent. Results include doc_id, source SHA-256 and provenance."
+				tools[1]["description"] = "Read an authorized Workspace Markdown document or visible decision by stable doc_id. Source and policy are checked on every call."
+			}
 			tools = append(tools, proposalTool())
 		}
 		return s.encodeResult(encoder, req.ID, map[string]any{"tools": tools})
@@ -481,6 +489,11 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 	if searchErr != nil {
 		return nil, searchErr
 	}
+	if s.sharedContext {
+		// Index diagnostics describe *all* local files. Never reveal document
+		// counts or validation failures of inaccessible files to remote agents.
+		diagnostics = []contextcore.Diagnostic{}
+	}
 	return SearchOutput{Status: status, Results: results, Diagnostics: diagnostics}, nil
 }
 
@@ -539,6 +552,9 @@ func (s *Server) read(raw json.RawMessage) (any, error) {
 	// Return the original service error if there was one
 	if readErr != nil {
 		return nil, readErr
+	}
+	if s.sharedContext {
+		diagnostics = []contextcore.Diagnostic{}
 	}
 	return ReadOutput{Status: status, Document: document, Diagnostics: diagnostics}, nil
 }
