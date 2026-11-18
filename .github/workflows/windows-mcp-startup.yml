@@ -1,0 +1,41 @@
+name: Windows MCP Startup
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/windows/synthetic-mcp/**'
+      - '.github/workflows/windows-mcp-startup.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/windows/synthetic-mcp/**'
+      - '.github/workflows/windows-mcp-startup.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Parse Windows startup scripts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem scripts/windows/synthetic-mcp -File | Where-Object { $_.Extension -in @('.ps1','.psm1') } | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors.Count) { throw "Syntax error in $($_.Name): $($errors.Message -join ', ')" }
+          }
+      - name: Verify encrypted migration with synthetic credentials
+        shell: powershell
+        run: ./scripts/windows/synthetic-mcp/Test-Karte-Migration-Credentials.ps1

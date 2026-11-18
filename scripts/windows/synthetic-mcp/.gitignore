@@ -1,0 +1,13 @@
+private-startup/
+synthetic-live-workspace/
+*.exe
+*.zip
+*.partial-*
+*.log
+synthetic-*-health.txt
+synthetic-*-runtime.json
+openai-tunnel-client-*/
+startup-test-*/
+autostart-test-*/
+migration-test-*/
+*.sealed.json
