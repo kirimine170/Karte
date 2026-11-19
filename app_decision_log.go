@@ -53,7 +53,7 @@ func (a *App) importDecisionSummary(path, sourceURL string) (*decisionlog.Import
 			return err
 		}
 		for _, record := range records {
-			if err := checkDecisionPolicy(policy, record, contextcore.CapabilityReview); err != nil {
+			if err := contextcore.CheckDecisionPolicy(policy, record, contextcore.CapabilityReview); err != nil {
 				return err
 			}
 		}
@@ -79,7 +79,7 @@ func (a *App) ListDecisionLog() ([]decisionlog.Record, error) {
 		}
 		visible := make(map[string]bool)
 		for _, entry := range entries {
-			if checkDecisionPolicy(policy, entry.Record, contextcore.CapabilityRead) == nil {
+			if contextcore.CheckDecisionPolicy(policy, entry.Record, contextcore.CapabilityRead) == nil {
 				records = append(records, entry.Record)
 				visible[entry.ID] = true
 			}
@@ -149,30 +149,12 @@ func (a *App) WithdrawDecision(id string) error {
 	})
 }
 
-func checkDecisionPolicy(policy contextcore.Policy, r decisionlog.Record, capability contextcore.Capability) error {
-	tags := []string{"decision-log", "decision:" + r.Status}
-	if r.Status == decisionlog.Withdrawn || r.Status == decisionlog.Superseded {
-		tags = append(tags, "decision:history")
-	}
-	authorization, err := policy.Authorize(localHumanActor, capability, contextcore.Resource{
-		Project: r.Business, Kind: "decision", Sensitivity: r.ContextSensitivity(),
-		Tags: tags, ProvenanceTypes: []string{"meeting-summary"},
-	})
-	if err != nil {
-		return err
-	}
-	if !authorization.Allowed {
-		return fmt.Errorf("decision is unavailable under the active Personal Context policy")
-	}
-	return nil
-}
-
 func (a *App) authorizeDecision(record decisionlog.Record, capability contextcore.Capability) error {
 	policy, err := contextcore.LoadPolicy(a.dataDir)
 	if err != nil {
 		return err
 	}
-	return checkDecisionPolicy(policy, record, capability)
+	return contextcore.CheckDecisionPolicy(policy, record, capability)
 }
 
 func (a *App) reviewDecisionProposal(proposal ephyoutbox.Proposal) (*ephyResolvedProposal, error) {
@@ -191,95 +173,20 @@ func (a *App) reviewDecisionProposal(proposal ephyoutbox.Proposal) (*ephyResolve
 }
 
 func (a *App) finishDecisionReview(candidateID, editedBody string, reject bool, message string) (*ephyoutbox.Receipt, error) {
-	store, err := ephyoutbox.NewStore(a.dataDir)
-	if err != nil {
-		return nil, err
+	options := decisionlog.ReviewOptions{
+		Authorize: func(record decisionlog.Record) error {
+			return a.authorizeDecision(record, contextcore.CapabilityReview)
+		},
+		WriteReceipt:  a.writeEphyReceipt,
+		RejectMessage: optionalString(message),
+		AcceptMessage: "Accepted after human review.",
 	}
-	var receipt *ephyoutbox.Receipt
-	err = canonical.WithWriter(a.dataDir, func(w *canonical.Writer) error {
-		existing, err := store.ReadReceipt(candidateID)
-		if err != nil {
-			return err
+	if !reject {
+		options.Edit = func(decisionlog.Record) (decisionlog.Record, error) {
+			return decisionlog.Decode([]byte(editedBody))
 		}
-		if existing != nil {
-			receipt = existing
-			return store.MoveProposal(candidateID, receipt.Result)
-		}
-		proposal, err := store.ReadPending(candidateID)
-		if err != nil {
-			return err
-		}
-		original, err := decisionlog.DecodeProposal(proposal)
-		if err != nil {
-			return err
-		}
-		if err := a.authorizeDecision(original, contextcore.CapabilityReview); err != nil {
-			return err
-		}
-		now := time.Now().UTC().Format(time.RFC3339Nano)
-		receipt = &ephyoutbox.Receipt{
-			SchemaVersion: ephyoutbox.SchemaVersion, CandidateID: candidateID,
-			Result: "rejected", ProcessedAt: now, Message: optionalString(message),
-		}
-
-		entries, err := decisionlog.List(w)
-		if err != nil {
-			return err
-		}
-		var committed decisionlog.Entry
-		for _, entry := range entries {
-			if entry.ID == candidateID {
-				committed = entry
-				break
-			}
-		}
-		if committed.ID == "" && !reject {
-			record, err := decisionlog.Decode([]byte(editedBody))
-			if err != nil {
-				return err
-			}
-			if record.ID != original.ID || record.Business != original.Business || record.Date != original.Date ||
-				record.BusinessLabel != original.BusinessLabel || record.Decider != original.Decider ||
-				record.Visibility != original.Visibility || record.PublicationRestriction != original.PublicationRestriction {
-				return fmt.Errorf("decision identity, date, business, reviewer, and legacy visibility are fixed for this candidate")
-			}
-			record.UpdatedAt, record.Sources = now, original.Sources
-			if err := a.authorizeDecision(record, contextcore.CapabilityReview); err != nil {
-				return err
-			}
-			if record.Supersedes != "" {
-				for _, entry := range entries {
-					if entry.ID == record.Supersedes {
-						if err := a.authorizeDecision(entry.Record, contextcore.CapabilityReview); err != nil {
-							return err
-						}
-					}
-				}
-			}
-			committed, err = decisionlog.Accept(w, record)
-			if err != nil {
-				return err
-			}
-		}
-		if committed.ID != "" {
-			// A retry after the record write must finish the original acceptance,
-			// even if the retry was triggered via the reject button.
-			if err := a.authorizeDecision(committed.Record, contextcore.CapabilityReview); err != nil {
-				return err
-			}
-			path := decisionlog.Path(committed.ID)
-			receipt.Result, receipt.Message = "accepted", optionalString("Accepted after human review.")
-			receipt.DocID, receipt.RelativePath, receipt.ResultingSHA256 = &committed.ID, &path, &committed.SHA256
-		}
-		if err := a.writeEphyReceipt(store, *receipt); err != nil {
-			return err
-		}
-		return store.MoveProposal(candidateID, receipt.Result)
-	})
-	if err != nil {
-		return nil, err
 	}
-	return receipt, nil
+	return decisionlog.FinishReview(a.dataDir, candidateID, options)
 }
 
 func (a *App) isDecisionStoragePath(path string) bool {

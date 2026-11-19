@@ -19,6 +19,19 @@ import (
 	"karte/internal/ephyoutbox"
 )
 
+// NewSharedContextAgentServer is an explicit opt-in. Existing agent tokens,
+// per-actor Context Policy and decision recipient visibility are reused.
+// Unlike decision-only NewAgentServer, this mode includes canonical Markdown.
+func NewSharedContextAgentServer(dataDir, token string) (*Server, error) {
+	server, err := NewAgentServer(dataDir, token)
+	if err != nil {
+		return nil, err
+	}
+	server.service = server.service.WithSharedContextRecipient(server.scope.Actor)
+	server.sharedContext = true
+	return server, nil
+}
+
 func NewAgentServer(dataDir, token string) (*Server, error) {
 	if strings.TrimSpace(dataDir) == "" {
 		return nil, errors.New("KARTE_DATA_DIR must be set explicitly")
@@ -35,7 +48,7 @@ func NewAgentServer(dataDir, token string) (*Server, error) {
 		service:  service.WithDecisionRecipient(agent),
 		dataRoot: dataDir, agentToken: token, scope: contextcore.MCPScope{Actor: agent},
 	}
-	policy, err := server.loadCurrentPolicy()
+	policy, err := loadCurrentPolicy(dataDir)
 	if err != nil {
 		return nil, decisionlog.ErrAgentUnauthorized
 	}
@@ -64,6 +77,7 @@ func (s *Server) agentScope(policy contextcore.Policy) (contextcore.MCPScope, co
 func proposalTool() map[string]any {
 	return map[string]any{
 		"name":        "karte_propose_decision",
+		"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false},
 		"description": "Submit a private decision proposal for human review.",
 		"inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false,
@@ -131,6 +145,12 @@ func (s *Server) proposeDecision(raw json.RawMessage) (any, error) {
 }
 
 func agentHTTPHandler(dataDir string) http.Handler {
+	return agentHTTPHandlerWithContext(dataDir, false)
+}
+
+// agentHTTPHandlerWithContext always authenticates before MCP negotiation.
+// A loopback-only listener is enforced in ServeSharedContextAgents.
+func agentHTTPHandlerWithContext(dataDir string, sharedContext bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		if r.URL.Path != "/mcp" {
@@ -154,14 +174,20 @@ func agentHTTPHandler(dataDir string) http.Handler {
 				token = value
 			}
 		}
-		server, err := NewAgentServer(dataDir, token)
+		var server *Server
+		var err error
+		if sharedContext {
+			server, err = NewSharedContextAgentServer(dataDir, token)
+		} else {
+			server, err = NewAgentServer(dataDir, token)
+		}
 		if err != nil {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 		version := r.Header.Get("MCP-Protocol-Version")
-		if version != "" && version != protocolVersion && version != "2025-03-26" {
+		if version != "" && version != protocolVersion && version != earlierProtocolVersion {
 			http.Error(w, "Unsupported MCP protocol version", http.StatusBadRequest)
 			return
 		}
@@ -190,6 +216,16 @@ func agentHTTPHandler(dataDir string) http.Handler {
 }
 
 func ServeAgents(ctx context.Context, dataDir, address string) error {
+	return serveAgents(ctx, dataDir, address, false)
+}
+
+// ServeSharedContextAgents provides the same MCP tools over HTTP but also
+// includes policy-authorized canonical Markdown. It never binds publicly.
+func ServeSharedContextAgents(ctx context.Context, dataDir, address string) error {
+	return serveAgents(ctx, dataDir, address, true)
+}
+
+func serveAgents(ctx context.Context, dataDir, address string, sharedContext bool) error {
 	if strings.TrimSpace(dataDir) == "" {
 		return errors.New("KARTE_DATA_DIR must be set explicitly")
 	}
@@ -201,12 +237,17 @@ func ServeAgents(ctx context.Context, dataDir, address string) error {
 	if err != nil || ip == nil || !ip.IsLoopback() {
 		return fmt.Errorf("agent MCP requires an explicit loopback address")
 	}
+	if sharedContext {
+		if err := checkSharedAgentPolicy(dataDir); err != nil {
+			return err
+		}
+	}
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return err
 	}
 	server := &http.Server{
-		Handler: agentHTTPHandler(dataDir), ReadHeaderTimeout: 5 * time.Second,
+		Handler: agentHTTPHandlerWithContext(dataDir, sharedContext), ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 15 * time.Second, WriteTimeout: 45 * time.Second, IdleTimeout: 30 * time.Second,
 		MaxHeaderBytes: 16 << 10,
 	}
@@ -224,4 +265,17 @@ func ServeAgents(ctx context.Context, dataDir, address string) error {
 		return nil
 	}
 	return err
+}
+
+func checkSharedAgentPolicy(dataDir string) error {
+	policy, err := loadCurrentPolicy(dataDir)
+	if err != nil {
+		return fmt.Errorf("shared context requires a valid Workspace Context Policy: %w", err)
+	}
+	for actor := range policy.Actors {
+		if decisionlog.ValidAgent(actor) {
+			return nil
+		}
+	}
+	return errors.New("shared context requires an explicit agent grant in the Workspace Context Policy")
 }

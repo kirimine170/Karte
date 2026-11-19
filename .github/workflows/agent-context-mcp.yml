@@ -1,0 +1,50 @@
+name: Agent Context MCP Contract
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: &paths
+      - '.github/workflows/agent-context-mcp.yml'
+      - 'internal/contextcore/**'
+      - 'internal/decisionlog/**'
+      - 'cmd/karte-mcp/**'
+      - 'scripts/smoke_agent_mcp.py'
+      - 'scripts/test_smoke_agent_mcp.py'
+      - 'go.mod'
+      - 'go.sum'
+  pull_request:
+    branches: [main]
+    paths: *paths
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-15, ubuntu-22.04]
+    env:
+      GOFLAGS: -buildvcs=false
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Download Go dependencies
+        run: go mod download
+      - name: Verify stdlib smoke client and redirect security
+        run: python -m unittest scripts/test_smoke_agent_mcp.py -v
+      - name: Verify context policy and MCP contracts
+        run: go test -count=1 ./internal/contextcore/... ./cmd/karte-mcp

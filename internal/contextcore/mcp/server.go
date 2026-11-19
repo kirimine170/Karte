@@ -35,6 +35,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -45,10 +46,11 @@ import (
 // Protocol constants. We implement the 2025-06-18 wire version, which is the
 // version every current Codex/inspector tooling speaks.
 const (
-	protocolVersion = "2025-06-18"
-	serverName      = "karte-context"
-	serverVersion   = "0.1.0"
-	maxFrameBytes   = 1 << 20
+	protocolVersion        = "2025-06-18"
+	earlierProtocolVersion = "2025-03-26"
+	serverName             = "karte-context"
+	serverVersion          = "0.1.0"
+	maxFrameBytes          = 1 << 20
 )
 
 // Result payloads. They mirror contextcore types so a host can reuse the
@@ -72,10 +74,11 @@ type Server struct {
 	// policy and scope are the startup snapshot used only for diagnostics
 	// (Summary). Every call re-derives the live grant from disk via
 	// currentScope, so these fields are never an authorization source.
-	policy     contextcore.Policy
-	scope      contextcore.MCPScope
-	dataRoot   string
-	agentToken string
+	policy        contextcore.Policy
+	scope         contextcore.MCPScope
+	dataRoot      string
+	agentToken    string
+	sharedContext bool // explicit opt-in; legacy agent MCP remains decisions-only
 }
 
 // NewServer builds the adapter against dataDir. Every failure mode is fatal:
@@ -237,12 +240,27 @@ func (s *Server) dispatch(encoder *json.Encoder, line string) error {
 	}
 	switch req.Method {
 	case "initialize":
+		version := protocolVersion
+		var params struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		}
+		if len(req.Params) != 0 {
+			if err := json.Unmarshal(req.Params, &params); err != nil {
+				return s.encodeError(encoder, req.ID, -32602, "invalid initialize params")
+			}
+			if params.ProtocolVersion == earlierProtocolVersion {
+				version = earlierProtocolVersion
+			}
+		}
 		instructions := "Read-only facade over a dedicated Karte data root. Tools: karte_search, karte_read."
 		if s.agentToken != "" {
 			instructions = "Decision log only. Search and read permitted decisions, or submit a private proposal for human review."
+			if s.sharedContext {
+				instructions = "Search and read authorized Workspace Markdown and recipient-visible decisions. Submit decision proposals for human review; never directly edit canonical data."
+			}
 		}
 		result := map[string]any{
-			"protocolVersion": protocolVersion,
+			"protocolVersion": version,
 			"serverInfo":      map[string]string{"name": serverName, "version": serverVersion},
 			"capabilities": map[string]any{
 				"tools": map[string]any{"listChanged": false},
@@ -259,6 +277,7 @@ func (s *Server) dispatch(encoder *json.Encoder, line string) error {
 		tools := []map[string]any{
 			{
 				"name":        "karte_search",
+				"annotations": map[string]any{"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false},
 				"description": "Search the dedicated Karte data root for Markdown documents. Honors project scope, tag scope, and the policy's sensitivity ceiling. Returns doc_id, relative path, SHA-256, tags, and snippet for each match.",
 				"inputSchema": map[string]any{
 					"type": "object",
@@ -275,6 +294,7 @@ func (s *Server) dispatch(encoder *json.Encoder, line string) error {
 			},
 			{
 				"name":        "karte_read",
+				"annotations": map[string]any{"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false},
 				"description": "Read a single document by its stable doc_id. The response carries the canonical body, relative path, SHA-256, and frontmatter metadata.",
 				"inputSchema": map[string]any{
 					"type": "object",
@@ -289,7 +309,28 @@ func (s *Server) dispatch(encoder *json.Encoder, line string) error {
 		if s.agentToken != "" {
 			tools[0]["description"] = "Search decisions visible to the authenticated recipient."
 			tools[1]["description"] = "Read a visible decision by its stable decision ID."
+			if s.sharedContext {
+				tools[0]["description"] = "Search policy-authorized Workspace Markdown and decisions visible to this agent. Results include doc_id, source SHA-256 and provenance."
+				tools[1]["description"] = "Read an authorized Workspace Markdown document or visible decision by stable doc_id. Source and policy are checked on every call."
+			}
 			tools = append(tools, proposalTool())
+		}
+		if s.sharedContext {
+			scope, policy, err := s.currentScope()
+			if err != nil {
+				return s.encodeError(encoder, req.ID, -32603, "agent authorization unavailable")
+			}
+			capabilities := policy.Actors[scope.Actor].Capabilities
+			toolCapabilities := map[string]contextcore.Capability{
+				"karte_search":           contextcore.CapabilitySearch,
+				"karte_read":             contextcore.CapabilityRead,
+				"karte_propose_decision": contextcore.CapabilityPropose,
+			}
+			tools = slices.DeleteFunc(tools, func(tool map[string]any) bool {
+				name, _ := tool["name"].(string)
+				capability, known := toolCapabilities[name]
+				return !known || !slices.Contains(capabilities, capability)
+			})
 		}
 		return s.encodeResult(encoder, req.ID, map[string]any{"tools": tools})
 	case "tools/call":
@@ -371,8 +412,8 @@ func (s *Server) handleToolCall(encoder *json.Encoder, req request) error {
 // authorization. Unlike contextcore.LoadPolicy, a missing, unreadable, or
 // malformed file is an error: a dedicated root must fail closed instead of
 // falling back to DefaultPolicy or to the startup snapshot.
-func (s *Server) loadCurrentPolicy() (contextcore.Policy, error) {
-	data, err := os.ReadFile(filepath.Join(s.dataRoot, ".mdsys", "context", "v1", "policy.json"))
+func loadCurrentPolicy(dataRoot string) (contextcore.Policy, error) {
+	data, err := os.ReadFile(filepath.Join(dataRoot, ".mdsys", "context", "v1", "policy.json"))
 	if err != nil {
 		return contextcore.Policy{}, fmt.Errorf("reload context policy: %w", err)
 	}
@@ -385,7 +426,7 @@ func (s *Server) loadCurrentPolicy() (contextcore.Policy, error) {
 // search and read. Any missing, corrupted, or revoked state is an error,
 // never a fallback to a stale in-memory state.
 func (s *Server) currentScope() (contextcore.MCPScope, contextcore.Policy, error) {
-	policy, err := s.loadCurrentPolicy()
+	policy, err := loadCurrentPolicy(s.dataRoot)
 	if err != nil {
 		return contextcore.MCPScope{}, contextcore.Policy{}, err
 	}
@@ -481,6 +522,11 @@ func (s *Server) search(raw json.RawMessage) (any, error) {
 	if searchErr != nil {
 		return nil, searchErr
 	}
+	if s.sharedContext {
+		// Index diagnostics describe *all* local files. Never reveal document
+		// counts or validation failures of inaccessible files to remote agents.
+		diagnostics = []contextcore.Diagnostic{}
+	}
 	return SearchOutput{Status: status, Results: results, Diagnostics: diagnostics}, nil
 }
 
@@ -539,6 +585,9 @@ func (s *Server) read(raw json.RawMessage) (any, error) {
 	// Return the original service error if there was one
 	if readErr != nil {
 		return nil, readErr
+	}
+	if s.sharedContext {
+		diagnostics = []contextcore.Diagnostic{}
 	}
 	return ReadOutput{Status: status, Document: document, Diagnostics: diagnostics}, nil
 }

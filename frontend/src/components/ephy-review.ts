@@ -156,7 +156,7 @@ export class EphyReview extends BaseComponent {
         const baseHash = proposal.base_sha256 || '(create)';
         const targetDocId = review.resolved_doc_id || proposal.target_doc_id || '(new document)';
         const sources = proposal.source_refs.map((ref) => `${ref.type}: ${ref.reference}`).join('\n');
-        const alternatives = review.placement_alternatives.length > 0 ? review.placement_alternatives.join('\n') : '(none)';
+        const alternatives = review.placement_alternatives?.join('\n') || '(none)';
         const warnings = review.content_warnings.length > 0 ? review.content_warnings.join('\n') : '(none)';
         if (this.metadata) {
             this.metadata.textContent = [

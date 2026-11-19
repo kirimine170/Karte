@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -21,6 +22,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"karte/internal/contextcore"
 	"karte/internal/contextcore/mcp"
 	"karte/internal/decisionlog"
 )
@@ -34,16 +36,40 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 	flags.SetOutput(stderr)
 	check := flags.Bool("check", false, "Validate the environment and exit without serving.")
 	issue := flags.String("issue-decision-token", "", "Issue or rotate the token for an agent recipient.")
-	httpAddress := flags.String("agent-http", "", "Serve the authenticated decision MCP on a loopback address.")
+	httpAddress := flags.String("agent-http", "", "Serve the authenticated agent MCP on a loopback address.")
+	sharedContext := flags.Bool("shared-context", false, "Explicitly include policy-authorized canonical Markdown in authenticated agent MCP tools.")
+	acceptDecision := flags.String("accept-decision", "", "Accept a single pending decision locally and print its receipt.")
+	shareDecision := flags.String("share-decision-with", "", "Share the accepted decision with one policy-authorized agent.")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 
 	dataDir := os.Getenv("KARTE_DATA_DIR")
+	localReview := false
+	flags.Visit(func(option *flag.Flag) {
+		if option.Name == "accept-decision" || option.Name == "share-decision-with" {
+			localReview = true
+		}
+	})
+	if localReview {
+		if dataDir == "" || *acceptDecision == "" || *httpAddress != "" || *issue != "" || *check || *sharedContext || flags.NArg() != 0 {
+			fmt.Fprintln(stderr, "karte-mcp: use --accept-decision separately with an explicit KARTE_DATA_DIR")
+			return 2
+		}
+		receipt, err := contextcore.AcceptPendingDecision(dataDir, *acceptDecision, *shareDecision)
+		if err == nil {
+			err = json.NewEncoder(stdout).Encode(receipt)
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "karte-mcp: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if *issue != "" {
-		if dataDir == "" || *httpAddress != "" || *check {
+		if dataDir == "" || *httpAddress != "" || *check || *sharedContext {
 			fmt.Fprintln(stderr, "karte-mcp: issue a token separately with an explicit KARTE_DATA_DIR")
 			return 2
 		}
@@ -60,7 +86,13 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 			fmt.Fprintln(stderr, "karte-mcp: use --agent-http without --check")
 			return 2
 		}
-		if err := mcp.ServeAgents(ctx, dataDir, *httpAddress); err != nil {
+		var err error
+		if *sharedContext {
+			err = mcp.ServeSharedContextAgents(ctx, dataDir, *httpAddress)
+		} else {
+			err = mcp.ServeAgents(ctx, dataDir, *httpAddress)
+		}
+		if err != nil {
 			fmt.Fprintf(stderr, "karte-mcp: %v\n", err)
 			return 1
 		}
@@ -69,7 +101,14 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 	var server *mcp.Server
 	var err error
 	if token := os.Getenv("KARTE_DECISION_AGENT_TOKEN"); token != "" {
-		server, err = mcp.NewAgentServer(dataDir, token)
+		if *sharedContext {
+			server, err = mcp.NewSharedContextAgentServer(dataDir, token)
+		} else {
+			server, err = mcp.NewAgentServer(dataDir, token)
+		}
+	} else if *sharedContext {
+		fmt.Fprintln(stderr, "karte-mcp: --shared-context requires --agent-http or KARTE_DECISION_AGENT_TOKEN")
+		return 2
 	} else {
 		server, err = mcp.NewServer(dataDir)
 	}
