@@ -108,12 +108,14 @@ function Register-KarteAutostart(
     $suffix = if ($Grok) { '-NamedTunnel' } else { '-TunnelId "' + $Id + '"' }
     $role = if ($Grok) { 'Grok' } else { 'ChatGPT' }
     $description = "Karte synthetic $role MCP logon startup (current user only)."
-    $arguments = '-NoProfile -NonInteractive -WindowStyle Hidden -File "{0}" -NonInteractive {1}' -f $ScriptPath, $suffix
+    $legacyArguments = '-NoProfile -NonInteractive -WindowStyle Hidden -File "{0}" -NonInteractive {1}' -f $ScriptPath, $suffix
+    # Apply only to this trusted launcher process; keep the user's policy intact.
+    $arguments = '-NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -WindowStyle Hidden -File "{0}" -NonInteractive {1}' -f $ScriptPath, $suffix
     $existing = Get-ScheduledTask -TaskPath '\' -TaskName $Name -ErrorAction SilentlyContinue
     if ($existing) {
         $actions = @($existing.Actions)
         if ($existing.Description -ne $description -or $actions.Count -ne 1 -or
-            $actions[0].Execute -ne $executable -or $actions[0].Arguments -ne $arguments) {
+            $actions[0].Execute -ne $executable -or $actions[0].Arguments -notin @($arguments, $legacyArguments)) {
             throw 'A different scheduled task uses this name; it has not been changed.'
         }
     }

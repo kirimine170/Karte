@@ -1,3 +1,4 @@
+param([switch]$RegistrationOnly)
 $ErrorActionPreference = 'Stop'
 $launcher = Join-Path $PSScriptRoot 'Start-Karte-Synthetic-ChatGPT.ps1'
 $tokens = $null
@@ -58,12 +59,33 @@ if (-not $NonInteractive -or $TunnelId -ne 'tunnel_synthetic_startup_test') { ex
     Assert-Startup ($task.Settings.RestartCount -eq 10 -and $task.Settings.MultipleInstances -eq 'IgnoreNew') 'Task retry and duplicate policies'
     Assert-Startup (@($task.Triggers).Count -eq 2 -and $task.Triggers[1].Repetition.Interval -eq 'PT1M' -and -not $task.Triggers[1].Repetition.Duration) 'Logon plus indefinite one-minute recovery'
     Assert-Startup (-not $task.Actions[0].Arguments.Contains($synthetic)) 'No synthetic secret in task arguments'
-    Start-ScheduledTask -TaskName $taskName
-    for ($attempt = 0; $attempt -lt 30; $attempt++) {
-        if (Test-Path -LiteralPath $marker) { break }
-        Start-Sleep -Milliseconds 200
+    Assert-Startup ($task.Actions[0].Arguments.Contains('-ExecutionPolicy RemoteSigned')) 'Execution policy is scoped to the launcher process'
+
+    # An existing owned task from the earlier launcher must be upgradable.
+    $legacyArguments = $task.Actions[0].Arguments.Replace(' -ExecutionPolicy RemoteSigned', '')
+    $legacyAction = New-ScheduledTaskAction -Execute $task.Actions[0].Execute -Argument $legacyArguments -WorkingDirectory $testRoot
+    Set-ScheduledTask -TaskName $taskName -Action $legacyAction | Out-Null
+    Register-KarteAutostart $probe 'tunnel_synthetic_startup_test' $taskName
+    $task = Get-ScheduledTask -TaskName $taskName
+    Assert-Startup ($task.Actions[0].Arguments.Contains('-ExecutionPolicy RemoteSigned')) 'Existing owned launcher task upgrades from legacy arguments'
+    if (-not $RegistrationOnly) {
+        Start-ScheduledTask -TaskName $taskName
+        for ($attempt = 0; $attempt -lt 30; $attempt++) {
+            if (Test-Path -LiteralPath $marker) { break }
+            Start-Sleep -Milliseconds 200
+        }
+        Assert-Startup (Test-Path -LiteralPath $marker) 'Real scheduled task launches a harmless synthetic probe'
+    } else {
+        Write-Output 'SKIP: Task execution requires the registered user to be logged on interactively'
     }
-    Assert-Startup (Test-Path -LiteralPath $marker) 'Real scheduled task launches a harmless synthetic probe'
+
+    $foreignArguments = $task.Actions[0].Arguments + ' -Unexpected synthetic'
+    $foreignAction = New-ScheduledTaskAction -Execute $task.Actions[0].Execute -Argument $foreignArguments -WorkingDirectory $testRoot
+    Set-ScheduledTask -TaskName $taskName -Action $foreignAction | Out-Null
+    $rejected = $false
+    try { Register-KarteAutostart $probe 'tunnel_synthetic_startup_test' $taskName } catch { $rejected = $true }
+    $unchanged = (Get-ScheduledTask -TaskName $taskName).Actions[0].Arguments -ceq $foreignArguments
+    Assert-Startup ($rejected -and $unchanged) 'A different task with the same name remains unchanged'
 } finally {
     if ($taskCreated) {
         Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue

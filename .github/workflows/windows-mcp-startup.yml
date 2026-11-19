@@ -36,6 +36,9 @@ jobs:
             [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
             if ($errors.Count) { throw "Syntax error in $($_.Name): $($errors.Message -join ', ')" }
           }
+      - name: Verify owned task registration and legacy upgrade
+        shell: powershell
+        run: ./scripts/windows/synthetic-mcp/Test-Karte-ChatGPT-Startup.ps1 -RegistrationOnly
       - name: Verify encrypted migration with synthetic credentials
         shell: powershell
         run: ./scripts/windows/synthetic-mcp/Test-Karte-Migration-Credentials.ps1
