@@ -131,6 +131,20 @@ function Register-KarteAutostart(
     Register-ScheduledTask -TaskPath '\' -TaskName $Name -Action $action -Trigger @($logon, $retry) -Principal $principal -Settings $settings -Description $description -Force | Out-Null
 }
 
+function Get-KarteRuntimePorts([string]$ScriptRoot) {
+    $httpPort=8791; $metricsPort=8792
+    $file=Join-Path $ScriptRoot 'private-startup/runtime-ports.json'
+    if(Test-Path -LiteralPath $file){
+        if((Get-Item -LiteralPath $file).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Unsafe runtime port configuration.'}
+        $config=[IO.File]::ReadAllText($file)|ConvertFrom-Json
+        if(@($config.PSObject.Properties).Count -ne 2 -or -not $config.PSObject.Properties['GrokHTTP'] -or -not $config.PSObject.Properties['GrokMetrics']){throw 'Invalid runtime port configuration.'}
+        foreach($p in @($config.GrokHTTP,$config.GrokMetrics)){if($p -isnot [int] -and $p -isnot [long] -or $p -lt 1024 -or $p -gt 65535 -or $p -eq 18640){throw 'Invalid runtime port configuration.'}}
+        $httpPort=[int]$config.GrokHTTP; $metricsPort=[int]$config.GrokMetrics
+        if($httpPort -eq $metricsPort){throw 'Runtime ports must be distinct.'}
+    }
+    return [pscustomobject]@{HTTP=$httpPort;Metrics=$metricsPort;Origin=('http://127.0.0.1:'+ $httpPort)}
+}
+
 function Get-KarteStartupStatus([string]$Name, [string]$KeyFile) {
     $task = Get-ScheduledTask -TaskPath '\' -TaskName $Name -ErrorAction SilentlyContinue
     $info = if ($task) { Get-ScheduledTaskInfo -TaskPath '\' -TaskName $Name }
@@ -143,4 +157,24 @@ function Get-KarteStartupStatus([string]$Name, [string]$KeyFile) {
     }
 }
 
-Export-ModuleMember -Function Read-KarteSavedKey, Save-KarteKey, ConvertTo-KarteCloudflareToken, Register-KarteAutostart, Get-KarteStartupStatus, New-KarteProcessJob
+function Test-KarteListenerOwner([int]$Port, [int]$ProcessId) {
+    $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+    return @($listeners | Where-Object { $_.OwningProcess -eq $ProcessId -and $_.LocalAddress -eq '127.0.0.1' }).Count -eq 1
+}
+
+function Test-KarteGrokOwnership([string]$ScriptRoot, [object]$Ports) {
+    try {
+        $record = [IO.File]::ReadAllText((Join-Path $ScriptRoot 'synthetic-grok-runtime.json')) | ConvertFrom-Json
+        $server = Get-Process -Id ([int]$record.ServerId) -ErrorAction Stop
+        $tunnel = Get-Process -Id ([int]$record.TunnelId) -ErrorAction Stop
+        $karte = Join-Path $ScriptRoot 'karte-mcp-ea4b9b2.exe'
+        if (-not (Test-Path -LiteralPath $karte)) { $karte = Join-Path $ScriptRoot 'karte-mcp.exe' }
+        $expectedTunnel = Join-Path $ScriptRoot 'openai-tunnel-client-v0.0.21/cloudflared.exe'
+        return $server.Path -ieq $karte -and $tunnel.Path -ieq $expectedTunnel -and
+            [string]$server.StartTime.ToUniversalTime().Ticks -ceq [string]$record.ServerStartTicks -and
+            [string]$tunnel.StartTime.ToUniversalTime().Ticks -ceq [string]$record.TunnelStartTicks -and
+            (Test-KarteListenerOwner $Ports.HTTP $server.Id) -and (Test-KarteListenerOwner $Ports.Metrics $tunnel.Id)
+    } catch { return $false }
+}
+
+Export-ModuleMember -Function Read-KarteSavedKey, Save-KarteKey, ConvertTo-KarteCloudflareToken, Register-KarteAutostart, Get-KarteStartupStatus, New-KarteProcessJob, Get-KarteRuntimePorts, Test-KarteListenerOwner, Test-KarteGrokOwnership

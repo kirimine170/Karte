@@ -10,7 +10,6 @@ $workspace = Join-Path $PSScriptRoot 'synthetic-live-workspace'
 $karte = Join-Path $PSScriptRoot 'karte-mcp-ea4b9b2.exe'
 if (-not (Test-Path -LiteralPath $karte)) { $karte = Join-Path $PSScriptRoot 'karte-mcp.exe' }
 $cloudflared = Join-Path $PSScriptRoot 'openai-tunnel-client-v0.0.21/cloudflared.exe'
-$origin = 'http://127.0.0.1:8791'
 $oldRoot = $env:KARTE_DATA_DIR
 $oldTunnelToken = $env:TUNNEL_TOKEN
 $server = $null
@@ -23,6 +22,8 @@ $locked = $false
 $job = $null
 
 if ($Status) { Get-KarteStartupStatus $taskName $keyFile; return }
+$runtimePorts = Get-KarteRuntimePorts $PSScriptRoot
+$origin = $runtimePorts.Origin
 if ($SetupAutostart) { $NamedTunnel = $true }
 if ($NonInteractive -and ($SetupAutostart -or $ReplaceKey)) { throw 'Key setup requires an interactive window.' }
 if (($ReplaceKey -or $ConfigureOnly) -and -not $SetupAutostart) { throw 'Use these options with -SetupAutostart.' }
@@ -72,21 +73,26 @@ try {
     $lock = [Threading.Mutex]::new($false, ('Local\KarteSyntheticGrok-' + $lockId))
     try { $locked = $lock.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked = $true }
     if (-not $locked) { Write-Host 'The Grok runtime is already running.'; return }
-    if (Get-NetTCPConnection -LocalPort 8791 -State Listen -ErrorAction SilentlyContinue) {
-        throw 'Port 8791 is already in use. Stop the other test server before starting this launcher.'
+    if (Get-NetTCPConnection -LocalPort $runtimePorts.HTTP -State Listen -ErrorAction SilentlyContinue) {
+        throw ('Port '+$runtimePorts.HTTP+' is already in use. No existing process was stopped.')
+    }
+    if ($NamedTunnel -and (Get-NetTCPConnection -LocalPort $runtimePorts.Metrics -State Listen -ErrorAction SilentlyContinue)) {
+        throw ('Port '+$runtimePorts.Metrics+' is already in use. No existing process was stopped.')
     }
     $job = New-KarteProcessJob
-    $server = Start-Process -FilePath $karte -ArgumentList @('--agent-http', '127.0.0.1:8791', '--shared-context') -WindowStyle Hidden -PassThru
+    $server = Start-Process -FilePath $karte -ArgumentList @('--agent-http', ('127.0.0.1:'+$runtimePorts.HTTP), '--shared-context') -WindowStyle Hidden -PassThru
     $job.Assign($server)
     $probe = '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
     $probeStatus = $null
+    $serverOwnsListener = $false
     for ($attempt = 0; $attempt -lt 15; $attempt++) {
         if ($server.HasExited) { throw 'The synthetic Karte MCP server could not start.' }
         $probeStatus = $probe | & curl.exe --noproxy '*' --silent --connect-timeout 1 --max-time 2 --output NUL --write-out '%{http_code}' --header 'Content-Type: application/json' --data-binary '@-' "$origin/mcp"
-        if ($probeStatus -eq '401') { break }
+        $serverOwnsListener = Test-KarteListenerOwner $runtimePorts.HTTP $server.Id
+        if ($probeStatus -eq '401' -and $serverOwnsListener) { break }
         Start-Sleep -Milliseconds 150
     }
-    if ($probeStatus -ne '401') { throw "Unauthenticated loopback test expected HTTP 401, got $probeStatus." }
+    if ($probeStatus -ne '401' -or -not $serverOwnsListener) { throw 'The synthetic Karte process does not own a ready loopback MCP listener.' }
     Write-Output 'Synthetic Karte MCP is listening on loopback. Unauthorized requests return HTTP 401.'
     if ($LocalCheck) { return }
 
@@ -99,9 +105,9 @@ try {
             if ($keyBuffer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($keyBuffer) }
         }
         Write-Host 'Use https://karte-test.kirimine170.com/mcp after setting the published route. Press Ctrl+C to stop.'
-        $tunnel = Start-Process -FilePath $cloudflared -ArgumentList @('tunnel', '--no-autoupdate', '--protocol', 'http2', '--metrics', '127.0.0.1:8792', 'run') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $PSScriptRoot 'synthetic-grok-tunnel.stdout.log') -RedirectStandardError (Join-Path $PSScriptRoot 'synthetic-grok-tunnel.stderr.log')
+        $tunnel = Start-Process -FilePath $cloudflared -ArgumentList @('tunnel', '--no-autoupdate', '--protocol', 'http2', '--metrics', ('127.0.0.1:'+$runtimePorts.Metrics), 'run') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $PSScriptRoot 'synthetic-grok-tunnel.stdout.log') -RedirectStandardError (Join-Path $PSScriptRoot 'synthetic-grok-tunnel.stderr.log')
         $job.Assign($tunnel)
-        [pscustomobject]@{ControllerId=$PID;ServerId=$server.Id;TunnelId=$tunnel.Id;StartedUtc=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'synthetic-grok-runtime.json') -Encoding UTF8
+        [pscustomobject]@{ControllerId=$PID;ServerId=$server.Id;ServerStartTicks=[string]$server.StartTime.ToUniversalTime().Ticks;TunnelId=$tunnel.Id;TunnelStartTicks=[string]$tunnel.StartTime.ToUniversalTime().Ticks;HTTPPort=$runtimePorts.HTTP;MetricsPort=$runtimePorts.Metrics;StartedUtc=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'synthetic-grok-runtime.json') -Encoding UTF8
         while ($true) {
             $server.Refresh(); $tunnel.Refresh()
             if ($server.HasExited) { throw "The Grok MCP server exited with code $($server.ExitCode)." }

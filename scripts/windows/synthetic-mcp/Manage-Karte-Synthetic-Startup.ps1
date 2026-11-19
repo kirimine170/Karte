@@ -4,6 +4,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'Karte-Synthetic-Startup.psm1') -Force
+$runtimePorts = if ($Action -in @('Start','Check','Restart')) { Get-KarteRuntimePorts $PSScriptRoot }
 $roles = @(
     @{Name='Karte Synthetic ChatGPT MCP'; Script='Start-Karte-Synthetic-ChatGPT.ps1'; Key='chatgpt-runtime-key.clixml'},
     @{Name='Karte Synthetic Grok MCP'; Script='Start-Karte-Synthetic-Grok.ps1'; Key='grok-cloudflare-key.clixml'}
@@ -45,12 +46,13 @@ if ($Action -in @('Check','Restart')) {
         }
     }
     $probe = '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
-    $http = $probe | & curl.exe --noproxy '*' --silent --max-time 4 --output NUL --write-out '%{http_code}' --header 'Content-Type: application/json' --data-binary '@-' 'http://127.0.0.1:8791/mcp'
-    $cloudflare = & curl.exe --noproxy '*' --silent --max-time 4 --output NUL --write-out '%{http_code}' 'http://127.0.0.1:8792/ready'
-    $allReady=$ready -and $http -eq '401' -and $cloudflare -eq '200'
+    $http = $probe | & curl.exe --noproxy '*' --silent --max-time 4 --output NUL --write-out '%{http_code}' --header 'Content-Type: application/json' --data-binary '@-' ($runtimePorts.Origin+'/mcp')
+    $cloudflare = & curl.exe --noproxy '*' --silent --max-time 4 --output NUL --write-out '%{http_code}' ('http://127.0.0.1:'+$runtimePorts.Metrics+'/ready')
+    $owned=Test-KarteGrokOwnership $PSScriptRoot $runtimePorts
+    $allReady=$ready -and $http -eq '401' -and $cloudflare -eq '200' -and $owned
     if($allReady -or [DateTime]::UtcNow -ge $deadline){break}
     Start-Sleep -Milliseconds 300
     } while($true)
-    [pscustomobject]@{ChatGPTReady=$ready;GrokUnauthenticatedHTTP=$http;CloudflareReadyHTTP=$cloudflare}
+    [pscustomobject]@{ChatGPTReady=$ready;GrokUnauthenticatedHTTP=$http;CloudflareReadyHTTP=$cloudflare;GrokProcessOwnership=$owned;GrokHTTPPort=$runtimePorts.HTTP;GrokMetricsPort=$runtimePorts.Metrics}
     if (-not $allReady) { throw 'One or more runtimes are not ready.' }
 }

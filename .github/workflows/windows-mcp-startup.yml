@@ -42,3 +42,6 @@ jobs:
       - name: Verify encrypted migration with synthetic credentials
         shell: powershell
         run: ./scripts/windows/synthetic-mcp/Test-Karte-Migration-Credentials.ps1
+      - name: Verify runtime ports and process ownership
+        shell: powershell
+        run: ./scripts/windows/synthetic-mcp/Test-Karte-Runtime-Ports.ps1

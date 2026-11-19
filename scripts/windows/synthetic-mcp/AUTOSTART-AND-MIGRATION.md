@@ -42,6 +42,17 @@ Cloudflareは管理画面からコピーした1行コマンドも受け付けま
 .\Manage-Karte-Synthetic-Startup.ps1 -Action Restart
 ```
 
+既存サービスとポートが競合する場合は、停止してから`private-startup/runtime-ports.json`を作成します。
+省略時はHTTP 8791、metrics 8792です。1050では次の設定を使います。
+
+```json
+{"GrokHTTP":18791,"GrokMetrics":18792}
+```
+
+どちらもloopback専用です。1024〜65535の異なる整数を指定し、議会用18640は指定できません。
+Cloudflareの既存Karte公開経路のoriginも、HTTP側のポートへ合わせます。
+ポート設定は端末ごとのファイルであり、移設ZIPには含めません。
+
 `Stop`は自動再試行も無効にします。`Start`で再度有効化します。
 `Check`はChatGPTの`/readyz`、Grokの未認証HTTP 401、Cloudflareの`/ready`を検査します。
 最終確認は実際のChatGPT・Grokから検索・読取し、監査記録を照合します。
@@ -121,6 +132,7 @@ GrokのAIトークンを再発行せず、パッケージ内のハッシュ設�
 
 ```powershell
 .\Test-Karte-Synthetic-Autostart.ps1
+.\Test-Karte-Runtime-Ports.ps1
 ```
 
 暗号化保存と差替え、不正な保存データ、Cloudflare入力の正規化、
@@ -129,3 +141,6 @@ GrokのAIトークンを再発行せず、パッケージ内のハッシュ設�
 実際の電源再投入・ログオンの確認は、実施した端末ごとに別途記録します。
 CIでは`Test-Karte-ChatGPT-Startup.ps1 -RegistrationOnly`で登録と互換更新を検証し、
 Interactiveログオンが必要な実起動は省略したことを明示します。
+ポート試験は合成HTTPプロセスを使い、別サービスの401とmetrics 200を正常稼働と扱わないこと、
+実行ファイル・開始時刻・loopback listenerの所有一致を検証します。
+所有確認用の古いruntime記録は、`Restart`で新しい記録へ更新します。
