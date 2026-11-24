@@ -29,6 +29,7 @@
         <button class="btn" id="newBtn">新規</button>
         <button class="btn" id="webClipBtn">Web Clip</button>
         <button class="btn" id="ephyReviewBtn">Ephy候補</button>
+        <button class="btn" id="googleDriveBtn" hidden>Google Drive</button>
         <button class="btn" id="exportPdfBtn">PDFエクスポート</button>
         <button class="btn" id="customCssBtn">Custom CSS</button>
         <span id="customCssStatus" class="custom-css-status"></span>
@@ -433,5 +434,35 @@
       </div>
     </div>
   </div>
+
+  <dialog id="googleDriveDialog" class="google-drive-dialog" aria-labelledby="googleDriveTitle">
+    <header>
+      <h2 id="googleDriveTitle">Google Drive</h2>
+      <button id="googleDriveClose" class="btn" type="button">閉じる</button>
+    </header>
+    <p id="googleDriveAccount">未接続</p>
+    <div class="google-drive-actions">
+      <button id="googleDriveConnect" class="btn" type="button">接続</button>
+      <button id="googleDriveDisconnect" class="btn" type="button">接続を解除</button>
+      <button id="googleDrivePick" class="btn" type="button">Driveからファイルを選ぶ</button>
+      <button id="googleDriveCancelAuth" class="btn" type="button" hidden>認可をキャンセル</button>
+    </div>
+    <label for="googleDriveFiles">認可済みのMarkdown</label>
+    <select id="googleDriveFiles"></select>
+    <div class="google-drive-actions">
+      <button id="googleDriveRefresh" class="btn" type="button">一覧を更新</button>
+      <button id="googleDriveLoad" class="btn" type="button">開く／再読み込み</button>
+      <button id="googleDriveNew" class="btn" type="button">新規Markdown</button>
+    </div>
+    <label for="googleDriveName">ファイル名</label>
+    <input id="googleDriveName" autocomplete="off" placeholder="note.md" />
+    <label for="googleDriveEditor">Markdown</label>
+    <textarea id="googleDriveEditor" spellcheck="false"></textarea>
+    <footer>
+      <button id="googleDriveSave" class="btn" type="button">Driveに保存</button>
+      <button id="googleDriveOpenInBrowser" class="btn" type="button">ブラウザで開く</button>
+    </footer>
+    <p id="googleDriveStatus" role="status"></p>
+  </dialog>
 
   <script type="module" src="/src/main.ts"></script>

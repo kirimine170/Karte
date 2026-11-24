@@ -200,7 +200,33 @@ export interface EphyReceipt {
 }
 
 // Wails App API
+export interface GoogleDriveAccount {
+    displayName: string;
+    emailAddress: string;
+}
+
+export interface GoogleDriveFile {
+    id: string;
+    name: string;
+    capabilities: { canEdit: boolean };
+}
+
+export interface GoogleDriveDocument {
+    file: GoogleDriveFile;
+    content: string;
+    checksum: string;
+}
+
 export interface WailsAppAPI {
+    GoogleDriveAccount(): Promise<GoogleDriveAccount>;
+    ConnectGoogleDrive(): Promise<GoogleDriveAccount>;
+    PickGoogleDriveMarkdown(): Promise<{ account: GoogleDriveAccount; id: string }>;
+    CancelGoogleDriveAuthorization(): Promise<void>;
+    DisconnectGoogleDrive(): Promise<void>;
+    ListGoogleDriveMarkdown(): Promise<GoogleDriveFile[]>;
+    LoadGoogleDriveMarkdown(id: string): Promise<GoogleDriveDocument>;
+    CreateGoogleDriveMarkdown(name: string, content: string): Promise<GoogleDriveDocument>;
+    SaveGoogleDriveMarkdown(id: string, checksum: string, content: string): Promise<GoogleDriveDocument>;
     SaveInstagramDraft?(draftJSON: string): Promise<string>;
     SaveInstagramImage?(filename: string, jpegBase64: string): Promise<string>;
     GetFileList(): Promise<FileItem[]>;

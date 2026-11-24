@@ -1,5 +1,6 @@
 // エントリーポイント
 import './ui.css';
+import './google-drive.css';
 import { App } from './app';
 
 // アプリケーションの初期化

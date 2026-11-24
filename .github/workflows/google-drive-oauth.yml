@@ -1,0 +1,63 @@
+name: Google Drive OAuth
+
+on:
+  push:
+    branches: ['codex/google-drive-oauth-test']
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/google-drive-oauth.yml'
+      - 'app_google_drive.go'
+      - 'internal/googledrive/**'
+      - 'frontend/src/components/google-drive-dialog.ts'
+      - 'frontend/src/components/__tests__/google-drive-dialog.test.ts'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Test OAuth and Drive API against local HTTP servers
+        run: go test -count=1 ./internal/googledrive
+      - name: Check concurrent OAuth and Drive operations
+        if: runner.os == 'Linux'
+        run: go test -race -count=1 ./internal/googledrive
+      - name: Compile desktop application and run its tests
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p frontend/dist
+          touch frontend/dist/.placeholder
+          go test .
+
+  frontend:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: '.node-version'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit
+      - run: npm run typecheck
+      - run: npm test -- --run
+      - run: npm run build
+        env:
+          VITE_USE_WAILS_STUBS: 'true'

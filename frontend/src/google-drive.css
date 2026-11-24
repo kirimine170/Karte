@@ -1,0 +1,65 @@
+.google-drive-dialog {
+  width: min(760px, calc(100% - 2rem));
+  max-height: calc(100% - 2rem);
+  padding: 1.25rem;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.google-drive-dialog::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+
+.google-drive-dialog h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.google-drive-dialog header,
+.google-drive-dialog footer,
+.google-drive-actions {
+  display: flex;
+  gap: .5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.google-drive-dialog header,
+.google-drive-dialog footer {
+  justify-content: space-between;
+}
+
+.google-drive-dialog label,
+.google-drive-dialog input,
+.google-drive-dialog textarea,
+.google-drive-dialog select {
+  display: block;
+  width: 100%;
+}
+
+.google-drive-dialog label {
+  margin-top: .8rem;
+}
+
+.google-drive-dialog input,
+.google-drive-dialog textarea,
+.google-drive-dialog select {
+  margin: .3rem 0 .5rem;
+  padding: .45rem;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.google-drive-dialog textarea {
+  min-height: 11rem;
+  resize: vertical;
+}
+
+#googleDriveStatus {
+  min-height: 1.5em;
+  margin: .5rem 0;
+}

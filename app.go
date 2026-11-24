@@ -37,6 +37,7 @@ import (
 	"karte/internal/ephyrecordsv2"
 	fm "karte/internal/frontmatter"
 	gitvcs "karte/internal/git"
+	"karte/internal/googledrive"
 	"karte/internal/markdown"
 	"karte/internal/printout"
 	"karte/internal/runtimepath"
@@ -76,6 +77,8 @@ const maxImageFileSizeForPDF = 300 * 1024   // 各画像の目標サイズ300KB
 
 // App struct
 type App struct {
+	googleDriveOnce  sync.Once
+	googleDrive      *googledrive.Service
 	ephyV2ConfigRoot string
 	ctx              context.Context
 	root             string
