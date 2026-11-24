@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -22,23 +21,16 @@ import (
 )
 
 const (
-	credentialEnv = "KARTE_GOOGLE_OAUTH_CLIENT_FILE"
-	scope         = "https://www.googleapis.com/auth/drive.file"
-	callbackPath  = "/oauth/callback"
-	authTimeout   = 2 * time.Minute
+	scope        = "https://www.googleapis.com/auth/drive.file"
+	callbackPath = "/oauth/callback"
+	authTimeout  = 2 * time.Minute
 )
 
 var (
-	clientIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$`)
 	fileIDPattern   = regexp.MustCompile(`^[A-Za-z0-9_-]{1,200}$`)
 	errDisconnected = errors.New("Google Driveに接続してください")
 	errReauthorize  = errors.New("Google Driveの認可が失効しました。再接続してください")
 )
-
-type credentials struct {
-	ClientID     string `json:"client_id"`
-	ClientSecret string `json:"client_secret"`
-}
 
 type token struct {
 	AccessToken  string `json:"access_token"`
@@ -81,29 +73,6 @@ func New() *Service {
 		driveURL:  "https://www.googleapis.com/drive/v3",
 		uploadURL: "https://www.googleapis.com/upload/drive/v3",
 	}
-}
-
-func loadCredentials() (credentials, error) {
-	path := strings.TrimSpace(os.Getenv(credentialEnv))
-	if path == "" {
-		return credentials{}, fmt.Errorf("%s にGoogleのデスクトップOAuthクライアントJSONのパスを設定してください", credentialEnv)
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return credentials{}, errors.New("OAuthクライアントJSONを開けません")
-	}
-	defer f.Close()
-	data, err := readBounded(f, 32<<10)
-	if err != nil {
-		return credentials{}, errors.New("OAuthクライアントJSONを読み取れません")
-	}
-	var config struct {
-		Installed credentials `json:"installed"`
-	}
-	if json.Unmarshal(data, &config) != nil || !clientIDPattern.MatchString(config.Installed.ClientID) {
-		return credentials{}, errors.New("GoogleのデスクトップOAuthクライアントJSONを指定してください")
-	}
-	return config.Installed, nil
 }
 
 func (s *Service) Authorize(parent context.Context, openBrowser func(string), pick bool) (Account, string, error) {

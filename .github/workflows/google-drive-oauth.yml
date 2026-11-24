@@ -8,6 +8,7 @@ on:
     paths:
       - '.github/workflows/google-drive-oauth.yml'
       - 'app_google_drive.go'
+      - 'cmd/buildmatrix/**'
       - 'internal/googledrive/**'
       - 'frontend/src/components/google-drive-dialog.ts'
       - 'frontend/src/components/__tests__/google-drive-dialog.test.ts'
@@ -32,7 +33,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Test OAuth and Drive API against local HTTP servers
-        run: go test -count=1 ./internal/googledrive
+        run: go test -count=1 ./internal/googledrive ./cmd/buildmatrix
       - name: Check concurrent OAuth and Drive operations
         if: runner.os == 'Linux'
         run: go test -race -count=1 ./internal/googledrive

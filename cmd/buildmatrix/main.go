@@ -53,6 +53,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to select targets: %v", err)
 	}
+	distributionClientJSON := []byte(strings.TrimSpace(os.Getenv(distributionClientEnv)))
+	if err := os.Unsetenv(distributionClientEnv); err != nil {
+		log.Fatalf("failed to clear Google Drive build configuration from child process environment: %v", err)
+	}
 
 	if *prepFlag {
 		if err := runPrep(ctx); err != nil {
@@ -81,7 +85,7 @@ func main() {
 			log.Fatalf("failed to clean %s: %v", binDir, err)
 		}
 
-		if err := runWailsBuild(ctx, t); err != nil {
+		if err := runWailsBuild(ctx, t, distributionClientJSON); err != nil {
 			log.Fatalf("wails build failed for %s: %v", t.Name, err)
 		}
 
@@ -222,7 +226,7 @@ func ensurePortAudioOnDarwin(ctx context.Context) error {
 	return runCommand(ctx, ".", nil, "brew", "install", "portaudio")
 }
 
-func runWailsBuild(ctx context.Context, t target) error {
+func runWailsBuild(ctx context.Context, t target, distributionClientJSON []byte) error {
 	args := []string{"build", "-platform", t.Platform}
 	args = append(args, t.Flags...)
 	env := t.Env
@@ -233,6 +237,11 @@ func runWailsBuild(ctx context.Context, t target) error {
 			fmt.Printf("WARN: failed to configure Windows build PATH: %v\n", err)
 		}
 	}
+	env, cleanup, err := withGoogleDriveOAuthBuildConfig(env, distributionClientJSON)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 	return runCommand(ctx, ".", env, "wails", args...)
 }
 

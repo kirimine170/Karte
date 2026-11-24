@@ -178,6 +178,7 @@ jobs:
       - name: Build Windows distribution
         shell: pwsh
         env:
+          KARTE_GOOGLE_OAUTH_DISTRIBUTION_CLIENT_JSON: ${{ secrets.KARTE_GOOGLE_OAUTH_DISTRIBUTION_CLIENT_JSON }}
           KARTE_REQUIRE_FFMPEG: '1'
           KARTE_FFMPEG_BINARY: ${{ github.workspace }}\ffmpeg-runtime\bin\ffmpeg.exe
           KARTE_FFMPEG_RUNTIME_DIR: ${{ github.workspace }}\ffmpeg-runtime\bin
