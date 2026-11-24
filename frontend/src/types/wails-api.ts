@@ -224,6 +224,7 @@ export interface WailsAppAPI {
     CancelGoogleDriveAuthorization(): Promise<void>;
     DisconnectGoogleDrive(): Promise<void>;
     ListGoogleDriveMarkdown(): Promise<GoogleDriveFile[]>;
+    OpenGoogleDriveFolder(): Promise<void>;
     LoadGoogleDriveMarkdown(id: string): Promise<GoogleDriveDocument>;
     CreateGoogleDriveMarkdown(name: string, content: string): Promise<GoogleDriveDocument>;
     SaveGoogleDriveMarkdown(id: string, checksum: string, content: string): Promise<GoogleDriveDocument>;

@@ -1,6 +1,6 @@
 # Google Drive OAuth 検証
 
-Karteのツールバーにある「Google Drive」から、Googleアカウントで接続し、Drive上のUTF-8 Markdownを新規作成・読み込み・更新できます。既存のファイルはGoogle Pickerで選ぶとKarteに認可されます。新規ファイルはマイドライブ直下に保存されます。
+Karteのツールバーにある「Google Drive」から、Googleアカウントで接続し、マイドライブ直下の `Karte` フォルダにあるUTF-8 Markdownを新規作成・読み込み・更新できます。初回接続でKarteがフォルダを作り、再接続時はアクセス可能な同名フォルダを再利用します。Drive側で追加したファイルは、Google Pickerで個別に認可すると一覧に表示されます。
 
 ## 配布版で接続する
 
@@ -41,6 +41,8 @@ try {
 $env:KARTE_GOOGLE_OAUTH_CLIENT_FILE = 'C:\path\outside-repo\desktop-client.json'
 wails dev
 ```
+
+検証対象を特定のGoogleアカウントに限定する場合は、起動前に `KARTE_GOOGLE_OAUTH_EXPECTED_ACCOUNT` にそのメールアドレスを設定します。
 
 ## 実アカウントで試す
 

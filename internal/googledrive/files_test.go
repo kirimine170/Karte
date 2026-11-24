@@ -14,12 +14,14 @@ import (
 )
 
 func TestDriveMarkdownRoundTrip(t *testing.T) {
-	const metadata = `{"id":"sample","name":"note.md","mimeType":"text/markdown","capabilities":{"canEdit":true}}`
+	const metadata = `{"id":"sample","name":"note.md","mimeType":"text/markdown","parents":["karte-folder"],"capabilities":{"canEdit":true}}`
+	const folderMetadata = `{"id":"karte-folder","name":"Karte","mimeType":"application/vnd.google-apps.folder","capabilities":{"canAddChildren":true}}`
 	initial := "---\r\ndoc_id: note-1\r\n---\r\n# 初回\r\n"
 	edited := strings.Replace(initial, "初回", "更新", 1)
 	var mu sync.Mutex
 	content := ""
 	updates := 0
+	folderCreations := 0
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -28,6 +30,14 @@ func TestDriveMarkdownRoundTrip(t *testing.T) {
 		}
 		query := r.URL.Query()
 		switch {
+		case r.Method == "POST" && r.URL.Path == "/files":
+			var folder File
+			err := json.NewDecoder(r.Body).Decode(&folder)
+			if err != nil || folder.Name != "Karte" || folder.MIME != folderMIME || len(folder.Parents) != 1 || folder.Parents[0] != "root" {
+				t.Errorf("wrong My Drive folder metadata: %+v, %v", folder, err)
+			}
+			folderCreations++
+			_, _ = io.WriteString(w, folderMetadata)
 		case r.Method == "POST" && r.URL.Path == "/upload/files":
 			contentType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 			if query.Get("uploadType") != "multipart" || err != nil || contentType != "multipart/related" {
@@ -43,7 +53,8 @@ func TestDriveMarkdownRoundTrip(t *testing.T) {
 				return
 			}
 			var file File
-			if err := json.NewDecoder(first).Decode(&file); err != nil || file.Name != "note.md" || file.MIME != "text/markdown" {
+			if err := json.NewDecoder(first).Decode(&file); err != nil || file.Name != "note.md" || file.MIME != "text/markdown" ||
+				len(file.Parents) != 1 || file.Parents[0] != "karte-folder" {
 				t.Errorf("unexpected upload metadata: %+v, %v", file, err)
 			}
 			second, err := reader.NextPart()
@@ -59,11 +70,31 @@ func TestDriveMarkdownRoundTrip(t *testing.T) {
 			content = string(body)
 			_, _ = io.WriteString(w, metadata)
 		case r.Method == "GET" && r.URL.Path == "/files":
+			filter := query.Get("q")
+			if strings.Contains(filter, "'root' in parents") {
+				if !strings.Contains(filter, "name = 'Karte'") {
+					t.Error("folder lookup did not search for Karte")
+				}
+				if folderCreations == 0 {
+					_, _ = io.WriteString(w, `{"files":[]}`)
+				} else {
+					_, _ = io.WriteString(w, `{"files":[`+folderMetadata+`]}`)
+				}
+				return
+			}
+			if !strings.Contains(filter, "'karte-folder' in parents") {
+				t.Error("Markdown list did not constrain the parent folder")
+			}
 			if query.Get("pageToken") == "next" {
 				_, _ = io.WriteString(w, `{"files":[`+metadata+`]}`)
 			} else {
-				_, _ = io.WriteString(w, `{"nextPageToken":"next","files":[{"id":"google-doc","name":"other.md","mimeType":"application/vnd.google-apps.document"}]}`)
+				_, _ = io.WriteString(w, `{"nextPageToken":"next","files":[{"id":"google-doc","name":"other.md","mimeType":"application/vnd.google-apps.document","parents":["karte-folder"]},{"id":"outside","name":"outside.md","mimeType":"text/markdown","parents":["another-folder"]}]}`)
 			}
+		case r.Method == "GET" && r.URL.Path == "/files/outside":
+			if query.Get("alt") == "media" {
+				t.Error("downloaded a file outside the Karte folder")
+			}
+			_, _ = io.WriteString(w, `{"id":"outside","name":"outside.md","mimeType":"text/markdown","parents":["another-folder"]}`)
 		case r.Method == "GET" && r.URL.Path == "/files/sample":
 			if query.Get("alt") == "media" {
 				_, _ = io.WriteString(w, content)
@@ -96,6 +127,9 @@ func TestDriveMarkdownRoundTrip(t *testing.T) {
 	if err != nil || len(files) != 1 || files[0].ID != created.File.ID {
 		t.Fatalf("list returned %+v, %v", files, err)
 	}
+	if _, err := service.Load(t.Context(), "outside"); err == nil {
+		t.Fatal("opened a Markdown file outside the Karte folder")
+	}
 	loaded, err := service.Load(t.Context(), created.File.ID)
 	if err != nil || loaded.Content != initial {
 		t.Fatalf("load returned %+v, %v", loaded, err)
@@ -115,9 +149,17 @@ func TestDriveMarkdownRoundTrip(t *testing.T) {
 	if _, err := service.Save(t.Context(), saved.File.ID, saved.Checksum, "stale edit"); err == nil {
 		t.Fatal("saved stale content over a browser edit")
 	}
+	service.Disconnect()
+	service.token = token{AccessToken: "access", expiresAt: time.Now().Add(time.Hour)}
+	if id, err := service.Folder(t.Context()); err != nil || id != "karte-folder" {
+		t.Fatalf("reconnect did not find the existing Karte folder: %q, %v", id, err)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if updates != 1 || content != "Edited in Google Drive" {
 		t.Fatalf("unexpected server state after a stale save: %d updates, %q", updates, content)
+	}
+	if folderCreations != 1 {
+		t.Fatalf("created duplicate Karte folders: %d", folderCreations)
 	}
 }

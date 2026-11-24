@@ -49,6 +49,17 @@ func (a *App) ListGoogleDriveMarkdown() ([]googledrive.File, error) {
 	return a.googleDriveService().List(ctx)
 }
 
+func (a *App) OpenGoogleDriveFolder() error {
+	ctx, cancel := context.WithTimeout(a.ctx, 45*time.Second)
+	defer cancel()
+	id, err := a.googleDriveService().Folder(ctx)
+	if err != nil {
+		return err
+	}
+	runtime.BrowserOpenURL(a.ctx, "https://drive.google.com/drive/folders/"+id)
+	return nil
+}
+
 func (a *App) LoadGoogleDriveMarkdown(id string) (googledrive.Document, error) {
 	ctx, cancel := context.WithTimeout(a.ctx, 45*time.Second)
 	defer cancel()

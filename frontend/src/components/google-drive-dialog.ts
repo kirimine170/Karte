@@ -41,6 +41,10 @@ export class GoogleDriveDialog {
             });
         });
         this.on('googleDriveRefresh', () => this.run(() => this.list()));
+        this.on('googleDriveFolder', () => this.run(async () => {
+            await this.api.OpenGoogleDriveFolder();
+            this.status.textContent = 'ブラウザでKarteフォルダを開きました';
+        }));
         this.on('googleDriveLoad', async () => {
             const id = this.files.value;
             if (!id || !this.confirmDiscard()) return;
@@ -110,7 +114,7 @@ export class GoogleDriveDialog {
         const files = await this.api.ListGoogleDriveMarkdown();
         this.files.replaceChildren(...files.map(file => new Option(file.name, file.id)));
         if (files.some(file => file.id === previous)) this.files.value = previous;
-        this.status.textContent = files.length === 0 ? 'アクセスできるMarkdownファイルがありません' : '';
+        this.status.textContent = files.length === 0 ? 'KarteフォルダにアクセスできるMarkdownファイルがありません' : '';
     }
 
     private async load(id: string): Promise<void> {
@@ -179,6 +183,7 @@ export class GoogleDriveDialog {
         this.control<HTMLButtonElement>('googleDriveDisconnect').disabled = !ready;
         this.control<HTMLButtonElement>('googleDriveCancelAuth').hidden = !this.authorizing;
         this.control<HTMLButtonElement>('googleDriveRefresh').disabled = !ready;
+        this.control<HTMLButtonElement>('googleDriveFolder').disabled = !ready;
         this.control<HTMLButtonElement>('googleDriveLoad').disabled = !ready || !this.files.value;
         this.control<HTMLButtonElement>('googleDriveNew').disabled = !ready;
         this.control<HTMLButtonElement>('googleDriveOpenInBrowser').disabled = this.busy || !this.document;

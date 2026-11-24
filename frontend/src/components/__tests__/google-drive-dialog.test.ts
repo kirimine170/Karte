@@ -30,6 +30,7 @@ describe('Google Drive dialog', () => {
         CancelGoogleDriveAuthorization: vi.fn(async () => {}),
         DisconnectGoogleDrive: vi.fn(async () => { currentAccount = disconnected; }),
         ListGoogleDriveMarkdown: vi.fn(async () => [doc.file]),
+        OpenGoogleDriveFolder: vi.fn(async () => {}),
         LoadGoogleDriveMarkdown: vi.fn(async () => doc),
         CreateGoogleDriveMarkdown: vi.fn(async (name: string, content: string) => ({ ...doc, file: { ...doc.file, name }, content })),
         SaveGoogleDriveMarkdown: vi.fn(async (_id: string, _checksum: string, content: string) => ({ ...doc, content })),
@@ -72,6 +73,9 @@ describe('Google Drive dialog', () => {
 
         click('googleDriveOpenInBrowser');
         expect(browserOpenURL).toHaveBeenCalledWith('https://drive.google.com/open?id=drive-id');
+        click('googleDriveFolder');
+        await vi.waitFor(() => expect(element('googleDriveStatus').textContent).toBe('ブラウザでKarteフォルダを開きました'));
+        expect(api.OpenGoogleDriveFolder).toHaveBeenCalledOnce();
         click('googleDriveDisconnect');
         await vi.waitFor(() => expect(element('googleDriveAccount').textContent).toBe('未接続'));
     });

@@ -18,6 +18,7 @@ import (
 )
 
 func TestDesktopAuthorizationAndRefresh(t *testing.T) {
+	t.Setenv("KARTE_GOOGLE_OAUTH_EXPECTED_ACCOUNT", "USER@example.com")
 	setDesktopCredentials(t, `{"installed":{"client_id":"karte-test.apps.googleusercontent.com","client_secret":"test-secret","token_uri":"https://ignored.invalid"}}`)
 	authorization := make(chan url.Values, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -59,7 +60,11 @@ func TestDesktopAuthorizationAndRefresh(t *testing.T) {
 			if r.Header.Get("Authorization") != "Bearer renewed" {
 				t.Error("Drive did not use the refreshed access token")
 			}
-			_, _ = io.WriteString(w, `{"files":[{"id":"sample","name":"sample.md","mimeType":"text/markdown"}]}`)
+			if strings.Contains(r.URL.Query().Get("q"), "'root' in parents") {
+				_, _ = io.WriteString(w, `{"files":[{"id":"karte-folder","name":"Karte","mimeType":"application/vnd.google-apps.folder","capabilities":{"canAddChildren":true}}]}`)
+			} else {
+				_, _ = io.WriteString(w, `{"files":[{"id":"sample","name":"sample.md","mimeType":"text/markdown","parents":["karte-folder"]}]}`)
+			}
 		default:
 			http.NotFound(w, r)
 		}
@@ -76,7 +81,7 @@ func TestDesktopAuthorizationAndRefresh(t *testing.T) {
 		authorization <- params
 		if target.Host != "accounts.google.com" || params.Get("scope") != scope ||
 			params.Get("access_type") != "offline" || params.Get("code_challenge_method") != "S256" ||
-			params.Get("trigger_onepick") != "true" || params.Get("prompt") != "consent" {
+			params.Get("trigger_onepick") != "true" || params.Get("prompt") != "consent" || params.Get("login_hint") != "USER@example.com" {
 			t.Errorf("unexpected authorization URL: %s", rawURL)
 		}
 		redirect := params.Get("redirect_uri")
@@ -132,6 +137,39 @@ func TestAuthorizationCancellationAndConfiguredClientType(t *testing.T) {
 	}
 	if service.Account().Email != "" {
 		t.Fatal("cancellation opened a session")
+	}
+}
+
+func TestUnexpectedAccountCannotCreateFolder(t *testing.T) {
+	setDesktopCredentials(t, `{"installed":{"client_id":"karte-test.apps.googleusercontent.com"}}`)
+	t.Setenv("KARTE_GOOGLE_OAUTH_EXPECTED_ACCOUNT", "allowed@example.com")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			_ = json.NewEncoder(w).Encode(token{AccessToken: "access", Scope: scope, Type: "Bearer", ExpiresIn: 3600})
+		case "/about":
+			_, _ = io.WriteString(w, `{"user":{"emailAddress":"different@example.com"}}`)
+		default:
+			t.Errorf("issued a Drive request for the unexpected account: %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	service := New()
+	service.tokenURL, service.driveURL = server.URL+"/token", server.URL
+	_, _, err := service.Authorize(t.Context(), func(rawURL string) {
+		target, err := url.Parse(rawURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		params := target.Query()
+		assertCallback(t, params.Get("redirect_uri")+"?"+url.Values{"state": {params.Get("state")}, "code": {"test-code"}}.Encode(), http.StatusOK)
+	}, false)
+	if err == nil || service.Account().Email != "" {
+		t.Fatalf("created a session for the unexpected account: %v", err)
+	}
+	if _, err := service.Folder(t.Context()); !errors.Is(err, errDisconnected) {
+		t.Fatalf("expected folder access to be blocked without an authorized session, got %v", err)
 	}
 }
 

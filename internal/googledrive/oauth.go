@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -42,17 +43,19 @@ type token struct {
 }
 
 type Service struct {
-	mu           sync.Mutex
-	authCancelMu sync.Mutex
-	cancelAuth   context.CancelFunc
-	http         *http.Client
-	authURL      string
-	tokenURL     string
-	driveURL     string
-	uploadURL    string
-	client       credentials
-	token        token
-	account      Account
+	mu              sync.Mutex
+	authCancelMu    sync.Mutex
+	cancelAuth      context.CancelFunc
+	http            *http.Client
+	authURL         string
+	tokenURL        string
+	driveURL        string
+	uploadURL       string
+	client          credentials
+	token           token
+	account         Account
+	folderID        string
+	expectedAccount string
 }
 
 type Account struct {
@@ -68,10 +71,11 @@ func New() *Service {
 				return http.ErrUseLastResponse
 			},
 		},
-		authURL:   "https://accounts.google.com/o/oauth2/v2/auth",
-		tokenURL:  "https://oauth2.googleapis.com/token",
-		driveURL:  "https://www.googleapis.com/drive/v3",
-		uploadURL: "https://www.googleapis.com/upload/drive/v3",
+		authURL:         "https://accounts.google.com/o/oauth2/v2/auth",
+		tokenURL:        "https://oauth2.googleapis.com/token",
+		driveURL:        "https://www.googleapis.com/drive/v3",
+		uploadURL:       "https://www.googleapis.com/upload/drive/v3",
+		expectedAccount: strings.TrimSpace(os.Getenv("KARTE_GOOGLE_OAUTH_EXPECTED_ACCOUNT")),
 	}
 }
 
@@ -97,7 +101,11 @@ func (s *Service) Authorize(parent context.Context, openBrowser func(string), pi
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	callback, err := s.waitForCallback(ctx, client.ClientID, s.account.Email, openBrowser, pick)
+	accountHint := s.expectedAccount
+	if accountHint == "" && pick {
+		accountHint = s.account.Email
+	}
+	callback, err := s.waitForCallback(ctx, client.ClientID, accountHint, openBrowser, pick)
 	if err != nil {
 		return Account{}, "", err
 	}
@@ -121,6 +129,12 @@ func (s *Service) Authorize(parent context.Context, openBrowser func(string), pi
 	if err := json.Unmarshal(body, &about); err != nil || about.User.Email == "" {
 		return Account{}, "", errors.New("接続したGoogleアカウントを確認できません")
 	}
+	if s.expectedAccount != "" && !strings.EqualFold(s.expectedAccount, about.User.Email) {
+		return Account{}, "", errors.New("検証用に設定されたGoogleアカウントを選んでください")
+	}
+	if s.account.Email != about.User.Email || s.client.ClientID != client.ClientID {
+		s.folderID = ""
+	}
 	s.client, s.token, s.account = client, newToken, about.User
 	return s.account, callback.fileID, nil
 }
@@ -142,6 +156,7 @@ func (s *Service) Disconnect() {
 
 func (s *Service) clearSession() {
 	s.client, s.token, s.account = credentials{}, token{}, Account{}
+	s.folderID = ""
 }
 
 func (s *Service) Account() Account {
@@ -219,9 +234,9 @@ func (s *Service) waitForCallback(ctx context.Context, clientID, email string, o
 	if pick {
 		params.Set("prompt", "consent")
 		params.Set("trigger_onepick", "true")
-		if email != "" {
-			params.Set("login_hint", email)
-		}
+	}
+	if email != "" {
+		params.Set("login_hint", email)
 	}
 	if ctx.Err() == nil {
 		openBrowser(s.authURL + "?" + params.Encode())

@@ -14,22 +14,27 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
 
 const (
 	maxMarkdown = 2 << 20
-	fileFields  = "id,name,mimeType,trashed,capabilities(canEdit)"
+	fileFields  = "id,name,mimeType,trashed,parents,capabilities(canEdit,canAddChildren)"
+	folderName  = "Karte"
+	folderMIME  = "application/vnd.google-apps.folder"
 )
 
 type File struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	MIME         string `json:"mimeType"`
-	Trash        bool   `json:"trashed"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	MIME         string   `json:"mimeType"`
+	Trash        bool     `json:"trashed"`
+	Parents      []string `json:"parents"`
 	Capabilities struct {
-		CanEdit bool `json:"canEdit"`
+		CanEdit        bool `json:"canEdit"`
+		CanAddChildren bool `json:"canAddChildren"`
 	} `json:"capabilities"`
 }
 
@@ -46,10 +51,24 @@ func (s *Service) List(ctx context.Context) ([]File, error) {
 	if err != nil {
 		return nil, err
 	}
+	folder, err := s.folder(ctx, access)
+	if err != nil {
+		return nil, err
+	}
+	files, err := s.listFiles(ctx, access, "trashed = false and '"+folder+"' in parents")
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(files, func(file File) bool {
+		return !file.isMarkdown() || !slices.Contains(file.Parents, folder)
+	}), nil
+}
+
+func (s *Service) listFiles(ctx context.Context, access, filter string) ([]File, error) {
 	files := make([]File, 0)
 	query := url.Values{
-		"q": {"trashed = false"}, "fields": {"nextPageToken,files(" + fileFields + ")"},
-		"pageSize": {"100"}, "supportsAllDrives": {"true"}, "includeItemsFromAllDrives": {"true"},
+		"q": {filter}, "fields": {"nextPageToken,files(" + fileFields + ")"},
+		"pageSize": {"100"},
 	}
 	for {
 		body, err := s.request(ctx, access, http.MethodGet, s.driveURL+"/files?"+query.Encode(), "", nil, 1<<20)
@@ -63,16 +82,59 @@ func (s *Service) List(ctx context.Context) ([]File, error) {
 		if err := json.Unmarshal(body, &page); err != nil {
 			return nil, errors.New("Google Driveのファイル一覧を読み取れません")
 		}
-		for _, file := range page.Files {
-			if file.isMarkdown() {
-				files = append(files, file)
-			}
-		}
+		files = append(files, page.Files...)
 		if page.NextPageToken == "" {
 			return files, nil
 		}
 		query.Set("pageToken", page.NextPageToken)
 	}
+}
+
+func (s *Service) Folder(ctx context.Context) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	access, err := s.accessToken(ctx)
+	if err != nil {
+		return "", err
+	}
+	return s.folder(ctx, access)
+}
+
+// The caller holds s.mu, so the first list and create cannot race within this session.
+func (s *Service) folder(ctx context.Context, access string) (string, error) {
+	if s.folderID != "" {
+		return s.folderID, nil
+	}
+	filter := "trashed = false and 'root' in parents and name = '" + folderName + "' and mimeType = '" + folderMIME + "'"
+	folders, err := s.listFiles(ctx, access, filter)
+	if err != nil {
+		return "", err
+	}
+	if len(folders) > 1 {
+		return "", errors.New("マイドライブにKarteフォルダが複数あります。Driveで確認してください")
+	}
+	var folder File
+	if len(folders) == 1 {
+		folder = folders[0]
+	} else {
+		metadata, err := json.Marshal(map[string]any{"name": folderName, "mimeType": folderMIME, "parents": []string{"root"}})
+		if err != nil {
+			return "", err
+		}
+		query := url.Values{"fields": {fileFields}}
+		body, err := s.request(ctx, access, http.MethodPost, s.driveURL+"/files?"+query.Encode(), "application/json", bytes.NewReader(metadata), 32<<10)
+		if err != nil {
+			return "", err
+		}
+		if err := json.Unmarshal(body, &folder); err != nil {
+			return "", errors.New("作成したKarteフォルダを確認できません")
+		}
+	}
+	if !fileIDPattern.MatchString(folder.ID) || folder.Name != folderName || folder.MIME != folderMIME || folder.Trash || !folder.Capabilities.CanAddChildren {
+		return "", errors.New("マイドライブのKarteフォルダを利用できません")
+	}
+	s.folderID = folder.ID
+	return s.folderID, nil
 }
 
 func (s *Service) Load(ctx context.Context, id string) (Document, error) {
@@ -99,6 +161,13 @@ func (s *Service) load(ctx context.Context, access, id string) (Document, error)
 	if err := json.Unmarshal(body, &file); err != nil || file.ID != id || !file.isMarkdown() {
 		return Document{}, errors.New("Drive上のMarkdownファイルを選択してください")
 	}
+	folder, err := s.folder(ctx, access)
+	if err != nil {
+		return Document{}, err
+	}
+	if !slices.Contains(file.Parents, folder) {
+		return Document{}, errors.New("マイドライブのKarteフォルダにあるMarkdownファイルを選択してください")
+	}
 	content, err := s.request(ctx, access, http.MethodGet, endpoint+"?alt=media&supportsAllDrives=true", "", nil, maxMarkdown)
 	if err != nil {
 		return Document{}, err
@@ -117,13 +186,23 @@ func (s *Service) Create(ctx context.Context, name, content string) (Document, e
 	if err := validateContent(content); err != nil {
 		return Document{}, err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	access, err := s.accessToken(ctx)
+	if err != nil {
+		return Document{}, err
+	}
+	folder, err := s.folder(ctx, access)
+	if err != nil {
+		return Document{}, err
+	}
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	metadata, err := writer.CreatePart(textproto.MIMEHeader{"Content-Type": {"application/json; charset=utf-8"}})
 	if err != nil {
 		return Document{}, err
 	}
-	if err := json.NewEncoder(metadata).Encode(map[string]string{"name": name, "mimeType": "text/markdown"}); err != nil {
+	if err := json.NewEncoder(metadata).Encode(map[string]any{"name": name, "mimeType": "text/markdown", "parents": []string{folder}}); err != nil {
 		return Document{}, err
 	}
 	media, err := writer.CreatePart(textproto.MIMEHeader{"Content-Type": {"text/markdown; charset=utf-8"}})
@@ -136,12 +215,6 @@ func (s *Service) Create(ctx context.Context, name, content string) (Document, e
 	if err := writer.Close(); err != nil {
 		return Document{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	access, err := s.accessToken(ctx)
-	if err != nil {
-		return Document{}, err
-	}
 	query := url.Values{"uploadType": {"multipart"}, "fields": {fileFields}}
 	contentType := mime.FormatMediaType("multipart/related", map[string]string{"boundary": writer.Boundary()})
 	result, err := s.request(ctx, access, http.MethodPost, s.uploadURL+"/files?"+query.Encode(), contentType, &body, 32<<10)
@@ -149,7 +222,7 @@ func (s *Service) Create(ctx context.Context, name, content string) (Document, e
 		return Document{}, err
 	}
 	var file File
-	if err := json.Unmarshal(result, &file); err != nil || !file.isMarkdown() {
+	if err := json.Unmarshal(result, &file); err != nil || !file.isMarkdown() || !slices.Contains(file.Parents, folder) {
 		return Document{}, errors.New("作成したGoogle Driveファイルを確認できません。一覧を更新してください")
 	}
 	return Document{File: file, Content: content, Checksum: checksum([]byte(content))}, nil
@@ -181,7 +254,7 @@ func (s *Service) Save(ctx context.Context, id, expectedChecksum, content string
 		return Document{}, err
 	}
 	var updated File
-	if err := json.Unmarshal(result, &updated); err != nil || updated.ID != id || !updated.isMarkdown() {
+	if err := json.Unmarshal(result, &updated); err != nil || updated.ID != id || !updated.isMarkdown() || !slices.Contains(updated.Parents, s.folderID) {
 		return Document{}, errors.New("保存したGoogle Driveファイルを確認できません。再読み込みしてください")
 	}
 	return Document{File: updated, Content: content, Checksum: checksum([]byte(content))}, nil
