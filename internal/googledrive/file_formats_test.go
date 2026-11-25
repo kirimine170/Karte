@@ -40,7 +40,8 @@ func TestDrivePhotoRoundTrip(t *testing.T) {
 		case "POST /upload/files":
 			file, mediaType, media := driveUpload(t, r)
 			if file.Name != "photo.PNG" || file.MIME != "image/png" || mediaType != "image/png" ||
-				len(file.Parents) != 1 || file.Parents[0] != "karte-folder" || !bytes.Equal(media, original) {
+				len(file.Parents) != 1 || file.Parents[0] != "karte-folder" ||
+				file.Description != "Karte tags: 展示" || !bytes.Equal(media, original) {
 				t.Errorf("unexpected photo upload: %+v (%s)", file, mediaType)
 			}
 			stored = media
@@ -74,7 +75,7 @@ func TestDrivePhotoRoundTrip(t *testing.T) {
 	if _, err := service.Create(ctx, Photo, "wrong.jpg", first); err == nil {
 		t.Fatal("uploaded PNG bytes under a JPEG name")
 	}
-	created, err := service.Create(ctx, Photo, "photo.PNG", first)
+	created, err := service.CreateWithTags(ctx, Photo, "photo.PNG", first, []string{"展示"})
 	if err != nil || created.File.Kind != Photo || created.Content != first {
 		t.Fatalf("create returned %+v, %v", created, err)
 	}

@@ -3,6 +3,7 @@
   "include": [
     "src/components/post-lab.ts",
     "src/components/google-drive-dialog.ts",
+    "src/components/drive-relations-dialog.ts",
     "src/logic.ts",
     "src/__tests__/logic.test.ts",
     "src/api/wails-api.ts",

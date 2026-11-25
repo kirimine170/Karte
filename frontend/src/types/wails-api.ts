@@ -203,6 +203,7 @@ export interface EphyReceipt {
 export interface GoogleDriveAccount {
     displayName: string;
     emailAddress: string;
+    permissionId?: string;
 }
 
 export type GoogleDriveKind = 'markdown' | 'sheet' | 'photo';
@@ -222,6 +223,31 @@ export interface GoogleDriveDocument {
     sheetTab?: string;
 }
 
+export interface DriveRelationFolder {
+    id: string;
+    name: string;
+    createdTime: string;
+}
+
+export interface DriveRelationFile {
+    id: string;
+    name: string;
+    title: string;
+    kind: GoogleDriveKind;
+    tags: string[];
+    linkIds: string[];
+    url: string;
+    legacy: string;
+    unresolved: number;
+}
+
+export interface DriveRelationSnapshot {
+    folder: DriveRelationFolder;
+    files: DriveRelationFile[];
+    updatedAt: string;
+    incomplete: number;
+}
+
 export interface WailsAppAPI {
     GoogleDriveAccount(): Promise<GoogleDriveAccount>;
     ConnectGoogleDrive(): Promise<GoogleDriveAccount>;
@@ -233,6 +259,13 @@ export interface WailsAppAPI {
     LoadGoogleDriveFile(id: string): Promise<GoogleDriveDocument>;
     CreateGoogleDriveFile(kind: GoogleDriveKind, name: string, content: string): Promise<GoogleDriveDocument>;
     SaveGoogleDriveFile(id: string, checksum: string, content: string): Promise<GoogleDriveDocument>;
+    CopyKarteImageToDrive(path: string): Promise<GoogleDriveDocument>;
+    GoogleDriveSearchAccount(): Promise<GoogleDriveAccount>;
+    ConnectGoogleDriveSearch(): Promise<GoogleDriveAccount>;
+    CancelGoogleDriveSearchAuthorization(): Promise<void>;
+    DisconnectGoogleDriveSearch(): Promise<void>;
+    ListGoogleDriveSearchFolders(): Promise<DriveRelationFolder[]>;
+    RefreshGoogleDriveRelations(folderId: string): Promise<DriveRelationSnapshot>;
     SaveInstagramDraft?(draftJSON: string): Promise<string>;
     SaveInstagramImage?(filename: string, jpegBase64: string): Promise<string>;
     GetFileList(): Promise<FileItem[]>;
@@ -292,4 +325,5 @@ export interface WailsAppAPI {
 export interface WailsRuntimeAPI {
     EventsOn(eventName: string, callback: (...args: unknown[]) => void): () => void;
     BrowserOpenURL(url: string): void;
+    ClipboardSetText?(text: string): Promise<boolean>;
 }

@@ -36,6 +36,10 @@ describe('Google Drive dialog', () => {
             ...doc, file: { ...doc.file, kind, name }, content,
         })),
         SaveGoogleDriveFile: vi.fn(async (_id: string, _checksum: string, content: string) => ({ ...doc, content })),
+        GetImageList: vi.fn(async () => [{ path: 'images/photo.png', name: 'photo.png' }]),
+        CopyKarteImageToDrive: vi.fn(async () => ({
+            ...doc, file: { ...doc.file, kind: 'photo', name: 'photo.png', mimeType: 'image/png' }, content: 'YWJj',
+        })),
     };
 
     beforeEach(() => {
@@ -145,5 +149,17 @@ describe('Google Drive dialog', () => {
         click('googleDriveSave');
         await vi.waitFor(() => expect(api.SaveGoogleDriveFile).toHaveBeenCalledWith('photo-id', 'photo-version', 'eHl6'));
         expect(api.CreateGoogleDriveFile).not.toHaveBeenCalled();
+    });
+
+    it('copies a selected Karte library photo with the backend metadata import', async () => {
+        currentAccount = account;
+        click('googleDriveBtn');
+        await vi.waitFor(() => expect(element<HTMLButtonElement>('googleDriveLibrary').disabled).toBe(false));
+        click('googleDriveLibrary');
+        await vi.waitFor(() => expect(element<HTMLButtonElement>('googleDriveCopyImage').disabled).toBe(false));
+        click('googleDriveCopyImage');
+        await vi.waitFor(() => expect(element('googleDriveStatus').textContent).toBe('写真とタグをDriveにコピーしました'));
+        expect(api.CopyKarteImageToDrive).toHaveBeenCalledWith('images/photo.png');
+        expect(element<HTMLImageElement>('googleDrivePhotoPreview').src).toBe('data:image/png;base64,YWJj');
     });
 });

@@ -23,14 +23,16 @@ import (
 
 const (
 	scope        = "https://www.googleapis.com/auth/drive.file"
+	readScope    = "https://www.googleapis.com/auth/drive.readonly"
 	callbackPath = "/oauth/callback"
 	authTimeout  = 2 * time.Minute
 )
 
 var (
-	fileIDPattern   = regexp.MustCompile(`^[A-Za-z0-9_-]{1,200}$`)
-	errDisconnected = errors.New("Google Driveに接続してください")
-	errReauthorize  = errors.New("Google Driveの認可が失効しました。再接続してください")
+	fileIDPattern    = regexp.MustCompile(`^[A-Za-z0-9_-]{1,200}$`)
+	errDisconnected  = errors.New("Google Driveに接続してください")
+	errReauthorize   = errors.New("Google Driveの認可が失効しました。再接続してください")
+	errResponseLimit = errors.New("応答がサイズ上限を超えています")
 )
 
 type token struct {
@@ -47,6 +49,7 @@ type Service struct {
 	authCancelMu    sync.Mutex
 	cancelAuth      context.CancelFunc
 	http            *http.Client
+	scope           string
 	authURL         string
 	tokenURL        string
 	driveURL        string
@@ -60,12 +63,18 @@ type Service struct {
 }
 
 type Account struct {
-	DisplayName string `json:"displayName"`
-	Email       string `json:"emailAddress"`
+	DisplayName  string `json:"displayName"`
+	Email        string `json:"emailAddress"`
+	PermissionID string `json:"permissionId"`
 }
 
 func New() *Service {
+	return newService(scope)
+}
+
+func newService(authScope string) *Service {
 	return &Service{
+		scope: authScope,
 		http: &http.Client{
 			Timeout: 30 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -82,6 +91,13 @@ func New() *Service {
 }
 
 func (s *Service) Authorize(parent context.Context, openBrowser func(string), pick bool) (Account, string, error) {
+	return s.authorize(parent, openBrowser, pick, Account{})
+}
+
+func (s *Service) authorize(parent context.Context, openBrowser func(string), pick bool, required Account) (Account, string, error) {
+	if pick && s.scope != scope {
+		return Account{}, "", errors.New("ファイル選択には保存用のGoogle Drive接続が必要です")
+	}
 	s.authCancelMu.Lock()
 	if s.cancelAuth != nil {
 		s.authCancelMu.Unlock()
@@ -104,6 +120,9 @@ func (s *Service) Authorize(parent context.Context, openBrowser func(string), pi
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	accountHint := s.expectedAccount
+	if accountHint == "" {
+		accountHint = required.Email
+	}
 	if accountHint == "" && pick {
 		accountHint = s.account.Email
 	}
@@ -123,7 +142,7 @@ func (s *Service) Authorize(parent context.Context, openBrowser func(string), pi
 	var about struct {
 		User Account `json:"user"`
 	}
-	query := url.Values{"fields": {"user(displayName,emailAddress)"}}
+	query := url.Values{"fields": {"user(displayName,emailAddress,permissionId)"}}
 	body, err := s.request(ctx, newToken.AccessToken, http.MethodGet, s.driveURL+"/about?"+query.Encode(), "", nil, 32<<10)
 	if err != nil {
 		return Account{}, "", err
@@ -134,11 +153,21 @@ func (s *Service) Authorize(parent context.Context, openBrowser func(string), pi
 	if s.expectedAccount != "" && !strings.EqualFold(s.expectedAccount, about.User.Email) {
 		return Account{}, "", errors.New("検証用に設定されたGoogleアカウントを選んでください")
 	}
+	if required.Email != "" && !required.SameUser(about.User) {
+		return Account{}, "", errors.New("保存用接続と同じGoogleアカウントを選んでください")
+	}
 	if s.account.Email != about.User.Email || s.client.ClientID != client.ClientID {
 		s.folderID = ""
 	}
 	s.client, s.token, s.account = client, newToken, about.User
 	return s.account, callback.fileID, nil
+}
+
+func (a Account) SameUser(other Account) bool {
+	if a.PermissionID != "" && other.PermissionID != "" {
+		return a.PermissionID == other.PermissionID
+	}
+	return a.Email != "" && strings.EqualFold(a.Email, other.Email)
 }
 
 func (s *Service) CancelAuthorization() {
@@ -229,7 +258,7 @@ func (s *Service) waitForCallback(ctx context.Context, clientID, email string, o
 
 	params := url.Values{
 		"client_id": {clientID}, "redirect_uri": {redirect},
-		"response_type": {"code"}, "scope": {scope}, "state": {state},
+		"response_type": {"code"}, "scope": {s.scope}, "state": {state},
 		"code_challenge": {base64.RawURLEncoding.EncodeToString(challenge[:])}, "code_challenge_method": {"S256"},
 		"access_type": {"offline"}, "prompt": {"consent select_account"},
 	}
@@ -292,8 +321,8 @@ func (s *Service) exchange(ctx context.Context, client credentials, form url.Val
 		!strings.EqualFold(next.Type, "Bearer") || next.ExpiresIn <= 0 || next.ExpiresIn > 86400 {
 		return token{}, errors.New("Google OAuthのトークン応答が不正です")
 	}
-	if (checkScope || next.Scope != "") && strings.TrimSpace(next.Scope) != scope {
-		return token{}, errors.New("Google Driveのファイル権限だけを許可したトークンが必要です")
+	if (checkScope || next.Scope != "") && strings.TrimSpace(next.Scope) != s.scope {
+		return token{}, errors.New("この機能に必要なGoogle Driveの権限が許可されていません")
 	}
 	next.expiresAt = time.Now().Add(time.Duration(next.ExpiresIn) * time.Second)
 	return next, nil
@@ -331,7 +360,7 @@ func (s *Service) accessToken(ctx context.Context) (string, error) {
 func readBounded(r io.Reader, limit int64) ([]byte, error) {
 	body, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err == nil && int64(len(body)) > limit {
-		err = errors.New("応答がサイズ上限を超えています")
+		err = errResponseLimit
 	}
 	return body, err
 }

@@ -40,14 +40,34 @@ func ReadMetadataFromWebP(webpPath string) ([]byte, error) {
 
 // ReadChunkFromWebP reads one custom chunk from a WebP RIFF container.
 func ReadChunkFromWebP(webpPath, targetChunkID string) ([]byte, bool, error) {
-	if len(targetChunkID) != 4 {
-		return nil, false, fmt.Errorf("chunk id must be 4 bytes")
-	}
 	file, err := os.Open(webpPath)
 	if err != nil {
 		return nil, false, fmt.Errorf("open webp file: %w", err)
 	}
 	defer file.Close()
+	return readChunk(file, targetChunkID)
+}
+
+// ReadTags reads Karte tags from a WebP already held in memory or on disk.
+func ReadTags(file io.ReadSeeker) ([]string, error) {
+	data, ok, err := readChunk(file, ChunkID)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return ExtractTagsFromChunk(data)
+}
+
+func readChunk(file io.ReadSeeker, targetChunkID string) ([]byte, bool, error) {
+	if len(targetChunkID) != 4 {
+		return nil, false, fmt.Errorf("chunk id must be 4 bytes")
+	}
+	end, err := file.Seek(0, io.SeekEnd)
+	if err != nil {
+		return nil, false, err
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, false, err
+	}
 
 	// Read RIFF header
 	var riffHeader [12]byte
@@ -83,6 +103,14 @@ func ReadChunkFromWebP(webpPath, targetChunkID string) ([]byte, bool, error) {
 			return nil, false, fmt.Errorf("read chunk size: %w", err)
 		}
 
+		start, err := file.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return nil, false, err
+		}
+		if int64(chunkSize) > end-start {
+			return nil, false, io.ErrUnexpectedEOF
+		}
+
 		// Check if this is our custom chunk
 		if string(chunkID[:]) == targetChunkID {
 			// Read chunk data
@@ -95,12 +123,11 @@ func ReadChunkFromWebP(webpPath, targetChunkID string) ([]byte, bool, error) {
 		}
 
 		// Skip this chunk (chunkSize may be odd, so we need to align to 2-byte boundary)
-		chunkStart, _ := file.Seek(0, io.SeekCurrent)
-		alignedSize := chunkSize
+		alignedSize := int64(chunkSize)
 		if alignedSize%2 != 0 {
 			alignedSize++
 		}
-		if _, err := file.Seek(chunkStart+int64(alignedSize), io.SeekStart); err != nil {
+		if _, err := file.Seek(start+alignedSize, io.SeekStart); err != nil {
 			if err == io.EOF {
 				return nil, false, nil
 			}

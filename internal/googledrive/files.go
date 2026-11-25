@@ -45,9 +45,17 @@ type File struct {
 	Kind         Kind     `json:"kind"`
 	Trash        bool     `json:"trashed"`
 	Parents      []string `json:"parents"`
+	Description  string   `json:"description,omitempty"`
+	Version      string   `json:"version,omitempty"`
+	WebViewLink  string   `json:"webViewLink,omitempty"`
+	OriginalName string   `json:"originalFilename,omitempty"`
+	DriveID      string   `json:"driveId,omitempty"`
+	CreatedTime  string   `json:"createdTime,omitempty"`
+	Size         string   `json:"size,omitempty"`
 	Capabilities struct {
-		CanEdit        bool `json:"canEdit"`
-		CanAddChildren bool `json:"canAddChildren"`
+		CanEdit        bool  `json:"canEdit"`
+		CanAddChildren bool  `json:"canAddChildren"`
+		CanDownload    *bool `json:"canDownload,omitempty"`
 	} `json:"capabilities"`
 }
 
@@ -84,27 +92,40 @@ func (s *Service) List(ctx context.Context) ([]File, error) {
 }
 
 func (s *Service) listFiles(ctx context.Context, access, filter string) ([]File, error) {
+	return s.listFields(ctx, access, filter, fileFields)
+}
+
+func (s *Service) listFields(ctx context.Context, access, filter, fields string) ([]File, error) {
 	files := make([]File, 0)
 	query := url.Values{
-		"q": {filter}, "fields": {"nextPageToken,files(" + fileFields + ")"},
+		"q": {filter}, "fields": {"nextPageToken,incompleteSearch,files(" + fields + ")"},
 		"pageSize": {"100"},
 	}
+	seen := map[string]bool{}
 	for {
 		body, err := s.request(ctx, access, http.MethodGet, s.driveURL+"/files?"+query.Encode(), "", nil, 1<<20)
 		if err != nil {
 			return nil, err
 		}
 		var page struct {
-			Files         []File
-			NextPageToken string
+			Files            []File
+			NextPageToken    string
+			IncompleteSearch bool
 		}
 		if err := json.Unmarshal(body, &page); err != nil {
 			return nil, errors.New("Google Driveのファイル一覧を読み取れません")
+		}
+		if page.IncompleteSearch {
+			return nil, errors.New("Google Driveの一覧が不完全です。再読み込みしてください")
 		}
 		files = append(files, page.Files...)
 		if page.NextPageToken == "" {
 			return files, nil
 		}
+		if seen[page.NextPageToken] {
+			return nil, errors.New("Google Driveの一覧を最後まで読み取れません")
+		}
+		seen[page.NextPageToken] = true
 		query.Set("pageToken", page.NextPageToken)
 	}
 }
@@ -228,6 +249,10 @@ func (s *Service) loadMedia(ctx context.Context, access string, file File) (Docu
 }
 
 func (s *Service) Create(ctx context.Context, kind Kind, name, content string) (Document, error) {
+	return s.CreateWithTags(ctx, kind, name, content, nil)
+}
+
+func (s *Service) CreateWithTags(ctx context.Context, kind Kind, name, content string, tags []string) (Document, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || strings.ContainsAny(name, "/\\\r\n\x00") {
 		return Document{}, errors.New("ファイル名を指定してください。パスは使用できません")
@@ -275,7 +300,8 @@ func (s *Service) Create(ctx context.Context, kind Kind, name, content string) (
 	if err != nil {
 		return Document{}, err
 	}
-	file, err := s.createFile(ctx, access, folder, name, mimeType, mediaType, media)
+	description := initialDescription(kind, mimeType, media, tags)
+	file, err := s.createFile(ctx, access, folder, name, mimeType, mediaType, description, media)
 	if err != nil {
 		return Document{}, err
 	}
@@ -283,14 +309,18 @@ func (s *Service) Create(ctx context.Context, kind Kind, name, content string) (
 	return Document{File: file, Content: content, Checksum: checksum(media)}, nil
 }
 
-func (s *Service) createFile(ctx context.Context, access, folder, name, mimeType, mediaType string, content []byte) (File, error) {
+func (s *Service) createFile(ctx context.Context, access, folder, name, mimeType, mediaType, description string, content []byte) (File, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	metadata, err := writer.CreatePart(textproto.MIMEHeader{"Content-Type": {"application/json; charset=utf-8"}})
 	if err != nil {
 		return File{}, err
 	}
-	if err := json.NewEncoder(metadata).Encode(map[string]any{"name": name, "mimeType": mimeType, "parents": []string{folder}}); err != nil {
+	properties := map[string]any{"name": name, "mimeType": mimeType, "parents": []string{folder}}
+	if description != "" {
+		properties["description"] = description
+	}
+	if err := json.NewEncoder(metadata).Encode(properties); err != nil {
 		return File{}, err
 	}
 	media, err := writer.CreatePart(textproto.MIMEHeader{"Content-Type": {mediaType}})
@@ -366,6 +396,9 @@ func (s *Service) Save(ctx context.Context, id, expectedChecksum, content string
 }
 
 func (s *Service) request(ctx context.Context, access, method, endpoint, contentType string, upload io.Reader, maxResponse int64) ([]byte, error) {
+	if s.scope == readScope && method != http.MethodGet {
+		return nil, errors.New("Drive関係検索の接続は読み取り専用です")
+	}
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, upload)
 	if err != nil {
 		return nil, errors.New("Google Driveへのリクエストを作成できません")
@@ -384,9 +417,15 @@ func (s *Service) request(ctx context.Context, access, method, endpoint, content
 		return nil, errReauthorize
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("Google Driveへの操作に失敗しました (HTTP %d)", resp.StatusCode)
+		return nil, driveHTTPError(resp.StatusCode)
 	}
 	return readBounded(resp.Body, maxResponse)
+}
+
+type driveHTTPError int
+
+func (err driveHTTPError) Error() string {
+	return fmt.Sprintf("Google Driveへの操作に失敗しました (HTTP %d)", int(err))
 }
 
 var errContentChanged = errors.New("Drive上の内容が変わりました。編集内容を控えてから再読み込みしてください")

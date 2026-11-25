@@ -52,7 +52,7 @@ func TestDesktopAuthorizationAndRefresh(t *testing.T) {
 				http.Error(w, "invalid grant type", 400)
 			}
 		case "/about":
-			if r.Header.Get("Authorization") != "Bearer access" || r.URL.Query().Get("fields") != "user(displayName,emailAddress)" {
+			if r.Header.Get("Authorization") != "Bearer access" || r.URL.Query().Get("fields") != "user(displayName,emailAddress,permissionId)" {
 				t.Error("Google account lookup used the wrong token or fields")
 			}
 			_, _ = io.WriteString(w, `{"user":{"displayName":"Test user","emailAddress":"user@example.com"}}`)

@@ -68,6 +68,31 @@ export class GoogleDriveDialog {
         this.on('googleDriveNew', () => this.newFile('markdown'));
         this.on('googleDriveNewSheet', () => this.newFile('sheet'));
         this.on('googleDriveImport', () => this.chooseLocalFile(false));
+        this.on('googleDriveLibrary', () => this.run(async () => {
+            const panel = this.control('googleDriveLibraryPanel');
+            panel.hidden = !panel.hidden;
+            if (!panel.hidden) {
+                const images = await this.api.GetImageList();
+                this.control<HTMLSelectElement>('googleDriveLibraryImage').replaceChildren(
+                    ...images.map(image => new Option(image.name, image.path)),
+                );
+                this.status.textContent = images.length ? '' : 'Karteにコピーできる写真がありません';
+            } else {
+                this.status.textContent = '';
+            }
+        }));
+        this.on('googleDriveCopyImage', async () => {
+            const path = this.control<HTMLSelectElement>('googleDriveLibraryImage').value;
+            if (!path || !this.confirmDiscard()) return;
+            await this.run(async () => {
+                const saved = await this.api.CopyKarteImageToDrive(path);
+                this.showDocument(saved);
+                this.files.add(this.option(saved.file));
+                this.files.value = saved.file.id;
+                this.control('googleDriveLibraryPanel').hidden = true;
+                this.status.textContent = '写真とタグをDriveにコピーしました';
+            });
+        });
         this.on('googleDriveReplacePhoto', () => this.chooseLocalFile(true));
         this.localFile.addEventListener('change', () => {
             const file = this.localFile.files?.[0];
@@ -174,23 +199,24 @@ export class GoogleDriveDialog {
     private chooseLocalFile(replace: boolean): void {
         this.replacingPhoto = replace;
         this.localFile.value = '';
-        this.localFile.accept = replace ? photoAccept : photoAccept + ',.csv';
+        this.localFile.accept = replace ? photoAccept : photoAccept + ',.csv,.md,.markdown';
         this.localFile.click();
     }
 
     private async importFile(file: File, replace: boolean): Promise<void> {
         const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
-        if (!replace && extension === 'csv') {
-            if (file.size > maxCSV) throw new Error('2 MiB以下のUTF-8 CSVを指定してください');
+        const isCSV = extension === 'csv';
+        if (!replace && (isCSV || extension === 'md' || extension === 'markdown')) {
+            if (file.size > maxCSV) throw new Error('2 MiB以下のファイルを指定してください');
             const data = await file.arrayBuffer();
             let content: string;
             try {
                 content = new TextDecoder('utf-8', { fatal: true }).decode(data);
             } catch {
-                throw new Error('UTF-8のCSVを指定してください');
+                throw new Error('UTF-8のファイルを指定してください');
             }
-            this.showDocument(null, 'sheet');
-            this.name.value = file.name.slice(0, -4);
+            this.showDocument(null, isCSV ? 'sheet' : 'markdown');
+            this.name.value = isCSV ? file.name.slice(0, -4) : file.name;
             this.editor.value = content;
         } else {
             const mime = Object.prototype.hasOwnProperty.call(photoFormats, extension) ? photoFormats[extension] : '';
@@ -280,6 +306,8 @@ export class GoogleDriveDialog {
         this.control<HTMLButtonElement>('googleDriveNew').disabled = !ready;
         this.control<HTMLButtonElement>('googleDriveNewSheet').disabled = !ready;
         this.control<HTMLButtonElement>('googleDriveImport').disabled = !ready;
+        this.control<HTMLButtonElement>('googleDriveLibrary').disabled = !ready || typeof this.api.CopyKarteImageToDrive !== 'function';
+        this.control<HTMLButtonElement>('googleDriveCopyImage').disabled = !ready || !this.control<HTMLSelectElement>('googleDriveLibraryImage').value;
         this.control<HTMLButtonElement>('googleDriveOpenInBrowser').disabled = this.busy || !this.document;
         this.control<HTMLButtonElement>('googleDriveSave').disabled = !ready || !editable || awaitingSheet || !this.dirty || !this.name.value.trim();
         this.control<HTMLButtonElement>('googleDriveClose').disabled = this.busy;

@@ -30,6 +30,7 @@
         <button class="btn" id="webClipBtn">Web Clip</button>
         <button class="btn" id="ephyReviewBtn">Ephy候補</button>
         <button class="btn" id="googleDriveBtn" hidden>Google Drive</button>
+        <button class="btn" id="driveRelationsBtn" hidden>Drive関係検索</button>
         <button class="btn" id="exportPdfBtn">PDFエクスポート</button>
         <button class="btn" id="customCssBtn">Custom CSS</button>
         <span id="customCssStatus" class="custom-css-status"></span>
@@ -455,7 +456,13 @@
       <button id="googleDriveLoad" class="btn" type="button">開く／再読み込み</button>
       <button id="googleDriveNew" class="btn" type="button">新規Markdown</button>
       <button id="googleDriveNewSheet" class="btn" type="button">新規スプレッドシート</button>
-      <button id="googleDriveImport" class="btn" type="button">写真・CSVを取り込む</button>
+      <button id="googleDriveImport" class="btn" type="button">ローカルファイルを取り込む</button>
+      <button id="googleDriveLibrary" class="btn" type="button">Karteの写真を選ぶ</button>
+    </div>
+    <div id="googleDriveLibraryPanel" hidden>
+      <label for="googleDriveLibraryImage">Karteの写真</label>
+      <select id="googleDriveLibraryImage"></select>
+      <button id="googleDriveCopyImage" class="btn" type="button">写真とタグをDriveにコピー</button>
     </div>
     <input id="googleDriveLocalFile" type="file" hidden />
     <label for="googleDriveName">ファイル名</label>
@@ -471,6 +478,38 @@
       <button id="googleDriveOpenInBrowser" class="btn" type="button">ブラウザで開く</button>
     </footer>
     <p id="googleDriveStatus" role="status"></p>
+  </dialog>
+
+  <dialog id="driveRelationsDialog" class="google-drive-dialog drive-relations-dialog" aria-labelledby="driveRelationsTitle">
+    <header>
+      <h2 id="driveRelationsTitle">Drive関係検索</h2>
+      <button id="driveRelationsClose" class="btn" type="button">閉じる</button>
+    </header>
+    <p id="driveRelationsAccount">未接続</p>
+    <p id="driveRelationsConsent">GoogleにはDrive全体の読み取り権限を求めます。Karteは選んだフォルダとそのサブフォルダを検索します。</p>
+    <div class="google-drive-actions">
+      <button id="driveRelationsConnect" class="btn" type="button">読み取り権限で接続</button>
+      <button id="driveRelationsCancel" class="btn" type="button" hidden>認可をキャンセル</button>
+      <button id="driveRelationsDisconnect" class="btn" type="button" disabled>検索の接続を解除</button>
+      <button id="driveRelationsRefresh" class="btn" type="button" disabled>更新</button>
+    </div>
+    <label for="driveRelationsFolder">検索フォルダ</label>
+    <select id="driveRelationsFolder" disabled></select>
+    <p id="driveRelationsStatus" role="status"></p>
+    <section id="driveRelationsResults" hidden>
+      <fieldset>
+        <legend>タグ（選んだすべてに一致）</legend>
+        <div id="driveRelationsTags"></div>
+      </fieldset>
+      <label for="driveRelationsFiles">ファイル</label>
+      <select id="driveRelationsFiles" size="6"></select>
+      <div class="google-drive-actions">
+        <button id="driveRelationsOpen" class="btn" type="button" disabled>Driveで開く</button>
+        <button id="driveRelationsCopy" class="btn" type="button" hidden>引き継ぎ用のタグ・リンクをコピー</button>
+      </div>
+      <div id="driveRelationsRelated"></div>
+      <div id="driveRelationsGraph" aria-label="関連ファイルのグラフ"></div>
+    </section>
   </dialog>
 
   <script type="module" src="/src/main.ts"></script>

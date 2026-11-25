@@ -79,3 +79,32 @@
   min-height: 1.5em;
   margin: .5rem 0;
 }
+
+.drive-relations-dialog {
+  width: min(920px, calc(100% - 2rem));
+}
+
+#driveRelationsTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem 1rem;
+  max-height: 9rem;
+  overflow: auto;
+}
+
+#driveRelationsTags label,
+#driveRelationsTags input {
+  display: inline-block;
+  width: auto;
+  margin: 0;
+}
+
+#driveRelationsGraph {
+  height: min(32vh, 19rem);
+  margin-top: .8rem;
+  border: 1px solid var(--line);
+}
+
+#driveRelationsRelated ul {
+  margin-top: .35rem;
+}

@@ -77,19 +77,21 @@ const maxImageFileSizeForPDF = 300 * 1024   // 各画像の目標サイズ300KB
 
 // App struct
 type App struct {
-	googleDriveOnce  sync.Once
-	googleDrive      *googledrive.Service
-	ephyV2ConfigRoot string
-	ctx              context.Context
-	root             string
-	dataDir          string
-	logFilePath      string
-	fs               FileSystem
-	syncManager      *syncpkg.SyncManager
-	vcs              *gitvcs.VCS
-	asrService       *asr.Service
-	realtimeService  *asr.RealtimeService // For real-time ASR with partial text support
-	asrInitDone      chan struct{}
+	googleDriveOnce    sync.Once
+	googleDrive        *googledrive.Service
+	driveRelationsOnce sync.Once
+	driveRelations     *googledrive.RelationIndex
+	ephyV2ConfigRoot   string
+	ctx                context.Context
+	root               string
+	dataDir            string
+	logFilePath        string
+	fs                 FileSystem
+	syncManager        *syncpkg.SyncManager
+	vcs                *gitvcs.VCS
+	asrService         *asr.Service
+	realtimeService    *asr.RealtimeService // For real-time ASR with partial text support
+	asrInitDone        chan struct{}
 	// Recording fields
 	recorder                *audio.Recorder
 	recordingMu             sync.Mutex

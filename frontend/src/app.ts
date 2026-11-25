@@ -12,6 +12,7 @@ import { CsvGallery } from './components/csv-gallery';
 import { EphyReview } from './components/ephy-review';
 import { PostLab } from './components/post-lab';
 import { GoogleDriveDialog } from './components/google-drive-dialog';
+import { DriveRelationsDialog } from './components/drive-relations-dialog';
 import { getWailsAppAPI, getWailsRuntimeAPI } from './api/wails-api';
 import { useUIStore, useDocStore, useASRStore, useExportStore, useModalStore, useCustomCssStore, useBoardStore } from './stores/index';
 import { getASRStatusPollingDecision, markASRInitializationStopped } from './utils/asr-status';
@@ -26,6 +27,7 @@ export class App {
     private api: WailsAppAPI | null = null;
     private runtime: WailsRuntimeAPI | null = null;
     private googleDriveDialog: GoogleDriveDialog | null = null;
+    private driveRelationsDialog: DriveRelationsDialog | null = null;
     private components: {
         topbar: Topbar | null;
         sidebar: Sidebar | null;
@@ -141,6 +143,10 @@ export class App {
         if (this.runtime && document.getElementById('googleDriveDialog')) {
             this.googleDriveDialog = new GoogleDriveDialog(this.api, this.runtime);
             this.googleDriveDialog.init();
+        }
+        if (this.runtime && document.getElementById('driveRelationsDialog')) {
+            this.driveRelationsDialog = new DriveRelationsDialog(this.api, this.runtime);
+            this.driveRelationsDialog.init();
         }
 
         await this.loadCustomCss();
@@ -391,6 +397,7 @@ export class App {
 
         this.runtime.EventsOn('check-unsaved-before-close', () => {
             if (this.googleDriveDialog && !this.googleDriveDialog.canCloseApp()) return;
+            if (this.driveRelationsDialog && !this.driveRelationsDialog.canCloseApp()) return;
             const docStore = useDocStore.getState();
             if (!docStore.hasUnsavedChanges) {
                 this.api?.AllowClose();
@@ -548,6 +555,7 @@ export class App {
         // 自動保存を停止
         eventLogger.stopAutoSave();
         this.googleDriveDialog?.destroy();
+        this.driveRelationsDialog?.destroy();
 
         // コンポーネントのクリーンアップ
         Object.values(this.components).forEach((component) => {

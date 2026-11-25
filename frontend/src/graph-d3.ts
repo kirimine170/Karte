@@ -16,6 +16,7 @@ class GraphD3Module {
                 note: '#3498db',
                 board: '#b7791f',
                 'asset:image': '#e74c3c',
+                'asset:sheet': '#0f9d58',
                 missing: '#95a5a6',
                 wikilink: '#2c3e50',
                 markdown_link: '#34495e',
@@ -70,16 +71,18 @@ class GraphD3Module {
         console.log('SVG created successfully:', !!this.svg);
 
         // ツールチップ用のdivを作成
-        this.tooltip = d3.select('body')
+        const dialog = this.container.closest('dialog');
+        this.tooltip = d3.select(dialog || document.body)
             .append('div')
-            .attr('id', 'graph-tooltip')
+            .attr('class', 'graph-tooltip')
             .style('opacity', 0)
-            .style('position', 'absolute')
+            .style('position', dialog ? 'fixed' : 'absolute')
             .style('background', 'rgba(0, 0, 0, 0.9)')
             .style('color', 'white')
             .style('padding', '8px 12px')
             .style('border-radius', '4px')
             .style('font-size', '12px')
+            .style('white-space', 'pre-line')
             .style('pointer-events', 'none')
             .style('z-index', '1000');
 
@@ -134,7 +137,6 @@ class GraphD3Module {
     // API メソッド
 
     setData(graph) {
-        console.log('GraphD3Module.setData called with:', graph);
         if (!graph || (!graph.nodes && !graph.Nodes)) {
             console.warn('setData called with invalid graph data');
             return;
@@ -157,10 +159,6 @@ class GraphD3Module {
             }
             if (node.Tags && !node.tags) {
                 node.tags = node.Tags;
-            }
-            // Debug: log tag nodes
-            if (node.kind === 'tag' || node.Kind === 'tag') {
-                console.log('Found tag node:', node.id || node.ID, node.label || node.Label);
             }
             return node;
         });
@@ -544,43 +542,43 @@ class GraphD3Module {
     }
 
     showTooltip(event, data) {
-        let content = '';
-
         const kind = data.kind || data.Kind;
         const label = data.label || data.Label;
         const id = data.id || data.ID;
-
-        // ノードの場合
-        if (kind && (kind === 'note' || kind === 'board' || kind === 'asset:image' || kind === 'tag')) {
+        let heading;
+        let details;
+        if (kind && ['note', 'board', 'asset:image', 'asset:sheet', 'tag'].includes(kind)) {
             const tags = data.tags || data.Tags || [];
-            content = `
-                <div style="font-weight: bold; margin-bottom: 4px;">${label || 'Unknown'}</div>
-                <div><strong>ID:</strong> ${id || 'N/A'}</div>
-                <div><strong>Type:</strong> ${kind || 'N/A'}</div>
-                ${kind !== 'tag' ? `<div><strong>Exists:</strong> ${(data.exists !== undefined ? data.exists : data.Exists) ? 'Yes' : 'No'}</div>` : ''}
-                <div><strong>Incoming:</strong> ${data.degIn || data.DegIn || 0}</div>
-                <div><strong>Outgoing:</strong> ${data.degOut || data.DegOut || 0}</div>
-                ${tags.length > 0 ? `<div><strong>Tags:</strong> ${tags.join(', ')}</div>` : ''}
-                ${data.hash || data.Hash ? `<div><strong>Hash:</strong> ${(data.hash || data.Hash).substring(0, 8)}...</div>` : ''}
-            `;
+            heading = label || 'Unknown';
+            details = [
+                `ID: ${id || 'N/A'}`,
+                `Type: ${kind}`,
+                kind !== 'tag' && `Exists: ${(data.exists ?? data.Exists) ? 'Yes' : 'No'}`,
+                `Incoming: ${data.degIn || data.DegIn || 0}`,
+                `Outgoing: ${data.degOut || data.DegOut || 0}`,
+                tags.length && `Tags: ${tags.join(', ')}`,
+                (data.hash || data.Hash) && `Hash: ${(data.hash || data.Hash).substring(0, 8)}...`,
+            ];
         } else {
-            // エッジの場合
             const source = data.source || data.Source || '';
             const target = data.target || data.Target || '';
-            content = `
-                <div style="font-weight: bold; margin-bottom: 4px;">Link: ${source.split('/').pop() || 'Unknown'} → ${target.split('/').pop() || 'Unknown'}</div>
-                <div><strong>Type:</strong> ${kind || 'N/A'}</div>
-                <div><strong>Weight:</strong> ${data.weight || data.Weight || 1}</div>
-                ${(data.targetUpdated || data.TargetUpdated) ? '<div style="color: #f39c12;"><strong>⚠️ Target Updated</strong></div>' : ''}
-                ${data.sourceHash || data.SourceHash ? `<div><strong>Source Hash:</strong> ${(data.sourceHash || data.SourceHash).substring(0, 8)}...</div>` : ''}
-                ${data.targetHash || data.TargetHash ? `<div><strong>Target Hash:</strong> ${(data.targetHash || data.TargetHash).substring(0, 8)}...</div>` : ''}
-            `;
+            const endpoint = value => typeof value === 'object' ? value.label || value.id : value.split('/').pop();
+            heading = `Link: ${endpoint(source) || 'Unknown'} → ${endpoint(target) || 'Unknown'}`;
+            details = [
+                `Type: ${kind || 'N/A'}`,
+                `Weight: ${data.weight || data.Weight || 1}`,
+                (data.targetUpdated || data.TargetUpdated) && '⚠️ Target Updated',
+                (data.sourceHash || data.SourceHash) && `Source Hash: ${(data.sourceHash || data.SourceHash).substring(0, 8)}...`,
+                (data.targetHash || data.TargetHash) && `Target Hash: ${(data.targetHash || data.TargetHash).substring(0, 8)}...`,
+            ];
         }
-
+        this.tooltip.selectAll('*').remove();
+        this.tooltip.append('div').style('font-weight', 'bold').style('margin-bottom', '4px').text(heading);
+        this.tooltip.append('div').text(details.filter(Boolean).join('\n'));
+        const fixed = this.tooltip.style('position') === 'fixed';
         this.tooltip
-            .style('left', (event.pageX + 10) + 'px')
-            .style('top', (event.pageY - 10) + 'px')
-            .html(content)
+            .style('left', ((fixed ? event.clientX : event.pageX) + 10) + 'px')
+            .style('top', ((fixed ? event.clientY : event.pageY) - 10) + 'px')
             .style('opacity', 1);
     }
 
@@ -655,6 +653,7 @@ class GraphD3Module {
         if (this.tooltip) {
             this.tooltip.remove();
         }
+        this.svg?.remove();
         if (this.handleResize) {
             window.removeEventListener('resize', this.handleResize);
         }

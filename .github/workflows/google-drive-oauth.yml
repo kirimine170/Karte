@@ -12,6 +12,11 @@ on:
       - 'internal/googledrive/**'
       - 'frontend/src/components/google-drive-dialog.ts'
       - 'frontend/src/components/__tests__/google-drive-dialog.test.ts'
+      - 'frontend/src/components/drive-relations-dialog.ts'
+      - 'frontend/src/components/__tests__/drive-relations-dialog.test.ts'
+      - 'frontend/src/graph-d3.ts'
+      - 'frontend/index.html'
+      - 'internal/webpchunk/**'
   workflow_dispatch:
 
 permissions:
@@ -33,7 +38,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Test OAuth and Drive API against local HTTP servers
-        run: go test -count=1 ./internal/googledrive ./cmd/buildmatrix
+        run: go test -count=1 ./internal/googledrive ./internal/webpchunk ./cmd/buildmatrix
       - name: Check concurrent OAuth and Drive operations
         if: runner.os == 'Linux'
         run: go test -race -count=1 ./internal/googledrive

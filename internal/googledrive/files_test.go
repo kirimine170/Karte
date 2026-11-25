@@ -16,7 +16,7 @@ import (
 func TestDriveMarkdownRoundTrip(t *testing.T) {
 	const metadata = `{"id":"sample","name":"note.md","mimeType":"text/markdown","parents":["karte-folder"],"capabilities":{"canEdit":true}}`
 	const folderMetadata = `{"id":"karte-folder","name":"Karte","mimeType":"application/vnd.google-apps.folder","capabilities":{"canAddChildren":true}}`
-	initial := "---\r\ndoc_id: note-1\r\n---\r\n# 初回\r\n"
+	initial := "---\r\ndoc_id: note-1\r\ntags: [展示]\r\n---\r\n# 初回\r\n"
 	edited := strings.Replace(initial, "初回", "更新", 1)
 	var mu sync.Mutex
 	content := ""
@@ -54,7 +54,7 @@ func TestDriveMarkdownRoundTrip(t *testing.T) {
 			}
 			var file File
 			if err := json.NewDecoder(first).Decode(&file); err != nil || file.Name != "note.md" || file.MIME != "text/markdown" ||
-				len(file.Parents) != 1 || file.Parents[0] != "karte-folder" {
+				len(file.Parents) != 1 || file.Parents[0] != "karte-folder" || file.Description != "Karte tags: 展示" {
 				t.Errorf("unexpected upload metadata: %+v, %v", file, err)
 			}
 			second, err := reader.NextPart()
