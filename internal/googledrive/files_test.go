@@ -119,7 +119,7 @@ func TestDriveMarkdownRoundTrip(t *testing.T) {
 	service.driveURL, service.uploadURL = server.URL, server.URL+"/upload"
 	service.token = token{AccessToken: "access", expiresAt: time.Now().Add(time.Hour)}
 
-	created, err := service.Create(t.Context(), "note.md", initial)
+	created, err := service.Create(t.Context(), Markdown, "note.md", initial)
 	if err != nil || created.Content != initial {
 		t.Fatalf("create returned %+v, %v", created, err)
 	}

@@ -19,7 +19,7 @@ func (a *App) ConnectGoogleDrive() (googledrive.Account, error) {
 	return account, err
 }
 
-func (a *App) PickGoogleDriveMarkdown() (GoogleDriveSelection, error) {
+func (a *App) PickGoogleDriveFile() (GoogleDriveSelection, error) {
 	account, id, err := a.authorizeGoogleDrive(true)
 	return GoogleDriveSelection{Account: account, ID: id}, err
 }
@@ -43,7 +43,7 @@ func (a *App) DisconnectGoogleDrive() {
 	a.googleDriveService().Disconnect()
 }
 
-func (a *App) ListGoogleDriveMarkdown() ([]googledrive.File, error) {
+func (a *App) ListGoogleDriveFiles() ([]googledrive.File, error) {
 	ctx, cancel := context.WithTimeout(a.ctx, 45*time.Second)
 	defer cancel()
 	return a.googleDriveService().List(ctx)
@@ -60,19 +60,19 @@ func (a *App) OpenGoogleDriveFolder() error {
 	return nil
 }
 
-func (a *App) LoadGoogleDriveMarkdown(id string) (googledrive.Document, error) {
+func (a *App) LoadGoogleDriveFile(id string) (googledrive.Document, error) {
 	ctx, cancel := context.WithTimeout(a.ctx, 45*time.Second)
 	defer cancel()
 	return a.googleDriveService().Load(ctx, id)
 }
 
-func (a *App) CreateGoogleDriveMarkdown(name, content string) (googledrive.Document, error) {
+func (a *App) CreateGoogleDriveFile(kind, name, content string) (googledrive.Document, error) {
 	ctx, cancel := context.WithTimeout(a.ctx, 45*time.Second)
 	defer cancel()
-	return a.googleDriveService().Create(ctx, name, content)
+	return a.googleDriveService().Create(ctx, googledrive.Kind(kind), name, content)
 }
 
-func (a *App) SaveGoogleDriveMarkdown(id, checksum, content string) (googledrive.Document, error) {
+func (a *App) SaveGoogleDriveFile(id, checksum, content string) (googledrive.Document, error) {
 	ctx, cancel := context.WithTimeout(a.ctx, 45*time.Second)
 	defer cancel()
 	return a.googleDriveService().Save(ctx, id, checksum, content)

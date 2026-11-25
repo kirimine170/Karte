@@ -205,9 +205,13 @@ export interface GoogleDriveAccount {
     emailAddress: string;
 }
 
+export type GoogleDriveKind = 'markdown' | 'sheet' | 'photo';
+
 export interface GoogleDriveFile {
     id: string;
     name: string;
+    mimeType: string;
+    kind: GoogleDriveKind;
     capabilities: { canEdit: boolean };
 }
 
@@ -215,19 +219,20 @@ export interface GoogleDriveDocument {
     file: GoogleDriveFile;
     content: string;
     checksum: string;
+    sheetTab?: string;
 }
 
 export interface WailsAppAPI {
     GoogleDriveAccount(): Promise<GoogleDriveAccount>;
     ConnectGoogleDrive(): Promise<GoogleDriveAccount>;
-    PickGoogleDriveMarkdown(): Promise<{ account: GoogleDriveAccount; id: string }>;
+    PickGoogleDriveFile(): Promise<{ account: GoogleDriveAccount; id: string }>;
     CancelGoogleDriveAuthorization(): Promise<void>;
     DisconnectGoogleDrive(): Promise<void>;
-    ListGoogleDriveMarkdown(): Promise<GoogleDriveFile[]>;
+    ListGoogleDriveFiles(): Promise<GoogleDriveFile[]>;
     OpenGoogleDriveFolder(): Promise<void>;
-    LoadGoogleDriveMarkdown(id: string): Promise<GoogleDriveDocument>;
-    CreateGoogleDriveMarkdown(name: string, content: string): Promise<GoogleDriveDocument>;
-    SaveGoogleDriveMarkdown(id: string, checksum: string, content: string): Promise<GoogleDriveDocument>;
+    LoadGoogleDriveFile(id: string): Promise<GoogleDriveDocument>;
+    CreateGoogleDriveFile(kind: GoogleDriveKind, name: string, content: string): Promise<GoogleDriveDocument>;
+    SaveGoogleDriveFile(id: string, checksum: string, content: string): Promise<GoogleDriveDocument>;
     SaveInstagramDraft?(draftJSON: string): Promise<string>;
     SaveInstagramImage?(filename: string, jpegBase64: string): Promise<string>;
     GetFileList(): Promise<FileItem[]>;

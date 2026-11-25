@@ -51,6 +51,7 @@ type Service struct {
 	tokenURL        string
 	driveURL        string
 	uploadURL       string
+	sheetsURL       string
 	client          credentials
 	token           token
 	account         Account
@@ -75,6 +76,7 @@ func New() *Service {
 		tokenURL:        "https://oauth2.googleapis.com/token",
 		driveURL:        "https://www.googleapis.com/drive/v3",
 		uploadURL:       "https://www.googleapis.com/upload/drive/v3",
+		sheetsURL:       "https://sheets.googleapis.com/v4/spreadsheets",
 		expectedAccount: strings.TrimSpace(os.Getenv("KARTE_GOOGLE_OAUTH_EXPECTED_ACCOUNT")),
 	}
 }
@@ -211,7 +213,7 @@ func (s *Service) waitForCallback(ctx context.Context, clientID, email string, o
 			case pick:
 				result.fileID = query.Get("picked_file_ids")
 				if !fileIDPattern.MatchString(result.fileID) {
-					result.err = errors.New("Google PickerでMarkdownファイルを1件選んでください")
+					result.err = errors.New("Google PickerでKarteフォルダのファイルを1件選んでください")
 				}
 			}
 			if result.err != nil {

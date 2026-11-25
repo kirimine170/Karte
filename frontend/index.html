@@ -447,18 +447,25 @@
       <button id="googleDrivePick" class="btn" type="button">Karteフォルダのファイルを選ぶ</button>
       <button id="googleDriveCancelAuth" class="btn" type="button" hidden>認可をキャンセル</button>
     </div>
-    <label for="googleDriveFiles">マイドライブ / Karte のMarkdown</label>
+    <label for="googleDriveFiles">マイドライブ / Karte のファイル</label>
     <select id="googleDriveFiles"></select>
     <div class="google-drive-actions">
       <button id="googleDriveRefresh" class="btn" type="button">一覧を更新</button>
       <button id="googleDriveFolder" class="btn" type="button">Driveでフォルダを開く</button>
       <button id="googleDriveLoad" class="btn" type="button">開く／再読み込み</button>
       <button id="googleDriveNew" class="btn" type="button">新規Markdown</button>
+      <button id="googleDriveNewSheet" class="btn" type="button">新規スプレッドシート</button>
+      <button id="googleDriveImport" class="btn" type="button">写真・CSVを取り込む</button>
     </div>
+    <input id="googleDriveLocalFile" type="file" hidden />
     <label for="googleDriveName">ファイル名</label>
     <input id="googleDriveName" autocomplete="off" placeholder="note.md" />
-    <label for="googleDriveEditor">Markdown</label>
+    <label id="googleDriveEditorLabel" for="googleDriveEditor">Markdown</label>
     <textarea id="googleDriveEditor" spellcheck="false"></textarea>
+    <div id="googleDrivePhoto" hidden>
+      <img id="googleDrivePhotoPreview" alt="写真のプレビュー" />
+      <button id="googleDriveReplacePhoto" class="btn" type="button">写真を差し替える</button>
+    </div>
     <footer>
       <button id="googleDriveSave" class="btn" type="button">Driveに保存</button>
       <button id="googleDriveOpenInBrowser" class="btn" type="button">ブラウザで開く</button>

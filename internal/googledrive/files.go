@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,22 +15,34 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"path"
 	"slices"
 	"strings"
 	"unicode/utf8"
 )
 
 const (
-	maxMarkdown = 2 << 20
-	fileFields  = "id,name,mimeType,trashed,parents,capabilities(canEdit,canAddChildren)"
-	folderName  = "Karte"
-	folderMIME  = "application/vnd.google-apps.folder"
+	maxText    = 2 << 20
+	maxPhoto   = 5 << 20
+	fileFields = "id,name,mimeType,trashed,parents,capabilities(canEdit,canAddChildren)"
+	folderName = "Karte"
+	folderMIME = "application/vnd.google-apps.folder"
+	sheetMIME  = "application/vnd.google-apps.spreadsheet"
+)
+
+type Kind string
+
+const (
+	Markdown Kind = "markdown"
+	Sheet    Kind = "sheet"
+	Photo    Kind = "photo"
 )
 
 type File struct {
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`
 	MIME         string   `json:"mimeType"`
+	Kind         Kind     `json:"kind"`
 	Trash        bool     `json:"trashed"`
 	Parents      []string `json:"parents"`
 	Capabilities struct {
@@ -39,9 +52,11 @@ type File struct {
 }
 
 type Document struct {
-	File     File   `json:"file"`
+	File File `json:"file"`
+	// Photos carry base64; Markdown and spreadsheets carry UTF-8 text.
 	Content  string `json:"content"`
 	Checksum string `json:"checksum"`
+	SheetTab string `json:"sheetTab,omitempty"`
 }
 
 func (s *Service) List(ctx context.Context) ([]File, error) {
@@ -59,9 +74,13 @@ func (s *Service) List(ctx context.Context) ([]File, error) {
 	if err != nil {
 		return nil, err
 	}
-	return slices.DeleteFunc(files, func(file File) bool {
-		return !file.isMarkdown() || !slices.Contains(file.Parents, folder)
-	}), nil
+	supported := files[:0]
+	for _, file := range files {
+		if file.classify() && slices.Contains(file.Parents, folder) {
+			supported = append(supported, file)
+		}
+	}
+	return supported, nil
 }
 
 func (s *Service) listFiles(ctx context.Context, access, filter string) ([]File, error) {
@@ -148,29 +167,59 @@ func (s *Service) Load(ctx context.Context, id string) (Document, error) {
 }
 
 func (s *Service) load(ctx context.Context, access, id string) (Document, error) {
+	file, err := s.folderFile(ctx, access, id)
+	if err != nil {
+		return Document{}, err
+	}
+	if file.Kind == Sheet {
+		sheet, err := s.readSheet(ctx, access, id)
+		if err != nil {
+			return Document{}, err
+		}
+		return sheet.document(file)
+	}
+	return s.loadMedia(ctx, access, file)
+}
+
+func (s *Service) folderFile(ctx context.Context, access, id string) (File, error) {
 	if !fileIDPattern.MatchString(id) {
-		return Document{}, errors.New("Google DriveのファイルIDが不正です")
+		return File{}, errors.New("Google DriveのファイルIDが不正です")
 	}
 	query := url.Values{"fields": {fileFields}, "supportsAllDrives": {"true"}}
 	endpoint := s.driveURL + "/files/" + id
 	body, err := s.request(ctx, access, http.MethodGet, endpoint+"?"+query.Encode(), "", nil, 32<<10)
 	if err != nil {
-		return Document{}, err
+		return File{}, err
 	}
 	var file File
-	if err := json.Unmarshal(body, &file); err != nil || file.ID != id || !file.isMarkdown() {
-		return Document{}, errors.New("Drive上のMarkdownファイルを選択してください")
+	if err := json.Unmarshal(body, &file); err != nil || file.ID != id || !file.classify() {
+		return File{}, errors.New("Drive上のMarkdown、スプレッドシート、写真を選択してください")
 	}
 	folder, err := s.folder(ctx, access)
 	if err != nil {
-		return Document{}, err
+		return File{}, err
 	}
 	if !slices.Contains(file.Parents, folder) {
-		return Document{}, errors.New("マイドライブのKarteフォルダにあるMarkdownファイルを選択してください")
+		return File{}, errors.New("マイドライブのKarteフォルダにあるファイルを選択してください")
 	}
-	content, err := s.request(ctx, access, http.MethodGet, endpoint+"?alt=media&supportsAllDrives=true", "", nil, maxMarkdown)
+	return file, nil
+}
+
+func (s *Service) loadMedia(ctx context.Context, access string, file File) (Document, error) {
+	var limit int64 = maxText
+	if file.Kind == Photo {
+		limit = maxPhoto
+	}
+	endpoint := s.driveURL + "/files/" + file.ID + "?alt=media&supportsAllDrives=true"
+	content, err := s.request(ctx, access, http.MethodGet, endpoint, "", nil, limit)
 	if err != nil {
 		return Document{}, err
+	}
+	if file.Kind == Photo {
+		if http.DetectContentType(content) != file.MIME {
+			return Document{}, errors.New("拡張子と一致するJPEG、PNG、GIF、WebPを選択してください")
+		}
+		return Document{File: file, Content: base64.StdEncoding.EncodeToString(content), Checksum: checksum(content)}, nil
 	}
 	if !utf8.Valid(content) {
 		return Document{}, errors.New("UTF-8のMarkdownファイルを選択してください")
@@ -178,13 +227,43 @@ func (s *Service) load(ctx context.Context, access, id string) (Document, error)
 	return Document{File: file, Content: string(content), Checksum: checksum(content)}, nil
 }
 
-func (s *Service) Create(ctx context.Context, name, content string) (Document, error) {
+func (s *Service) Create(ctx context.Context, kind Kind, name, content string) (Document, error) {
 	name = strings.TrimSpace(name)
-	if !markdownName(name) || strings.ContainsAny(name, "/\\\r\n\x00") {
-		return Document{}, errors.New("ファイル名は .md または .markdown で終わる名前を指定してください")
+	if name == "" || strings.ContainsAny(name, "/\\\r\n\x00") {
+		return Document{}, errors.New("ファイル名を指定してください。パスは使用できません")
 	}
-	if err := validateContent(content); err != nil {
-		return Document{}, err
+	mimeType := "text/markdown"
+	mediaType := mimeType + "; charset=utf-8"
+	var media []byte
+	switch kind {
+	case Markdown:
+		if !markdownName(name) {
+			return Document{}, errors.New("ファイル名は .md または .markdown で終わる名前を指定してください")
+		}
+		if err := validateMarkdown(content); err != nil {
+			return Document{}, err
+		}
+		media = []byte(content)
+	case Sheet:
+		if _, err := parseCSV(content); err != nil {
+			return Document{}, err
+		}
+		mimeType, mediaType = sheetMIME, "text/csv; charset=utf-8"
+		media = []byte(content)
+		if len(media) == 0 {
+			// Give the CSV converter an empty cell for a blank spreadsheet.
+			media = []byte("\"\"\n")
+		}
+	case Photo:
+		mimeType = photoMIME(name)
+		mediaType = mimeType
+		var err error
+		media, err = decodePhoto(mimeType, content)
+		if err != nil {
+			return Document{}, err
+		}
+	default:
+		return Document{}, errors.New("対応していないファイル形式です")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -196,68 +275,94 @@ func (s *Service) Create(ctx context.Context, name, content string) (Document, e
 	if err != nil {
 		return Document{}, err
 	}
+	file, err := s.createFile(ctx, access, folder, name, mimeType, mediaType, media)
+	if err != nil {
+		return Document{}, err
+	}
+	// Sheets can normalize imported values. Its editor is populated by Load.
+	return Document{File: file, Content: content, Checksum: checksum(media)}, nil
+}
+
+func (s *Service) createFile(ctx context.Context, access, folder, name, mimeType, mediaType string, content []byte) (File, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	metadata, err := writer.CreatePart(textproto.MIMEHeader{"Content-Type": {"application/json; charset=utf-8"}})
 	if err != nil {
-		return Document{}, err
+		return File{}, err
 	}
-	if err := json.NewEncoder(metadata).Encode(map[string]any{"name": name, "mimeType": "text/markdown", "parents": []string{folder}}); err != nil {
-		return Document{}, err
+	if err := json.NewEncoder(metadata).Encode(map[string]any{"name": name, "mimeType": mimeType, "parents": []string{folder}}); err != nil {
+		return File{}, err
 	}
-	media, err := writer.CreatePart(textproto.MIMEHeader{"Content-Type": {"text/markdown; charset=utf-8"}})
+	media, err := writer.CreatePart(textproto.MIMEHeader{"Content-Type": {mediaType}})
 	if err != nil {
-		return Document{}, err
+		return File{}, err
 	}
-	if _, err := io.WriteString(media, content); err != nil {
-		return Document{}, err
+	if _, err := media.Write(content); err != nil {
+		return File{}, err
 	}
 	if err := writer.Close(); err != nil {
-		return Document{}, err
+		return File{}, err
 	}
 	query := url.Values{"uploadType": {"multipart"}, "fields": {fileFields}}
 	contentType := mime.FormatMediaType("multipart/related", map[string]string{"boundary": writer.Boundary()})
 	result, err := s.request(ctx, access, http.MethodPost, s.uploadURL+"/files?"+query.Encode(), contentType, &body, 32<<10)
 	if err != nil {
-		return Document{}, err
+		return File{}, err
 	}
 	var file File
-	if err := json.Unmarshal(result, &file); err != nil || !file.isMarkdown() || !slices.Contains(file.Parents, folder) {
-		return Document{}, errors.New("作成したGoogle Driveファイルを確認できません。一覧を更新してください")
+	if err := json.Unmarshal(result, &file); err != nil || !file.classify() || file.MIME != mimeType || !slices.Contains(file.Parents, folder) {
+		return File{}, errors.New("作成したGoogle Driveファイルを確認できません。一覧を更新してください")
 	}
-	return Document{File: file, Content: content, Checksum: checksum([]byte(content))}, nil
+	return file, nil
 }
 
 func (s *Service) Save(ctx context.Context, id, expectedChecksum, content string) (Document, error) {
-	if err := validateContent(content); err != nil {
-		return Document{}, err
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	access, err := s.accessToken(ctx)
 	if err != nil {
 		return Document{}, err
 	}
-	current, err := s.load(ctx, access, id)
+	file, err := s.folderFile(ctx, access, id)
 	if err != nil {
 		return Document{}, err
 	}
-	if !current.File.Capabilities.CanEdit {
+	if !file.Capabilities.CanEdit {
 		return Document{}, errors.New("Google Driveでこのファイルを編集する権限がありません")
 	}
+	if file.Kind == Sheet {
+		return s.saveSheet(ctx, access, file, expectedChecksum, content)
+	}
+	current, err := s.loadMedia(ctx, access, file)
+	if err != nil {
+		return Document{}, err
+	}
 	if current.Checksum != expectedChecksum {
-		return Document{}, errors.New("Drive上の内容が変わりました。編集内容を控えてから再読み込みしてください")
+		return Document{}, errContentChanged
+	}
+	mediaType := "text/markdown; charset=utf-8"
+	var media []byte
+	if file.Kind == Photo {
+		mediaType = file.MIME
+		media, err = decodePhoto(mediaType, content)
+	} else {
+		media = []byte(content)
+		err = validateMarkdown(content)
+	}
+	if err != nil {
+		return Document{}, err
 	}
 	query := url.Values{"uploadType": {"media"}, "supportsAllDrives": {"true"}, "fields": {fileFields}}
-	result, err := s.request(ctx, access, http.MethodPatch, s.uploadURL+"/files/"+id+"?"+query.Encode(), "text/markdown; charset=utf-8", strings.NewReader(content), 32<<10)
+	result, err := s.request(ctx, access, http.MethodPatch, s.uploadURL+"/files/"+id+"?"+query.Encode(), mediaType, bytes.NewReader(media), 32<<10)
 	if err != nil {
 		return Document{}, err
 	}
 	var updated File
-	if err := json.Unmarshal(result, &updated); err != nil || updated.ID != id || !updated.isMarkdown() || !slices.Contains(updated.Parents, s.folderID) {
+	if err := json.Unmarshal(result, &updated); err != nil || updated.ID != id || !updated.classify() ||
+		updated.Kind != file.Kind || (file.Kind == Photo && updated.MIME != file.MIME) || !slices.Contains(updated.Parents, s.folderID) {
 		return Document{}, errors.New("保存したGoogle Driveファイルを確認できません。再読み込みしてください")
 	}
-	return Document{File: updated, Content: content, Checksum: checksum([]byte(content))}, nil
+	return Document{File: updated, Content: content, Checksum: checksum(media)}, nil
 }
 
 func (s *Service) request(ctx context.Context, access, method, endpoint, contentType string, upload io.Reader, maxResponse int64) ([]byte, error) {
@@ -284,19 +389,65 @@ func (s *Service) request(ctx context.Context, access, method, endpoint, content
 	return readBounded(resp.Body, maxResponse)
 }
 
-func (f File) isMarkdown() bool {
-	return fileIDPattern.MatchString(f.ID) && !f.Trash &&
-		!strings.HasPrefix(f.MIME, "application/vnd.google-apps.") && markdownName(f.Name)
+var errContentChanged = errors.New("Drive上の内容が変わりました。編集内容を控えてから再読み込みしてください")
+
+func (f *File) classify() bool {
+	switch {
+	case !fileIDPattern.MatchString(f.ID) || f.Trash:
+		return false
+	case f.MIME == sheetMIME:
+		f.Kind = Sheet
+	case strings.HasPrefix(f.MIME, "application/vnd.google-apps."):
+		return false
+	case markdownName(f.Name):
+		f.Kind = Markdown
+	default:
+		mimeType := photoMIME(f.Name)
+		if mimeType == "" {
+			return false
+		}
+		f.Kind, f.MIME = Photo, mimeType
+	}
+	return true
 }
 
 func markdownName(name string) bool {
-	name = strings.ToLower(name)
-	return strings.HasSuffix(name, ".md") && len(name) > len(".md") ||
-		strings.HasSuffix(name, ".markdown") && len(name) > len(".markdown")
+	ext := strings.ToLower(path.Ext(name))
+	return len(name) > len(ext) && (ext == ".md" || ext == ".markdown")
 }
 
-func validateContent(content string) error {
-	if len(content) > maxMarkdown || !utf8.ValidString(content) {
+func photoMIME(name string) string {
+	ext := strings.ToLower(path.Ext(name))
+	if len(name) <= len(ext) {
+		return ""
+	}
+	switch ext {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	default:
+		return ""
+	}
+}
+
+func decodePhoto(mimeType, value string) ([]byte, error) {
+	if mimeType == "" || len(value) > base64.StdEncoding.EncodedLen(maxPhoto) {
+		return nil, errors.New("5 MiB以下のJPEG、PNG、GIF、WebPを指定してください")
+	}
+	data, err := base64.StdEncoding.DecodeString(value)
+	if err != nil || len(data) > maxPhoto || http.DetectContentType(data) != mimeType {
+		return nil, errors.New("5 MiB以下で拡張子と一致するJPEG、PNG、GIF、WebPを指定してください")
+	}
+	return data, nil
+}
+
+func validateMarkdown(content string) error {
+	if len(content) > maxText || !utf8.ValidString(content) {
 		return errors.New("2 MiB以下のUTF-8 Markdownを指定してください")
 	}
 	return nil

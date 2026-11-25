@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import page from '../../../index.html?raw';
 import { GoogleDriveDialog } from '../google-drive-dialog';
-import type { GoogleDriveDocument, WailsAppAPI, WailsRuntimeAPI } from '../../types/wails-api';
+import type { GoogleDriveDocument, GoogleDriveKind, WailsAppAPI, WailsRuntimeAPI } from '../../types/wails-api';
 
 const account = { displayName: 'Test account', emailAddress: 'test@example.com' };
 const disconnected = { displayName: '', emailAddress: '' };
 const doc: GoogleDriveDocument = {
-    file: { id: 'drive-id', name: 'note.md', capabilities: { canEdit: true } },
+    file: { id: 'drive-id', name: 'note.md', kind: 'markdown', mimeType: 'text/markdown', capabilities: { canEdit: true } },
     checksum: 'remote-checksum',
     content: 'first line\r\nsecond line\r\n',
 };
@@ -26,14 +26,16 @@ describe('Google Drive dialog', () => {
     const api = {
         GoogleDriveAccount: vi.fn(async () => currentAccount),
         ConnectGoogleDrive: vi.fn(async () => currentAccount = account),
-        PickGoogleDriveMarkdown: vi.fn(async () => ({ account: currentAccount = account, id: doc.file.id })),
+        PickGoogleDriveFile: vi.fn(async () => ({ account: currentAccount = account, id: doc.file.id })),
         CancelGoogleDriveAuthorization: vi.fn(async () => {}),
         DisconnectGoogleDrive: vi.fn(async () => { currentAccount = disconnected; }),
-        ListGoogleDriveMarkdown: vi.fn(async () => [doc.file]),
+        ListGoogleDriveFiles: vi.fn(async () => [doc.file]),
         OpenGoogleDriveFolder: vi.fn(async () => {}),
-        LoadGoogleDriveMarkdown: vi.fn(async () => doc),
-        CreateGoogleDriveMarkdown: vi.fn(async (name: string, content: string) => ({ ...doc, file: { ...doc.file, name }, content })),
-        SaveGoogleDriveMarkdown: vi.fn(async (_id: string, _checksum: string, content: string) => ({ ...doc, content })),
+        LoadGoogleDriveFile: vi.fn(async () => doc),
+        CreateGoogleDriveFile: vi.fn(async (kind: GoogleDriveKind, name: string, content: string) => ({
+            ...doc, file: { ...doc.file, kind, name }, content,
+        })),
+        SaveGoogleDriveFile: vi.fn(async (_id: string, _checksum: string, content: string) => ({ ...doc, content })),
     };
 
     beforeEach(() => {
@@ -68,8 +70,8 @@ describe('Google Drive dialog', () => {
         enter('googleDriveEditor', '# Test');
         element('googleDriveEditor').dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true }));
         await vi.waitFor(() => expect(element('googleDriveStatus').textContent).toBe('Driveに保存しました'));
-        expect(api.CreateGoogleDriveMarkdown).toHaveBeenCalledWith('created.md', '# Test');
-        expect(api.SaveGoogleDriveMarkdown).not.toHaveBeenCalled();
+        expect(api.CreateGoogleDriveFile).toHaveBeenCalledWith('markdown', 'created.md', '# Test');
+        expect(api.SaveGoogleDriveFile).not.toHaveBeenCalled();
 
         click('googleDriveOpenInBrowser');
         expect(browserOpenURL).toHaveBeenCalledWith('https://drive.google.com/open?id=drive-id');
@@ -86,13 +88,62 @@ describe('Google Drive dialog', () => {
         click('googleDrivePick');
         await vi.waitFor(() => expect(element<HTMLTextAreaElement>('googleDriveEditor').value).toBe('first line\nsecond line\n'));
         await vi.waitFor(() => expect(element<HTMLTextAreaElement>('googleDriveEditor').readOnly).toBe(false));
-        expect(api.LoadGoogleDriveMarkdown).toHaveBeenCalledWith(doc.file.id);
+        expect(api.LoadGoogleDriveFile).toHaveBeenCalledWith(doc.file.id);
 
-        api.SaveGoogleDriveMarkdown.mockRejectedValueOnce('Drive上の内容が変わりました');
+        api.SaveGoogleDriveFile.mockRejectedValueOnce('Drive上の内容が変わりました');
         enter('googleDriveEditor', 'first line\nchanged\n');
         click('googleDriveSave');
         await vi.waitFor(() => expect(element('googleDriveStatus').textContent).toBe('Drive上の内容が変わりました'));
-        expect(api.SaveGoogleDriveMarkdown).toHaveBeenCalledWith(doc.file.id, doc.checksum, 'first line\r\nchanged\r\n');
+        expect(api.SaveGoogleDriveFile).toHaveBeenCalledWith(doc.file.id, doc.checksum, 'first line\r\nchanged\r\n');
         expect(element<HTMLTextAreaElement>('googleDriveEditor').value).toBe('first line\nchanged\n');
+    });
+
+    it('creates CSV as a native spreadsheet and uses the loaded tab version for updates', async () => {
+        const sheet: GoogleDriveDocument = {
+            file: { ...doc.file, id: 'sheet-id', kind: 'sheet', name: 'Inventory', mimeType: 'application/vnd.google-apps.spreadsheet' },
+            checksum: 'sheet-version', content: '商品,数量\nノート,2\n', sheetTab: '在庫',
+        };
+        api.CreateGoogleDriveFile.mockResolvedValueOnce({ ...sheet, sheetTab: undefined });
+        api.LoadGoogleDriveFile.mockResolvedValueOnce(sheet);
+        api.SaveGoogleDriveFile.mockResolvedValueOnce({ ...sheet, content: '商品,数量\nノート,3\n' });
+        click('googleDriveBtn');
+        await vi.waitFor(() => expect(element<HTMLButtonElement>('googleDriveConnect').disabled).toBe(false));
+        click('googleDriveConnect');
+        await vi.waitFor(() => expect(element<HTMLButtonElement>('googleDriveNewSheet').disabled).toBe(false));
+        click('googleDriveNewSheet');
+        enter('googleDriveName', 'Inventory');
+        enter('googleDriveEditor', sheet.content);
+        click('googleDriveSave');
+        await vi.waitFor(() => expect(element('googleDriveEditorLabel').textContent).toBe('CSV（在庫）'));
+        expect(api.CreateGoogleDriveFile).toHaveBeenCalledWith('sheet', 'Inventory', sheet.content);
+        expect(api.LoadGoogleDriveFile).toHaveBeenCalledWith('sheet-id');
+        enter('googleDriveEditor', '商品,数量\nノート,3\n');
+        click('googleDriveSave');
+        await vi.waitFor(() => expect(api.SaveGoogleDriveFile).toHaveBeenCalledWith('sheet-id', 'sheet-version', '商品,数量\nノート,3\n'));
+    });
+
+    it('previews photos picked from Drive and replaces the same file with binary data', async () => {
+        const photo: GoogleDriveDocument = {
+            file: { ...doc.file, id: 'photo-id', kind: 'photo', name: 'photo.png', mimeType: 'image/png' },
+            checksum: 'photo-version', content: 'YWJj',
+        };
+        api.PickGoogleDriveFile.mockImplementationOnce(async () => ({ account: currentAccount = account, id: photo.file.id }));
+        api.LoadGoogleDriveFile.mockResolvedValueOnce(photo);
+        api.SaveGoogleDriveFile.mockResolvedValueOnce({ ...photo, content: 'eHl6' });
+        click('googleDriveBtn');
+        await vi.waitFor(() => expect(element<HTMLButtonElement>('googleDrivePick').disabled).toBe(false));
+        click('googleDrivePick');
+        await vi.waitFor(() => expect(element<HTMLButtonElement>('googleDriveReplacePhoto').disabled).toBe(false));
+        expect(element<HTMLImageElement>('googleDrivePhotoPreview').src).toBe('data:image/png;base64,YWJj');
+        expect(element('googleDriveEditor').hidden).toBe(true);
+        const input = element<HTMLInputElement>('googleDriveLocalFile');
+        vi.spyOn(input, 'click').mockImplementation(() => {});
+        click('googleDriveReplacePhoto');
+        Object.defineProperty(input, 'files', { value: [new File(['xyz'], 'replacement.png', { type: 'image/png' })] });
+        input.dispatchEvent(new Event('change'));
+        await vi.waitFor(() => expect(element<HTMLImageElement>('googleDrivePhotoPreview').src).toBe('data:image/png;base64,eHl6'));
+        click('googleDriveSave');
+        await vi.waitFor(() => expect(api.SaveGoogleDriveFile).toHaveBeenCalledWith('photo-id', 'photo-version', 'eHl6'));
+        expect(api.CreateGoogleDriveFile).not.toHaveBeenCalled();
     });
 });

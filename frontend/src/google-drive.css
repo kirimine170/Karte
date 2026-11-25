@@ -59,6 +59,22 @@
   resize: vertical;
 }
 
+.google-drive-dialog [hidden] {
+  display: none;
+}
+
+#googleDrivePhoto {
+  margin: .5rem 0;
+}
+
+#googleDrivePhotoPreview {
+  display: block;
+  max-width: 100%;
+  max-height: min(36vh, 24rem);
+  object-fit: contain;
+  margin: .5rem 0;
+}
+
 #googleDriveStatus {
   min-height: 1.5em;
   margin: .5rem 0;
