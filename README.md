@@ -64,6 +64,10 @@ go run ./cmd/buildmatrix --targets windows
 
 ## 使い方
 
+### AIエージェントからKarteを使う
+
+ローカルのKarte文書は、`karte-mcp` を通じてCodexやClaude Desktopなどから検索・読取できます。[セットアップガイド](architecture/KARTE_AGENT_SETUP.md)に各クライアントの設定例と合成データでの確認手順があり、[Karteスキル](skills/karte/SKILL.md)にエージェント向けの検索・引用手順があります。
+
 ### 開発モード
 
 開発中は以下のコマンドで開発モードを起動できます：

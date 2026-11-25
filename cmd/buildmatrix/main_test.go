@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"karte/internal/contextcore/mcp"
 )
 
 func TestMergeEnvOverridesWindowsPathCaseInsensitively(t *testing.T) {
@@ -49,6 +51,23 @@ func TestBuildKarteMCPBinaryUsesTargetPlatform(t *testing.T) {
 	}
 	if settings["GOOS"] != "windows" || settings["GOARCH"] != "amd64" {
 		t.Fatalf("wrong target in MCP artifact: GOOS=%q GOARCH=%q", settings["GOOS"], settings["GOARCH"])
+	}
+}
+
+func TestPackageKarteAgentFilesIncludesWorkingSample(t *testing.T) {
+	root := filepath.Join("..", "..")
+	artifact := t.TempDir()
+	if err := packageKarteAgentFiles(root, artifact); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"skills/karte/SKILL.md", "architecture/KARTE_AGENT_SETUP.md", "templates/karte_mcp_example/content/projects/demo/notes/quickstart.md"} {
+		file, err := os.Stat(filepath.Join(artifact, filepath.FromSlash(rel)))
+		if err != nil || file.Size() == 0 {
+			t.Fatalf("missing agent package file %s: %v", rel, err)
+		}
+	}
+	if _, err := mcp.NewServer(filepath.Join(artifact, "templates", "karte_mcp_example")); err != nil {
+		t.Fatalf("packaged sample cannot start the MCP server: %v", err)
 	}
 }
 

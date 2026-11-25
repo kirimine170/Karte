@@ -1,0 +1,10 @@
+{
+  "protocol_version": "1.0",
+  "actors": {
+    "karte-demo": {
+      "sensitivity_ceiling": "internal",
+      "projects": ["demo"],
+      "capabilities": ["search", "read"]
+    }
+  }
+}

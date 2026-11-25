@@ -95,6 +95,9 @@ func main() {
 		if err := buildKarteMCPBinary(ctx, projectRoot, t); err != nil {
 			log.Fatalf("failed to build karte-mcp for %s: %v", t.Name, err)
 		}
+		if err := packageKarteAgentFiles(projectRoot, t.ArtifactDir); err != nil {
+			log.Fatalf("failed to package Karte agent files for %s: %v", t.Name, err)
+		}
 		if isWindowsTarget(t) {
 			if err := packageTemplateIntoArtifact(projectRoot, t.ArtifactDir); err != nil {
 				log.Fatalf("failed to package karte_data_template for %s: %v", t.Name, err)
@@ -673,6 +676,24 @@ func packageTemplateIntoAppBundle(projectRoot, artifactDir string) error {
 		return fmt.Errorf("remove temporary template dir %s: %w", templateDir, err)
 	}
 
+	return nil
+}
+
+func packageKarteAgentFiles(projectRoot, artifactDir string) error {
+	for _, name := range []string{
+		"architecture/KARTE_AGENT_SETUP.md",
+		"architecture/KARTE_CONTEXT_PROTOCOL_V1.md",
+		"architecture/GOOGLE_DRIVE_OAUTH_PROTOTYPE.md",
+		"skills/karte/SKILL.md",
+		"templates/karte_mcp_example/.mdsys/context/v1/policy.json",
+		"templates/karte_mcp_example/.mdsys/context/v1/mcp-scope.json",
+		"templates/karte_mcp_example/content/projects/demo/notes/quickstart.md",
+	} {
+		rel := filepath.FromSlash(name)
+		if err := copyFile(filepath.Join(projectRoot, rel), filepath.Join(artifactDir, rel)); err != nil {
+			return fmt.Errorf("copy %s: %w", name, err)
+		}
+	}
 	return nil
 }
 
