@@ -496,6 +496,14 @@
     <label for="driveRelationsFolder">検索フォルダ</label>
     <select id="driveRelationsFolder" disabled></select>
     <p id="driveRelationsStatus" role="status"></p>
+    <section id="driveRelationsSync" hidden aria-label="フォルダ同期">
+      <div class="google-drive-actions">
+        <button id="driveRelationsSyncStart" class="btn" type="button" disabled>フォルダ同期を開始</button>
+        <button id="driveRelationsSyncStop" class="btn" type="button" disabled>フォルダ同期を停止</button>
+      </div>
+      <p>選んだDriveフォルダからKarteの保存先へ取り込みます。保存用の「Google Drive」にも同じアカウントで接続すると、同期開始後に追加したローカルファイルをアップロードします。</p>
+      <p id="driveRelationsSyncStatus" role="status"></p>
+    </section>
     <section id="driveRelationsResults" hidden>
       <fieldset>
         <legend>タグ（選んだすべてに一致）</legend>

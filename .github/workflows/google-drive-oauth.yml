@@ -8,6 +8,7 @@ on:
     paths:
       - '.github/workflows/google-drive-oauth.yml'
       - 'app_google_drive.go'
+      - 'app_google_drive_sync.go'
       - 'cmd/buildmatrix/**'
       - 'internal/googledrive/**'
       - 'frontend/src/components/google-drive-dialog.ts'

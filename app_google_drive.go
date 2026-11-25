@@ -43,6 +43,7 @@ func (a *App) authorizeGoogleDrive(pick bool) (googledrive.Account, string, erro
 	if err == nil {
 		relations := a.driveRelationService()
 		if reader := relations.Account(); reader.Email != "" && !reader.SameUser(account) {
+			a.stopDriveFolderSync()
 			relations.Disconnect()
 		}
 	}
@@ -54,6 +55,7 @@ func (a *App) CancelGoogleDriveAuthorization() {
 }
 
 func (a *App) DisconnectGoogleDrive() {
+	a.stopDriveFolderSync()
 	a.googleDriveService().Disconnect()
 	a.driveRelationService().Disconnect()
 }
@@ -118,6 +120,7 @@ func (a *App) CancelGoogleDriveSearchAuthorization() {
 }
 
 func (a *App) DisconnectGoogleDriveSearch() {
+	a.stopDriveFolderSync()
 	a.driveRelationService().Disconnect()
 }
 

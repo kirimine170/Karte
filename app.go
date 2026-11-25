@@ -63,6 +63,7 @@ var (
 		".webp": {},
 	}
 	backupImageExtCandidates = []string{".jpg", ".jpeg", ".png", ".gif"}
+	importedImageNamePattern = regexp.MustCompile(`^\d{8}-\d{6}_`)
 	eventLogTokenPattern     = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]{0,63}$`)
 )
 
@@ -77,21 +78,24 @@ const maxImageFileSizeForPDF = 300 * 1024   // 各画像の目標サイズ300KB
 
 // App struct
 type App struct {
-	googleDriveOnce    sync.Once
-	googleDrive        *googledrive.Service
-	driveRelationsOnce sync.Once
-	driveRelations     *googledrive.RelationIndex
-	ephyV2ConfigRoot   string
-	ctx                context.Context
-	root               string
-	dataDir            string
-	logFilePath        string
-	fs                 FileSystem
-	syncManager        *syncpkg.SyncManager
-	vcs                *gitvcs.VCS
-	asrService         *asr.Service
-	realtimeService    *asr.RealtimeService // For real-time ASR with partial text support
-	asrInitDone        chan struct{}
+	googleDriveOnce     sync.Once
+	googleDrive         *googledrive.Service
+	driveRelationsOnce  sync.Once
+	driveRelations      *googledrive.RelationIndex
+	driveFolderSyncMu   sync.Mutex
+	driveFolderSyncStop context.CancelFunc
+	driveFolderSync     GoogleDriveFolderSyncStatus
+	ephyV2ConfigRoot    string
+	ctx                 context.Context
+	root                string
+	dataDir             string
+	logFilePath         string
+	fs                  FileSystem
+	syncManager         *syncpkg.SyncManager
+	vcs                 *gitvcs.VCS
+	asrService          *asr.Service
+	realtimeService     *asr.RealtimeService // For real-time ASR with partial text support
+	asrInitDone         chan struct{}
 	// Recording fields
 	recorder                *audio.Recorder
 	recordingMu             sync.Mutex
@@ -694,6 +698,7 @@ func (a *App) ProcessContextRequests() (contextcore.ProcessSummary, error) {
 
 // shutdown is invoked by Wails when the app is closing.
 func (a *App) shutdown(ctx context.Context) {
+	a.stopDriveFolderSync()
 	a.webClipConversionMu.Lock()
 	a.webClipConversionClosing = true
 	a.webClipConversionMu.Unlock()
@@ -1061,20 +1066,27 @@ func (a *App) GetImageList() []ImageItem {
 			if info.IsDir() {
 				return nil
 			}
-			if strings.ToLower(filepath.Ext(info.Name())) != ".webp" {
+			ext := filepath.Ext(info.Name())
+			if !isSupportedImageExt(info.Name()) {
 				return nil
 			}
+			var originalPath string
 
 			rel, _ := filepath.Rel(a.dataDir, p)
 			rel = filepath.ToSlash(rel)
-			metadataPath := strings.TrimSuffix(rel, ".webp") + ".yaml"
+			if strings.EqualFold(ext, ".webp") {
+				originalPath = a.findOriginalImagePath(rel)
+			} else if importedImageNamePattern.MatchString(info.Name()) && fileExists(strings.TrimSuffix(p, ext)+".webp") {
+				// The gallery already shows the WebP preview created by local import.
+				return nil
+			}
 			imageItem := ImageItem{
 				Path:         rel,
 				Name:         info.Name(),
 				Size:         info.Size(),
 				ModTime:      info.ModTime(),
-				MetadataPath: metadataPath,
-				OriginalPath: a.findOriginalImagePath(rel),
+				MetadataPath: metadataPathFromImage(rel),
+				OriginalPath: originalPath,
 			}
 			images = append(images, imageItem)
 			a.logInfo(fmt.Sprintf("Found image: %s", imageItem.Path))
@@ -3697,7 +3709,7 @@ func (a *App) findOriginalImagePath(webpRelPath string) string {
 	if webpRelPath == "" {
 		return ""
 	}
-	base := strings.TrimSuffix(webpRelPath, ".webp")
+	base := strings.TrimSuffix(webpRelPath, filepath.Ext(webpRelPath))
 	for _, ext := range backupImageExtCandidates {
 		candidate := base + ext
 		abs := filepath.Join(a.dataDir, filepath.FromSlash(candidate))

@@ -358,6 +358,13 @@ export class App {
             }
         });
 
+        this.runtime.EventsOn('drive-folder-sync', (data: unknown) => {
+            if (!(data as { downloaded?: number })?.downloaded) return;
+            this.refreshFileList().catch(error => console.error('Failed to refresh synchronized files:', error));
+            this.components.imageGallery?.refresh();
+            this.components.csvGallery?.refresh();
+        });
+
         // PDFエクスポート進捗イベント
         this.runtime.EventsOn('pdf-export-progress', (data: unknown) => {
             console.log('PDF export progress:', data);

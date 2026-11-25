@@ -248,6 +248,17 @@ export interface DriveRelationSnapshot {
     incomplete: number;
 }
 
+export interface DriveFolderSyncStatus {
+    enabled: boolean;
+    folderId: string;
+    updatedAt: string;
+    uploaded: number;
+    downloaded: number;
+    issues: number;
+    message: string;
+    writerReady: boolean;
+}
+
 export interface WailsAppAPI {
     GoogleDriveAccount(): Promise<GoogleDriveAccount>;
     ConnectGoogleDrive(): Promise<GoogleDriveAccount>;
@@ -265,6 +276,9 @@ export interface WailsAppAPI {
     CancelGoogleDriveSearchAuthorization(): Promise<void>;
     DisconnectGoogleDriveSearch(): Promise<void>;
     ListGoogleDriveSearchFolders(): Promise<DriveRelationFolder[]>;
+    GetGoogleDriveFolderSyncStatus(): Promise<DriveFolderSyncStatus>;
+    StartGoogleDriveFolderSync(folderId: string): Promise<void>;
+    StopGoogleDriveFolderSync(): Promise<void>;
     RefreshGoogleDriveRelations(folderId: string): Promise<DriveRelationSnapshot>;
     SaveInstagramDraft?(draftJSON: string): Promise<string>;
     SaveInstagramImage?(filename: string, jpegBase64: string): Promise<string>;

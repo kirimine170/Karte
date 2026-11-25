@@ -39,20 +39,21 @@ const (
 )
 
 type File struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	MIME         string   `json:"mimeType"`
-	Kind         Kind     `json:"kind"`
-	Trash        bool     `json:"trashed"`
-	Parents      []string `json:"parents"`
-	Description  string   `json:"description,omitempty"`
-	Version      string   `json:"version,omitempty"`
-	WebViewLink  string   `json:"webViewLink,omitempty"`
-	OriginalName string   `json:"originalFilename,omitempty"`
-	DriveID      string   `json:"driveId,omitempty"`
-	CreatedTime  string   `json:"createdTime,omitempty"`
-	Size         string   `json:"size,omitempty"`
-	Capabilities struct {
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	MIME          string            `json:"mimeType"`
+	Kind          Kind              `json:"kind"`
+	Trash         bool              `json:"trashed"`
+	Parents       []string          `json:"parents"`
+	Description   string            `json:"description,omitempty"`
+	Version       string            `json:"version,omitempty"`
+	WebViewLink   string            `json:"webViewLink,omitempty"`
+	OriginalName  string            `json:"originalFilename,omitempty"`
+	AppProperties map[string]string `json:"appProperties,omitempty"`
+	DriveID       string            `json:"driveId,omitempty"`
+	CreatedTime   string            `json:"createdTime,omitempty"`
+	Size          string            `json:"size,omitempty"`
+	Capabilities  struct {
 		CanEdit        bool  `json:"canEdit"`
 		CanAddChildren bool  `json:"canAddChildren"`
 		CanDownload    *bool `json:"canDownload,omitempty"`
@@ -254,41 +255,9 @@ func (s *Service) Create(ctx context.Context, kind Kind, name, content string) (
 
 func (s *Service) CreateWithTags(ctx context.Context, kind Kind, name, content string, tags []string) (Document, error) {
 	name = strings.TrimSpace(name)
-	if name == "" || strings.ContainsAny(name, "/\\\r\n\x00") {
-		return Document{}, errors.New("ファイル名を指定してください。パスは使用できません")
-	}
-	mimeType := "text/markdown"
-	mediaType := mimeType + "; charset=utf-8"
-	var media []byte
-	switch kind {
-	case Markdown:
-		if !markdownName(name) {
-			return Document{}, errors.New("ファイル名は .md または .markdown で終わる名前を指定してください")
-		}
-		if err := validateMarkdown(content); err != nil {
-			return Document{}, err
-		}
-		media = []byte(content)
-	case Sheet:
-		if _, err := parseCSV(content); err != nil {
-			return Document{}, err
-		}
-		mimeType, mediaType = sheetMIME, "text/csv; charset=utf-8"
-		media = []byte(content)
-		if len(media) == 0 {
-			// Give the CSV converter an empty cell for a blank spreadsheet.
-			media = []byte("\"\"\n")
-		}
-	case Photo:
-		mimeType = photoMIME(name)
-		mediaType = mimeType
-		var err error
-		media, err = decodePhoto(mimeType, content)
-		if err != nil {
-			return Document{}, err
-		}
-	default:
-		return Document{}, errors.New("対応していないファイル形式です")
+	mimeType, mediaType, media, err := prepareDriveUpload(kind, name, content)
+	if err != nil {
+		return Document{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -301,7 +270,7 @@ func (s *Service) CreateWithTags(ctx context.Context, kind Kind, name, content s
 		return Document{}, err
 	}
 	description := initialDescription(kind, mimeType, media, tags)
-	file, err := s.createFile(ctx, access, folder, name, mimeType, mediaType, description, media)
+	file, err := s.createFile(ctx, access, folder, name, mimeType, mediaType, description, "", media)
 	if err != nil {
 		return Document{}, err
 	}
@@ -309,7 +278,45 @@ func (s *Service) CreateWithTags(ctx context.Context, kind Kind, name, content s
 	return Document{File: file, Content: content, Checksum: checksum(media)}, nil
 }
 
-func (s *Service) createFile(ctx context.Context, access, folder, name, mimeType, mediaType, description string, content []byte) (File, error) {
+func prepareDriveUpload(kind Kind, name, content string) (mimeType, mediaType string, media []byte, err error) {
+	if name == "" || strings.ContainsAny(name, "/\\\r\n\x00") {
+		return "", "", nil, errors.New("ファイル名を指定してください。パスは使用できません")
+	}
+	mimeType = "text/markdown"
+	mediaType = mimeType + "; charset=utf-8"
+	switch kind {
+	case Markdown:
+		if !markdownName(name) {
+			return "", "", nil, errors.New("ファイル名は .md または .markdown で終わる名前を指定してください")
+		}
+		if err := validateMarkdown(content); err != nil {
+			return "", "", nil, err
+		}
+		media = []byte(content)
+	case Sheet:
+		if _, err := parseCSV(content); err != nil {
+			return "", "", nil, err
+		}
+		mimeType, mediaType = sheetMIME, "text/csv; charset=utf-8"
+		media = []byte(content)
+		if len(media) == 0 {
+			// Give the CSV converter an empty cell for a blank spreadsheet.
+			media = []byte("\"\"\n")
+		}
+	case Photo:
+		mimeType = photoMIME(name)
+		mediaType = mimeType
+		media, err = decodePhoto(mimeType, content)
+		if err != nil {
+			return "", "", nil, err
+		}
+	default:
+		return "", "", nil, errors.New("対応していないファイル形式です")
+	}
+	return mimeType, mediaType, media, nil
+}
+
+func (s *Service) createFile(ctx context.Context, access, folder, name, mimeType, mediaType, description, operation string, content []byte) (File, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	metadata, err := writer.CreatePart(textproto.MIMEHeader{"Content-Type": {"application/json; charset=utf-8"}})
@@ -319,6 +326,9 @@ func (s *Service) createFile(ctx context.Context, access, folder, name, mimeType
 	properties := map[string]any{"name": name, "mimeType": mimeType, "parents": []string{folder}}
 	if description != "" {
 		properties["description"] = description
+	}
+	if operation != "" {
+		properties["appProperties"] = map[string]string{folderSyncProperty: operation}
 	}
 	if err := json.NewEncoder(metadata).Encode(properties); err != nil {
 		return File{}, err

@@ -1,6 +1,6 @@
 import GraphModule from '../graph-d3';
 import type {
-    DriveRelationFile, DriveRelationFolder, DriveRelationSnapshot, GoogleDriveAccount,
+    DriveFolderSyncStatus, DriveRelationFile, DriveRelationFolder, DriveRelationSnapshot, GoogleDriveAccount,
     GraphData, WailsAppAPI, WailsRuntimeAPI,
 } from '../types/wails-api';
 
@@ -30,6 +30,7 @@ export class DriveRelationsDialog {
     private timer: number | undefined;
     private busy = false;
     private authorizing = false;
+    private sync: DriveFolderSyncStatus | null = null;
 
     constructor(private readonly api: WailsAppAPI, private readonly runtime: WailsRuntimeAPI) {}
 
@@ -60,6 +61,7 @@ export class DriveRelationsDialog {
             void this.run(async () => {
                 await this.api.DisconnectGoogleDriveSearch();
                 this.setAccount(null);
+                await this.refreshFolderSyncStatus();
             });
         });
         this.on('Folder', 'change', () => {
@@ -92,6 +94,48 @@ export class DriveRelationsDialog {
         this.on('Dialog', 'cancel', event => {
             if (this.busy) event.preventDefault();
         });
+        this.initFolderSync();
+        this.renderControls();
+    }
+
+    private initFolderSync(): void {
+        if (typeof this.api.GetGoogleDriveFolderSyncStatus !== 'function') return;
+        this.control('Sync').hidden = false;
+        const unsubscribe = this.runtime.EventsOn('drive-folder-sync', status => {
+            this.setSyncStatus(status as DriveFolderSyncStatus);
+        });
+        this.events.signal.addEventListener('abort', unsubscribe, { once: true });
+        this.on('SyncStart', 'click', () => { void this.changeFolderSync(true); });
+        this.on('SyncStop', 'click', () => { void this.changeFolderSync(false); });
+    }
+
+    private async changeFolderSync(enabled: boolean): Promise<void> {
+        this.control<HTMLButtonElement>(enabled ? 'SyncStart' : 'SyncStop').disabled = true;
+        try {
+            if (enabled) await this.api.StartGoogleDriveFolderSync(this.folders.value);
+            else await this.api.StopGoogleDriveFolderSync();
+            await this.refreshFolderSyncStatus();
+        } catch (error) {
+            this.control('SyncStatus').textContent = error instanceof Error ? error.message : String(error);
+            this.renderControls();
+        }
+    }
+
+    private async refreshFolderSyncStatus(): Promise<void> {
+        if (typeof this.api.GetGoogleDriveFolderSyncStatus === 'function') {
+            this.setSyncStatus(await this.api.GetGoogleDriveFolderSyncStatus());
+        }
+    }
+
+    private setSyncStatus(status: DriveFolderSyncStatus): void {
+        this.sync = status;
+        let text = status.enabled ? '同期中' : '停止中';
+        if (status.enabled && status.updatedAt) {
+            text += ` · 前回 ${new Date(status.updatedAt).toLocaleTimeString()} · ダウンロード ${status.downloaded}件 · アップロード ${status.uploaded}件`;
+            if (!status.writerReady) text += ' · アップロードは保存用接続を待機中';
+            if (status.issues) text += ` · ${status.issues}件の問題（${status.message}）`;
+        }
+        this.control('SyncStatus').textContent = text;
         this.renderControls();
     }
 
@@ -121,7 +165,10 @@ export class DriveRelationsDialog {
     }
 
     private async loadFolders(): Promise<void> {
-        if (!this.account) return;
+        if (!this.account) {
+            await this.refreshFolderSyncStatus();
+            return;
+        }
         const candidates = await this.api.ListGoogleDriveSearchFolders();
         const preferred = this.folders.value || this.readFolderPreference();
         this.folders.replaceChildren(
@@ -167,6 +214,7 @@ export class DriveRelationsDialog {
         const time = new Date(this.snapshot.updatedAt).toLocaleTimeString();
         const incomplete = this.snapshot.incomplete ? ` · 一部を取得できませんでした（${this.snapshot.incomplete}件）` : '';
         this.status.textContent = `${this.snapshot.files.length}件 · 更新 ${time}${incomplete}`;
+        await this.refreshFolderSyncStatus();
     }
 
     private clearResults(): void {
@@ -238,6 +286,8 @@ export class DriveRelationsDialog {
         this.control<HTMLButtonElement>('Open').disabled = this.busy || !current;
         this.control('Copy').hidden = !current?.legacy;
         this.control<HTMLButtonElement>('Copy').disabled = this.busy;
+        this.control<HTMLButtonElement>('SyncStart').disabled = this.busy || !this.account || !this.folders.value || !!this.sync?.enabled;
+        this.control<HTMLButtonElement>('SyncStop').disabled = !this.sync?.enabled;
         const panel = this.control('Related');
         panel.replaceChildren();
         const graphContainer = this.control('Graph');
