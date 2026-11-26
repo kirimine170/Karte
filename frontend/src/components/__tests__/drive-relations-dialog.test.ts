@@ -33,6 +33,7 @@ const click = (name: string) => el<HTMLButtonElement>(name).click();
 describe('Drive relationship search', () => {
     let component: DriveRelationsDialog;
     let current = disconnected;
+    let syncing = false;
     const browser = vi.fn();
     const clipboard = vi.fn(async () => true);
     const api = {
@@ -42,11 +43,15 @@ describe('Drive relationship search', () => {
         DisconnectGoogleDriveSearch: vi.fn(async () => { current = disconnected; }),
         ListGoogleDriveSearchFolders: vi.fn(async () => [folder]),
         RefreshGoogleDriveRelations: vi.fn(async (_id: string) => snapshot),
+        GetGoogleDriveFolderSyncStatus: vi.fn(async () => ({ enabled: syncing })),
+        StartGoogleDriveFolderSync: vi.fn(async (_id: string) => { syncing = true; }),
+        StopGoogleDriveFolderSync: vi.fn(async () => { syncing = false; }),
     };
 
     beforeEach(() => {
         vi.clearAllMocks();
         current = disconnected;
+        syncing = false;
         localStorage.clear();
         const parsed = new DOMParser().parseFromString(page, 'text/html');
         document.body.replaceChildren(parsed.getElementById('driveRelationsBtn')!, parsed.getElementById('driveRelationsDialog')!);
@@ -59,6 +64,7 @@ describe('Drive relationship search', () => {
         component = new DriveRelationsDialog(api as unknown as WailsAppAPI, {
             BrowserOpenURL: browser,
             ClipboardSetText: clipboard,
+            EventsOn: vi.fn(() => () => {}),
         } as unknown as WailsRuntimeAPI);
         component.init();
     });
@@ -105,6 +111,23 @@ describe('Drive relationship search', () => {
         await vi.waitFor(() => expect(el('Status').textContent).toContain('403'));
         expect(el('Results').hidden).toBe(true);
         expect(el<HTMLSelectElement>('Files').length).toBe(0);
+    });
+
+    it('enables folder sync after connecting and updates both controls when sync starts and stops', async () => {
+        const start = el<HTMLButtonElement>('SyncStart');
+        const stop = el<HTMLButtonElement>('SyncStop');
+        click('Btn');
+        await vi.waitFor(() => expect(el<HTMLButtonElement>('Connect').disabled).toBe(false));
+        expect(start.disabled).toBe(true);
+        click('Connect');
+        await vi.waitFor(() => expect(start.disabled).toBe(false));
+        click('SyncStart');
+        await vi.waitFor(() => expect(stop.disabled).toBe(false));
+        expect(api.StartGoogleDriveFolderSync).toHaveBeenCalledWith('karte');
+        expect(start.disabled).toBe(true);
+        click('SyncStop');
+        await vi.waitFor(() => expect(start.disabled).toBe(false));
+        expect(stop.disabled).toBe(true);
     });
 
     it('refreshes automatically while the dialog is open and stops when it closes', async () => {

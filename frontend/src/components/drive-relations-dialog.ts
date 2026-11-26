@@ -286,8 +286,6 @@ export class DriveRelationsDialog {
         this.control<HTMLButtonElement>('Open').disabled = this.busy || !current;
         this.control('Copy').hidden = !current?.legacy;
         this.control<HTMLButtonElement>('Copy').disabled = this.busy;
-        this.control<HTMLButtonElement>('SyncStart').disabled = this.busy || !this.account || !this.folders.value || !!this.sync?.enabled;
-        this.control<HTMLButtonElement>('SyncStop').disabled = !this.sync?.enabled;
         const panel = this.control('Related');
         panel.replaceChildren();
         const graphContainer = this.control('Graph');
@@ -409,6 +407,8 @@ export class DriveRelationsDialog {
         }
         this.control<HTMLButtonElement>('Close').disabled = this.busy;
         this.folders.disabled = this.busy || !this.account;
+        this.control<HTMLButtonElement>('SyncStart').disabled = this.busy || !this.account || !this.folders.value || !!this.sync?.enabled;
+        this.control<HTMLButtonElement>('SyncStop').disabled = !this.sync?.enabled;
         this.files.disabled = this.busy;
         this.control<HTMLButtonElement>('Open').disabled = this.busy || !this.selected;
         this.control<HTMLButtonElement>('Copy').disabled = this.busy;
